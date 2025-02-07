@@ -32,10 +32,18 @@ class StockInfoSynchronizer:
             df = ak.stock_info_sh_name_code(symbol="主板A股")
         """
         logger.info("Fetching data from akshare for symbol: %s", self.symbol)
-        df = ak.stock_info_sh_name_code(symbol=self.symbol)[['证券代码', '证券简称', '上市日期']]
+        sh_a_list = ak.stock_info_sh_name_code(symbol=self.symbol)[['证券代码', '证券简称', '上市日期']]
+        sh_a_list = sh_a_list.rename(columns={'证券代码': 'code', '证券简称': 'name', '上市日期': 'ipo_date'})
+        sh_a_list['market'] = 'SH'
         # 将上市日期转换为日期类型（若转换失败则置为 NaT）
-        if '上市日期' in df.columns:
-            df['上市日期'] = pd.to_datetime(df['上市日期'], errors='coerce').dt.date
+        if 'ipo_date' in sh_a_list.columns:
+            sh_a_list['ipo_date'] = pd.to_datetime(sh_a_list['ipo_date'], errors='coerce').dt.date
+        sz_a_list = ak.stock_info_sz_name_code(symbol="A股列表")[['A股代码', 'A股简称', 'A股上市日期']]
+        sz_a_list = sz_a_list.rename(columns={'A股代码': 'code', 'A股简称': 'name', 'A股上市日期': 'ipo_date'})
+        sz_a_list['market'] = 'SZ'
+        if 'ipo_date' in sz_a_list.columns:
+            sz_a_list['ipo_date'] = pd.to_datetime(sz_a_list['ipo_date'], errors='coerce').dt.date
+        df = pd.concat([sh_a_list, sz_a_list], ignore_index=True).sort_values('ipo_date').reset_index(drop=True)
         return df
 
     def sync(self):
@@ -57,7 +65,7 @@ class StockInfoSynchronizer:
             logger.debug("Existing stock codes in DB: %s", existing_codes)
             
             # 筛选出新增数据（证券代码不在 existing_codes 中）
-            new_data = df[~df['证券代码'].isin(existing_codes)]
+            new_data = df[~df['code'].isin(existing_codes)]
             logger.info("Found %d new records to insert.", len(new_data))
             
             if new_data.empty:
@@ -68,9 +76,10 @@ class StockInfoSynchronizer:
             new_records = []
             for idx, row in new_data.iterrows():
                 record = StockInfo(
-                    stock_code=row['证券代码'],
-                    stock_name=row['证券简称'],
-                    listing_date=row['上市日期']
+                    stock_code=row['code'],
+                    stock_name=row['name'],
+                    listing_date=row['ipo_date'],
+                    market=row['market']
                 )
                 new_records.append(record)
             

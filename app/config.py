@@ -17,10 +17,10 @@ class Config:
         'disable_existing_loggers': False,
         'formatters': {
             'default': {
-                'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+                'format': '%(asctime)s [%(levelname)s] %(name)s - %(message)s'
             },
             'detailed': {
-                'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s [in %(pathname)s:%(lineno)d]'
+                'format': '%(asctime)s [%(levelname)s] %(name)s - %(message)s [in %(pathname)s:%(lineno)d]'
             }
         },
         'handlers': {
@@ -60,10 +60,10 @@ class TestConfig(Config):
         'disable_existing_loggers': False,
         'formatters': {
             'default': {
-                'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+                'format': '%(asctime)s [%(levelname)s] %(name)s - %(message)s'
             },
             'detailed': {
-                'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s [in %(pathname)s:%(lineno)d]'
+                'format': '%(asctime)s [%(levelname)s] %(name)s - %(message)s [in %(pathname)s:%(lineno)d]'
             }
         },
         'handlers': {
