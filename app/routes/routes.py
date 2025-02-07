@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
-from .database import get_db
-from .crud import create_user, get_users, get_user_by_username
+from app.database import get_db
+from app.dao.crud import create_user, get_users, get_user_by_username
 import logging
 
 bp = Blueprint('users', __name__, url_prefix='/users')

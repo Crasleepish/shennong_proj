@@ -1,0 +1,18 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Python: Run run.py",
+        "type": "debugpy",
+        "request": "launch",
+        "program": "${workspaceFolder}/run.py",
+        "console": "integratedTerminal",
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}",
+          "FLASK_ENV": "development"
+        },
+        "justMyCode": false
+      }
+    ]
+  }
+  

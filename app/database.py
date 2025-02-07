@@ -28,7 +28,8 @@ def init_db():
     Import all modules that define models so that
     Base.metadata can be populated. Then create all tables.
     """
-    from . import models  # ensure all models are imported
+    from app.models import models  # ensure all models are imported
+    from app.models import stock_models
     Base.metadata.create_all(bind=engine)
 
 @contextmanager

@@ -1,7 +1,7 @@
 from flask import Flask
 from .config import Config
 from .database import init_engine, init_db
-from .routes import bp as users_bp
+from .routes.routes import bp as users_bp
 import logging
 import logging.config
 
