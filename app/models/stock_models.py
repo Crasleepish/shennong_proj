@@ -6,9 +6,9 @@ class StockInfo(Base):
     __tablename__ = 'stock_info'
     # 使用证券代码作为主键
     stock_code = Column('stock_code', String(10), primary_key=True)
-    stock_name = Column('stock_name', String(50), nullable=True)
-    listing_date = Column('listing_date', Date, nullable=True)
-    market = Column('market', String(2), nullable=True)
+    stock_name = Column('stock_name', String(50), nullable=False)
+    listing_date = Column('listing_date', Date, nullable=False)
+    market = Column('market', String(10), nullable=False)
 
     def __repr__(self):
         return f"<StockInfo(stock_code='{self.stock_code}', stock_name='{self.stock_name}')>"
@@ -32,3 +32,28 @@ class StockHistUnadj(Base):
     
     def __repr__(self):
         return f"<StockHist(stock_code='{self.stock_code}', date='{self.date}')>"
+
+class UpdateFlag(Base):
+    __tablename__ = 'update_flag'
+    stock_code = Column("stock_code", String(10), primary_key=True)
+    action_update_flag = Column('action_update_flag', String(1), nullable=True) #是否需要更新该股票的公司行动数据, 1:需要更新，0：不需要更新
+
+    def __repr__(self):
+        return f"<UpdateFlag(stock_code='{self.stock_code}')>"
+    
+
+class CompanyAction(Base):
+    __tablename__ = 'company_action'
+    # 联合主键(stock_code, ex_dividend_date)
+    stock_code = Column("stock_code", String(10), primary_key=True)
+    ex_dividend_date = Column("ex_dividend_date", Date, primary_key=True)
+    bonus_ratio = Column("bonus_ratio", Float)
+    conversion_ratio = Column("conversion_ratio", Float)
+    dividend_per_share = Column("dividend_per_share", Float)
+    rights_issue_ratio = Column("rights_issue_ratio", Float)
+    rights_issue_price = Column("rights_issue_price", Float)
+    announcement_date = Column("announcement_date", Date)
+    record_date = Column("record_date", Date)
+
+    def __repr__(self):
+        return f"<CompanyAction(stock_code='{self.stock_code}', ex_dividend_date='{self.ex_dividend_date}')>"
