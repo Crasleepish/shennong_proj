@@ -1,10 +1,11 @@
 import pytest
 from app import create_app
 from app.database import Base, engine
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
-from app.data.fetcher import StockInfoSynchronizer, StockHistSynchronizer
+from app.data.fetcher import StockInfoSynchronizer, StockHistSynchronizer, CompanyActionSynchronizer
 from types import SimpleNamespace
+from app.database import get_db
 
 # Use the TestConfig from our config module
 from app.config import TestConfig
@@ -39,6 +40,21 @@ def dummy_stock_list():
         SimpleNamespace(stock_code="600519"),
     ]
 
+@pytest.fixture
+def init_update_flag_data(app):
+    """
+    测试开始前自动执行，将 update_flag 表中插入 mock 数据
+    """
+    # 获取数据库会话
+    with get_db() as db:
+        # 执行插入 SQL
+        sql = """
+        INSERT INTO update_flag (stock_code, action_update_flag)
+        VALUES ('000004', '0'), ('600601', '0'), ('600519', '0');
+        """
+        db.execute(text(sql))
+        db.commit()
+
 
 def test_StockHistSynchronizer(app, monkeypatch, dummy_stock_list):
     # 1. 替换 StockInfoDao.load_stock_info，使其返回 dummy_stock_list
@@ -49,4 +65,15 @@ def test_StockHistSynchronizer(app, monkeypatch, dummy_stock_list):
 
     # 2. 创建同步器实例并调用 sync 方法
     synchronizer = StockHistSynchronizer()
+    synchronizer.sync()
+
+def test_CompanyActionSynchronizer(app, init_update_flag_data, monkeypatch, dummy_stock_list):
+    def fake_load_stock_info(self):
+        return dummy_stock_list
+    
+    monkeypatch.setattr(StockInfoDao, "load_stock_info", fake_load_stock_info)
+
+    stock_hist_synchronizer = StockHistSynchronizer()
+    stock_hist_synchronizer.sync()
+    synchronizer = CompanyActionSynchronizer()
     synchronizer.sync()
