@@ -241,6 +241,14 @@ class CompanyActionSynchronizer:
             if not df_dividend.empty and "除权除息日" in df_dividend.columns:
                 df_dividend["ex_date"] = pd.to_datetime(df_dividend["除权除息日"], errors="coerce").dt.date
                 df_dividend = df_dividend[df_dividend["ex_date"].notnull()]
+                # 按 ex_date 分组，聚合各字段：对于比例字段采用求和（假设同一交易日内多个记录需要合并），对于日期字段采用首个非空值
+                df_dividend = df_dividend.groupby("ex_date").agg({
+                    "公告日期": "first",
+                    "送股": "sum",
+                    "转增": "sum",
+                    "派息": "sum",
+                    "股权登记日": "first"
+                }).reset_index()
             else:
                 df_dividend = pd.DataFrame(columns=["ex_date", "公告日期", "送股", "转增", "派息", "股权登记日"])
             # 对配股数据：重命名“除权日”为 ex_date，并过滤出 ex_date 不为空 的记录
