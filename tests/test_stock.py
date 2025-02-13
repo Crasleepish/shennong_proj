@@ -9,7 +9,7 @@ from app.database import get_db
 
 # Use the TestConfig from our config module
 from app.config import TestConfig
-from app.dao.stock_info_dao import StockInfoDao, StockHistUnadjDao
+from app.dao.stock_info_dao import StockInfoDao, StockHistUnadjDao, StockHistAdjDao
 
 # Create the Flask app using TestConfig
 @pytest.fixture
@@ -36,7 +36,7 @@ def dummy_stock_list():
     """
     return [
         SimpleNamespace(stock_code="000004"),
-        SimpleNamespace(stock_code="600601"),
+        SimpleNamespace(stock_code="600655"),
         SimpleNamespace(stock_code="600519"),
     ]
 
@@ -50,7 +50,7 @@ def init_update_flag_data(app):
         # 执行插入 SQL
         sql = """
         INSERT INTO update_flag (stock_code, action_update_flag)
-        VALUES ('000004', '0'), ('600601', '0'), ('600519', '0');
+        VALUES ('000004', '0'), ('600655', '0'), ('600519', '0');
         """
         db.execute(text(sql))
         db.commit()
@@ -77,3 +77,23 @@ def test_CompanyActionSynchronizer(app, init_update_flag_data, monkeypatch, dumm
     stock_hist_synchronizer.sync()
     synchronizer = CompanyActionSynchronizer()
     synchronizer.sync()
+
+def test_AdjSynchronizer(app, init_update_flag_data, monkeypatch, dummy_stock_list):
+    def fake_load_stock_info(self):
+        return dummy_stock_list
+    
+    monkeypatch.setattr(StockInfoDao, "load_stock_info", fake_load_stock_info)
+
+    stock_hist_synchronizer = StockHistSynchronizer()
+    stock_hist_synchronizer.sync()
+    synchronizer = CompanyActionSynchronizer()
+    synchronizer.sync()
+    stock_hist_synchronizer.sync_adj()
+
+    stock_hist_unadj_dao = StockHistUnadjDao._instance
+    df0 = stock_hist_unadj_dao.select_all_as_dataframe("600655")
+    print(df0)
+
+    stock_hist_adj_dao = StockHistAdjDao._instance
+    df = stock_hist_adj_dao.select_all_as_dataframe("600655")
+    print(df)

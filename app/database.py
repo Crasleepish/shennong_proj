@@ -20,7 +20,7 @@ def init_engine(config):
         config.get("SQLALCHEMY_DATABASE_URI"),
         echo=config.get("SQLALCHEMY_ECHO")
     )
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, expire_on_commit=False)
 
 
 def init_db():

@@ -1,10 +1,13 @@
 from typing import List
+from bisect import bisect_left
 import akshare as ak
 import pandas as pd
 import datetime
+import math
 from sqlalchemy.orm import Session
-from app.models.stock_models import StockInfo, StockHistUnadj, UpdateFlag, CompanyAction
-from app.dao.stock_info_dao import StockInfoDao, StockHistUnadjDao, UpdateFlagDao, CompanyActionDao
+from app.models.stock_models import StockInfo, StockHistUnadj, UpdateFlag, CompanyAction, FutureTask, StockHistAdj
+from app.dao.stock_info_dao import StockInfoDao, StockHistUnadjDao, UpdateFlagDao, CompanyActionDao, FutureTaskDao, StockHistAdjDao
+from app.constants.enums import TaskType, TaskStatus
 
 import logging
 
@@ -24,6 +27,7 @@ class StockInfoSynchronizer:
         self.symbol = symbol
         self.stock_info_dao = StockInfoDao._instance
         self.update_flag_dao = UpdateFlagDao._instance
+        self.future_task_dao = FutureTaskDao._instance
 
     def fetch_data(self) -> pd.DataFrame:
         """
@@ -89,7 +93,6 @@ class StockInfoSynchronizer:
             # 将新数据插入到update_flag表中
             for record in new_records:
                 self.update_flag_dao.insert_one(UpdateFlag(stock_code=record.stock_code, action_update_flag='1'))
-            
             logger.info("Inserted %d new records into the database.", len(new_records))
         except Exception as e:
             logger.exception("Error during synchronization: %s", str(e))
@@ -108,8 +111,11 @@ class StockHistSynchronizer:
     """
     def __init__(self):
         self.stock_info_dao = StockInfoDao._instance
-        self.stock_hist_dao = StockHistUnadjDao._instance
+        self.stock_hist_unadj_dao = StockHistUnadjDao._instance
         self.update_flag_dao = UpdateFlagDao._instance
+        self.company_action_dao = CompanyActionDao._instance
+        self.stock_hist_adj_dao = StockHistAdjDao()
+        self.future_task_dao = FutureTaskDao._instance
 
     def sync(self):
         logger.info("Starting stock historical data synchronization.")
@@ -121,7 +127,7 @@ class StockHistSynchronizer:
             stock_code = stock.stock_code
             logger.info("Synchronizing stock %s", stock_code)
             # 2. 查询该股票在历史行情数据表中的最新日期
-            latest_date = self.stock_hist_dao.get_latest_date(stock_code)
+            latest_date = self.stock_hist_unadj_dao.get_latest_date(stock_code)
             if latest_date is None:
                 # 如果没有数据，则从一个默认的开始日期开始，例如 19901126
                 start_date = "19901126"
@@ -182,7 +188,7 @@ class StockHistSynchronizer:
             # 5. 批量插入新增记录到数据库
             if new_records:
                 try:
-                    result_records = self.stock_hist_dao.batch_insert(new_records)
+                    result_records = self.stock_hist_unadj_dao.batch_insert(new_records)
                     logger.info("Inserted %d new historical records for stock %s.", len(result_records), stock_code)
                     self.update_flag_dao.update_action_flag(stock_code, "1")
                 except Exception as e:
@@ -190,6 +196,200 @@ class StockHistSynchronizer:
                     raise e
             else:
                 logger.info("No new records to insert for stock %s.", stock_code)
+
+    def sync_adj(self):
+        """
+        同步前复权历史行情数据。
+        
+        主要流程：
+        1. 判断是否存在 UPDATE_ADJ 任务：通过 FutureTaskDao.select_by_code_date_type(stock_code, today, "UPDATE_ADJ")
+            如果存在且状态为 INIT，则更新该股票的所有前复权数据（先删除，再重新计算）；否则，直接复制最新的无复权数据到前复权数据表。
+        2. 对于更新情形，更新步骤：
+            a. 获取该股票所有的无复权历史数据（stock_hist_unadj），按日期升序排列。
+            b. 获取该股票所有的公司行动记录（company_action），按 ex_dividend_date 升序排列。
+            c. 对于无复权数据中每个交易日 i，查找所有 ex_date 大于 i 的公司行动记录，按顺序计算复权因子 F_j，
+                其中每个 F_j 的计算依赖于事件前一交易日的无复权收盘价 P_ref：
+                    F_j = (P_ref * (1 + bonus + conversion + rights_issue)) / (P_ref - dividend + (rights_issue * rights_issue_price))
+                注意：bonus, conversion, rights_issue, dividend 均为“每股”数据（原接口数据除以10）。
+            d. 将无复权数据中的开盘、收盘、最高、最低乘以累计复权因子，生成前复权数据记录。
+            e. 批量插入前复权数据到 stock_hist_adj 表，并更新 FutureTask 状态为 DONE。
+        3. 如果没有 UPDATE_ADJ 任务，则直接复制最新的无复权数据到 stock_hist_adj 表。
+        """
+        today = datetime.date.today()
+        # 获取股票列表（此处采用 stock_info 表中的股票）
+        stock_list = self.stock_info_dao.load_stock_info()
+        logger.info("Processing forward-adjusted data for %d stocks.", len(stock_list))
+        
+        for stock in stock_list:
+            stock_code = stock.stock_code
+            logger.info("Processing stock %s", stock_code)
+            # 检查未来任务是否存在 UPDATE_ADJ 任务，状态为 INIT
+            future_tasks = self.future_task_dao.select_by_code_date_type(stock_code, today, TaskType.UPDATE_ADJ.name)
+            if future_tasks is None:
+                continue
+            for future_task in future_tasks:
+                if future_task is not None and future_task.task_status == TaskStatus.INIT.name:
+                    logger.info("Found UPDATE_ADJ task for %s, updating forward-adjusted history.", stock_code)
+                    # 更新模式：删除该股票所有前复权数据
+                    self.stock_hist_adj_dao.delete_by_stock_code(stock_code)
+                    # 获取所有无复权数据，按日期升序排列
+                    df_unadj = self.stock_hist_unadj_dao.select_all_as_dataframe(stock_code)
+                    if df_unadj.empty:
+                        logger.info("No non-adjusted data for stock %s, skipping.", stock_code)
+                        continue
+                    # 获取所有公司行动记录（已转换为每股数据），按 ex_dividend_date 升序排列
+                    df_action = self.company_action_dao.select_all_as_dataframe(stock_code)
+                    # 遍历无复权记录，确保按交易日期升序排列
+                    df_unadj = df_unadj.sort_values(by="date")
+                    # 获取交易日期列表和对应的收盘价列表
+                    trade_dates = df_unadj["date"].tolist()
+                    close_prices = df_unadj["close"].tolist()
+                    # 预处理公司行动数据
+                    df_action = df_action.sort_values(by="ex_dividend_date")
+                    # 转换为字典列表，方便后续处理
+                    actions = df_action.to_dict(orient="records")
+                    # 预先计算参考价格字典：对于每个 action，参考价格为无复权数据中最后一个交易日期 < action.ex_dividend_date 的收盘价
+                    ref_prices = {}
+                    for action in actions:
+                        ex_date = action["ex_dividend_date"]
+                        idx = bisect_left(trade_dates, ex_date)
+                        if idx == 0:
+                            ref_prices[ex_date] = None
+                        else:
+                            ref_prices[ex_date] = close_prices[idx - 1]
+
+                    # 预先计算每个 action 的单独复权因子 F_j
+                    action_factors = {}
+                    for action in actions:
+                        ex_date = action["ex_dividend_date"]
+                        P_ref = ref_prices.get(ex_date)
+                        if not P_ref or P_ref == 0:
+                            F = 1.0
+                        else:
+                            bonus = (action.get("bonus_ratio") or 0.0) if not math.isnan(action.get("bonus_ratio") or 0.0) else 0.0
+                            conversion = (action.get("conversion_ratio") or 0.0) if not math.isnan(action.get("conversion_ratio") or 0.0) else 0.0
+                            rights_issue = (action.get("rights_issue_ratio") or 0.0) if not math.isnan(action.get("rights_issue_ratio") or 0.0) else 0.0
+                            dividend = (action.get("dividend_per_share") or 0.0) if not math.isnan(action.get("dividend_per_share") or 0.0) else 0.0
+                            rights_issue_price = (action.get("rights_issue_price")) or 0.0 if not math.isnan((action.get("rights_issue_price")) or 0.0) else 0.0
+                            try:
+                                F = (P_ref - dividend + (rights_issue * rights_issue_price)) / (P_ref * (1 + bonus + conversion + rights_issue))
+                            except Exception as e:
+                                logger.error("Error computing factor for stock %s on action date %s: %s", stock_code, ex_date, e)
+                                F = 1.0
+                        action_factors[ex_date] = F
+
+                    # 计算累计复权因子。先取出所有 action 的 ex_dividend_date 并排序（升序）
+                    sorted_action_dates = sorted(action_factors.keys())
+                    cum_factors = {}
+                    cum = 1.0
+                    # 从最晚的日期开始反向累乘
+                    for ex_date in reversed(sorted_action_dates):
+                        cum *= action_factors[ex_date]
+                        cum_factors[ex_date] = cum
+
+                    # 定义一个辅助函数，根据交易日查找累计复权因子
+                    def get_cum_factor_for_trade(trade_date):
+                        """
+                        返回所有 ex_dividend_date 大于 trade_date 的累计复权因子，
+                        如果没有，则返回 1.0。
+                        """
+                        # 在 sorted_action_dates 中查找第一个严格大于 trade_date 的日期
+                        idx = bisect_left(sorted_action_dates, trade_date)
+                        # 如果找到的日期不大于 trade_date，则继续移动指针
+                        while idx < len(sorted_action_dates) and sorted_action_dates[idx] <= trade_date:
+                            idx += 1
+                        if idx < len(sorted_action_dates):
+                            return cum_factors[sorted_action_dates[idx]]
+                        else:
+                            return 1.0
+
+                    # 计算前复权数据：对每一条无复权记录，累计后续所有复权因子
+                    adj_records = []
+                    # 用于保存前一交易日的前复权收盘价，用于计算涨跌相关指标
+                    previous_adj_close = None
+                    # 对每条记录
+                    for _, row in df_unadj.iterrows():
+                        trade_date = row["date"]
+                        # 查找累计复权因子
+                        cumulative_factor = get_cum_factor_for_trade(trade_date)
+                        # 计算前复权价格
+                        adj_open = row["open"] * cumulative_factor if row["open"] is not None else None
+                        adj_close = row["close"] * cumulative_factor if row["close"] is not None else None
+                        adj_high = row["high"] * cumulative_factor if row["high"] is not None else None
+                        adj_low = row["low"] * cumulative_factor if row["low"] is not None else None
+                        adj_volume = row["volume"] / cumulative_factor if row["volume"] is not None else None
+                        # 重新计算涨跌指标：若存在前一交易日的前复权收盘价，则计算差值和百分比变化
+                        if previous_adj_close is None:
+                            adj_change = None
+                            adj_change_percent = None
+                            adj_amplitude = None
+                        else:
+                            adj_change = adj_close - previous_adj_close
+                            # 避免除零错误
+                            if previous_adj_close != 0:
+                                adj_change_percent = (adj_change / previous_adj_close) * 100
+                                adj_amplitude = ((adj_high - adj_low) / previous_adj_close) * 100
+                            else:
+                                adj_change_percent = None
+                                adj_amplitude = None
+
+                        # 更新 previous_adj_close 为当前前复权收盘价，供下一条记录计算使用
+                        previous_adj_close = adj_close
+
+                        # 构造前复权数据记录，其他字段直接复制无复权记录
+                        record = StockHistAdj(
+                            stock_code = stock_code,
+                            date = trade_date,
+                            open = adj_open,
+                            close = adj_close,
+                            high = adj_high,
+                            low = adj_low,
+                            volume = adj_volume,
+                            amplitude = adj_amplitude,
+                            change_percent = adj_change_percent,
+                            change = adj_change,
+                            turnover_rate = row.get("turnover_rate")
+                        )
+                        adj_records.append(record)
+                    # 批量插入前复权数据
+                    if adj_records:
+                        self.stock_hist_adj_dao.batch_insert(adj_records)
+                        logger.info("Updated forward-adjusted data for stock %s: %d records inserted.", stock_code, len(adj_records))
+                    else:
+                        logger.info("No forward-adjusted records computed for stock %s.", stock_code)
+                    # 更新未来任务状态为 DONE
+                    self.future_task_dao.update_status_by_id(future_task.task_id, "DONE")
+                    break
+                else:
+                    # 无更新任务时：直接复制无复权数据表中，日期在前复权数据表最新日期之后的所有数据到前复权数据表
+                    latest_adj_date = self.stock_hist_adj_dao.get_latest_date(stock_code)
+                    if latest_adj_date is None:
+                        # 如果前复权数据表无记录，则设置为极早日期
+                        latest_adj_date = datetime.date(1900, 1, 1)
+                    # 查询无复权数据中日期大于最新前复权日期的所有记录
+                    df_new = self.stock_hist_unadj_dao.select_after_date_as_dataframe(stock_code, latest_adj_date + datetime.timedelta(days=1))
+                    if df_new.empty:
+                        logger.info("No new non-adjusted records to copy for stock %s.", stock_code)
+                    else:
+                        new_adj_records = []
+                        for _, row in df_new.iterrows():
+                            record = StockHistAdj(
+                                stock_code = stock_code,
+                                date = row["date"],
+                                open = row["open"],
+                                close = row["close"],
+                                high = row["high"],
+                                low = row["low"],
+                                volume = row["volume"],
+                                amplitude = row["amplitude"],
+                                change_percent = row["change_percent"],
+                                change = row["change"],
+                                turnover_rate = row["turnover_rate"]
+                            )
+                            new_adj_records.append(record)
+                        self.stock_hist_adj_dao.batch_insert(new_adj_records)
+                        logger.info("Copied %d new non-adjusted records for stock %s to adjusted table.", len(new_adj_records), stock_code)
+                    break
 
 
 class CompanyActionSynchronizer:
@@ -209,6 +409,7 @@ class CompanyActionSynchronizer:
         self.stock_info_dao = StockInfoDao._instance
         self.company_action_dao = CompanyActionDao._instance
         self.update_flag_dao = UpdateFlagDao._instance
+        self.future_task_dao = FutureTaskDao._instance
 
     def sync(self):
         logger.info("Starting company action synchronization.")
@@ -320,8 +521,12 @@ class CompanyActionSynchronizer:
                 try:
                     self.company_action_dao.batch_insert(new_records)
                     logger.info("Inserted %d new company action records for %s.", len(new_records), stock_code)
+                    # 由于公司行动更新了，因些需要更新前复权数据，更新flag
+                    for row in new_records:
+                        self.future_task_dao.insert_one(FutureTask(stock_code=stock_code, task_date=row.ex_dividend_date, task_type=TaskType.UPDATE_ADJ.name, task_status=TaskStatus.INIT.name))
                 except Exception as e:
                     logger.error("Error inserting records for stock %s: %s", stock_code, e)
                     raise e
             else:
                 logger.info("No new company action records for %s.", stock_code)
+            self.update_flag_dao.update_action_flag(stock_code, "0")
