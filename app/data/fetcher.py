@@ -594,6 +594,7 @@ class FundamentalDataSynchronizer:
     def __init__(self):
         self.stock_info_dao = StockInfoDao._instance  # 单例
         self.fundamental_dao = FundamentalDataDao._instance
+        self.update_flag_dao = UpdateFlagDao._instance
 
     def sync(self):
         logger.info("Starting fundamental data synchronization.")
@@ -604,11 +605,12 @@ class FundamentalDataSynchronizer:
         for stock in stock_list:
             stock_code = stock.stock_code
             logger.info("Processing fundamental data for stock %s", stock_code)
-            # 2. 查询 fundamental_data 表中最新的报告期
-            latest_date = self.fundamental_dao.get_latest_report_date(stock_code)
-            if latest_date is None:
-                latest_date = datetime.date(1900, 1, 1)
-            logger.info("Latest fundamental report date for %s: %s", stock_code, latest_date)
+
+            # 2. 查询 update_flag表中，当前股票代码是否允许更新基本面数据
+            update_flags = self.update_flag_dao.select_one_by_code(stock_code)
+            if update_flags["fundamental_update_flag"] == "0":
+                logger.info("Fundamental data update for stock %s is disabled.", stock_code)
+                continue
             
             # 3. 调用 akshare 接口获取三个数据源，indicator 均采用 "按报告期"
             try:
@@ -627,17 +629,13 @@ class FundamentalDataSynchronizer:
                 logger.error("Error fetching cash data for %s: %s", stock_code, e)
                 continue
 
-            # 4. 将“报告期”转换为 Pandas Timestamp 类型，并过滤出报告期 > latest_date 的记录
+            # 4. 将“报告期”转换为 Pandas Timestamp 类型
             for df in [df_debt, df_benefit, df_cash]:
                 if "报告期" in df.columns:
                     df["报告期"] = pd.to_datetime(df["报告期"], errors="coerce")
                 else:
                     logger.error("DataFrame missing '报告期' column for stock %s", stock_code)
                     continue
-
-            df_debt = df_debt[df_debt["报告期"].dt.date > latest_date]
-            df_benefit = df_benefit[df_benefit["报告期"].dt.date > latest_date]
-            df_cash = df_cash[df_cash["报告期"].dt.date > latest_date]
 
             if df_debt.empty or df_benefit.empty or df_cash.empty:
                 logger.info("No new fundamental data for stock %s.", stock_code)
@@ -690,7 +688,7 @@ class FundamentalDataSynchronizer:
             # 7. 批量插入 fundamental_records 到数据库
             if fundamental_records:
                 try:
-                    self.fundamental_dao.batch_insert(fundamental_records)
+                    self.fundamental_dao.batch_upsert(fundamental_records)
                     logger.info("Inserted %d new fundamental records for stock %s.", len(fundamental_records), stock_code)
                 except Exception as e:
                     logger.error("Error inserting fundamental records for stock %s: %s", stock_code, e)

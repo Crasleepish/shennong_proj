@@ -1,6 +1,6 @@
 from typing import List, Union
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import or_
+from sqlalchemy import or_, tuple_
 from app.models.stock_models import StockInfo, StockHistUnadj, UpdateFlag, FutureTask, CompanyAction, StockHistAdj, FundamentalData, SuspendData
 from app.database import get_db
 from app.utils.data_utils import process_in_batches
@@ -75,6 +75,7 @@ class UpdateFlagDao:
                     return {
                         'stock_code': result.stock_code,
                         'action_update_flag': result.action_update_flag,
+                        'fundamental_update_flag': result.fundamental_update_flag
                     }
         except Exception as e:
             logger.error("Error querying update flag for %s: %s", stock_code, e)
@@ -404,22 +405,50 @@ class FundamentalDataDao:
         except Exception as e:
             logger.error("Error querying latest report date for %s: %s", stock_code, e)
             return None
-        
-    def batch_insert(self, records: List[FundamentalData]):
+
+    def batch_upsert(self, records: List[FundamentalData]) -> List[FundamentalData]:
         """
-        批量插入基本面数据记录到数据库。
+        批量 upsert 基本面数据记录到数据库：
+        根据 stock_code 和 report_date 查询，如果存在则更新，否则插入。
+        优化：在每个批次内一次性查询出所有存在记录，减少数据库访问次数。
         """
-        
         try:
             with get_db() as db:
-                def insert_one_batch(batch: List[FundamentalData]):
-                    db.add_all(batch)
+                def upsert_one_batch(batch: List[FundamentalData]) -> List[FundamentalData]:
+                    # 1. 构造联合主键列表
+                    keys = [(rec.stock_code, rec.report_date) for rec in batch]
+                    # 2. 一次性查询出数据库中已存在的记录
+                    existing_records = db.query(FundamentalData).filter(
+                        tuple_(FundamentalData.stock_code, FundamentalData.report_date).in_(keys)
+                    ).all()
+                    # 构建字典，键为 (stock_code, report_date)
+                    existing_dict = {
+                        (rec.stock_code, rec.report_date): rec for rec in existing_records
+                    }
+                    # 3. 遍历批次记录，进行 upsert
+                    for rec in batch:
+                        key = (rec.stock_code, rec.report_date)
+                        if key in existing_dict:
+                            existing = existing_dict[key]
+                            # 更新字段
+                            existing.total_equity = rec.total_equity
+                            existing.total_assets = rec.total_assets
+                            existing.current_liabilities = rec.current_liabilities
+                            existing.noncurrent_liabilities = rec.noncurrent_liabilities
+                            existing.net_profit = rec.net_profit
+                            existing.operating_profit = rec.operating_profit
+                            existing.total_revenue = rec.total_revenue
+                            existing.total_cost = rec.total_cost
+                            existing.net_cash_from_operating = rec.net_cash_from_operating
+                            existing.cash_for_fixed_assets = rec.cash_for_fixed_assets
+                        else:
+                            db.add(rec)
                     db.commit()
                     return batch
-                process_in_batches(records, insert_one_batch)
+                process_in_batches(records, upsert_one_batch)
                 return records
         except Exception as e:
-            logger.error("Error during batch insert: %s", e)
+            logger.error("Error during batch upsert: %s", e)
             db.rollback()
             raise e
         

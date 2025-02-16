@@ -50,8 +50,8 @@ def init_update_flag_data(app):
     with get_db() as db:
         # 执行插入 SQL
         sql = """
-        INSERT INTO update_flag (stock_code, action_update_flag)
-        VALUES ('000004', '0'), ('600655', '0'), ('600519', '0');
+        INSERT INTO update_flag (stock_code, action_update_flag, fundamental_update_flag)
+        VALUES ('000004', '0', '1'), ('600655', '0', '1'), ('600519', '0', '1');
         """
         db.execute(text(sql))
         db.commit()
@@ -99,13 +99,14 @@ def test_AdjSynchronizer(app, init_update_flag_data, monkeypatch, dummy_stock_li
     df = stock_hist_adj_dao.select_all_as_dataframe("600655")
     print(df)
 
-def test_FundamentalDataSynchronizer(app, monkeypatch, dummy_stock_list):
+def test_FundamentalDataSynchronizer(app, init_update_flag_data, monkeypatch, dummy_stock_list):
     def fake_load_stock_info(self):
         return dummy_stock_list
     
     monkeypatch.setattr(StockInfoDao, "load_stock_info", fake_load_stock_info)
 
     fundatmental_data_synchronizer = FundamentalDataSynchronizer()
+    fundatmental_data_synchronizer.sync()
     fundatmental_data_synchronizer.sync()
 
     fundamental_data_dao = FundamentalDataDao._instance
