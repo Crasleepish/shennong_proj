@@ -29,6 +29,8 @@ class StockHistUnadj(Base):
     change_percent = Column("change_percent", Float)      # 单位：%
     change = Column("change", Float)             # 单位：元
     turnover_rate = Column("turnover_rate", Float)      # 单位：%
+    total_shares = Column("total_shares", BigInteger)  # 单位：原数据成交量单位为“万股”, 入库单位为“股”
+    mkt_cap = Column("mkt_cap", BigInteger)  # 单位：元
     
     def __repr__(self):
         return f"<StockHistUnadj(stock_code='{self.stock_code}', date='{self.date}')>"
@@ -36,7 +38,8 @@ class StockHistUnadj(Base):
 class UpdateFlag(Base):
     __tablename__ = 'update_flag'
     stock_code = Column("stock_code", String(10), primary_key=True)
-    action_update_flag = Column('action_update_flag', String(1), nullable=True) #是否需要更新该股票的公司行动数据, 1:需要更新，0：不需要更新
+    action_update_flag = Column('action_update_flag', String(1), nullable=False, default=1) #是否需要更新该股票的公司行动数据, 1:需要更新，0：不需要更新
+    fundamental_update_flag = Column('fundamental_update_flag', String(1), nullable=False, default=1) #是否需要更新该股票的基本面数据, 1:需要更新，0：不需要更新
 
     def __repr__(self):
         return f"<UpdateFlag(stock_code='{self.stock_code}')>"
@@ -88,6 +91,50 @@ class StockHistAdj(Base):
     change_percent = Column("change_percent", Float)      # 单位：%
     change = Column("change", Float)             # 单位：元
     turnover_rate = Column("turnover_rate", Float)      # 单位：%
+    total_shares = Column("total_shares", BigInteger)  # 单位：原数据成交量单位为“万股”, 入库单位为“股”
+    mkt_cap = Column("mkt_cap", BigInteger)  # 单位：元
     
     def __repr__(self):
         return f"<StockHistAdj(stock_code='{self.stock_code}', date='{self.date}')>"
+
+class FundamentalData(Base):
+    __tablename__ = "fundamental_data"
+    
+    # 主键：股票代码和报告日期
+    stock_code = Column(String(10), primary_key=True)
+    report_date = Column(Date, primary_key=True)
+    
+    # 基本面数据字段
+    total_equity = Column(Float, nullable=False)                # 归属于母公司所有者权益合计
+    total_assets = Column(Float, nullable=False)                # 资产合计
+    current_liabilities = Column(Float, nullable=True)          # 流动负债合计
+    noncurrent_liabilities = Column(Float, nullable=True)       # 非流动负债合计
+    net_profit = Column(Float, nullable=False)                  # 归属于母公司所有者的净利润
+    operating_profit = Column(Float, nullable=True)             # 营业利润
+    total_revenue = Column(Float, nullable=False)               # 营业总收入
+    total_cost = Column(Float, nullable=False)                  # 营业总成本
+    net_cash_from_operating = Column(Float, nullable=False)     # 经营活动产生的现金流量净额
+    cash_for_fixed_assets = Column(Float, nullable=True)        # 购建固定资产、无形资产和其他长期资产支付的现金
+
+    def __repr__(self):
+        return f"<FundamentalData(stock_code='{self.stock_code}', report_date='{self.report_date}')>"
+    
+class SuspendData(Base):
+    __tablename__ = "suspend_data"
+    
+    # 主键：序号
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    #停复牌数据
+    stock_code = Column(String(10), nullable=False)         # 股票代码
+    suspend_date = Column(Date, nullable=False)             # 停牌时间
+    resume_date = Column(Date, nullable=True)               # 停牌截止时间
+    suspend_period = Column(String(10), nullable=True)      # 停牌期限
+    suspend_reason = Column(String(100), nullable=True)     # 停牌原因
+    market = Column(String(20), nullable=True)              # 所属市场
+
+    __table_args__ = (
+        Index('idx_suspend_data_stock_code_suspend_date', 'stock_code', 'suspend_date'),
+    )
+
+    def __repr__(self):
+        return f"<SuspendData(id='{self.id}'>"

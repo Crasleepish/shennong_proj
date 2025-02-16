@@ -5,9 +5,10 @@ import pandas as pd
 import datetime
 import math
 from sqlalchemy.orm import Session
-from app.models.stock_models import StockInfo, StockHistUnadj, UpdateFlag, CompanyAction, FutureTask, StockHistAdj
-from app.dao.stock_info_dao import StockInfoDao, StockHistUnadjDao, UpdateFlagDao, CompanyActionDao, FutureTaskDao, StockHistAdjDao
+from app.models.stock_models import StockInfo, StockHistUnadj, UpdateFlag, CompanyAction, FutureTask, StockHistAdj, FundamentalData, SuspendData
+from app.dao.stock_info_dao import StockInfoDao, StockHistUnadjDao, UpdateFlagDao, CompanyActionDao, FutureTaskDao, StockHistAdjDao, FundamentalDataDao, SuspendDataDao
 from app.constants.enums import TaskType, TaskStatus
+from typing import Union
 
 import logging
 
@@ -92,7 +93,7 @@ class StockInfoSynchronizer:
 
             # 将新数据插入到update_flag表中
             for record in new_records:
-                self.update_flag_dao.insert_one(UpdateFlag(stock_code=record.stock_code, action_update_flag='1'))
+                self.update_flag_dao.insert_one(UpdateFlag(stock_code=record.stock_code, action_update_flag='1', fundamental_update_flag='1'))
             logger.info("Inserted %d new records into the database.", len(new_records))
         except Exception as e:
             logger.exception("Error during synchronization: %s", str(e))
@@ -162,15 +163,67 @@ class StockHistSynchronizer:
                 logger.info("No new historical data for stock %s.", stock_code)
                 continue
 
-            # 将日期列转换为日期类型（注意 akshare 返回的“日期”列可能为 object 类型）
+            # 将日期列转换为日期类型
             if '日期' in df.columns:
-                df['日期'] = pd.to_datetime(df['日期'], errors='coerce').dt.date
+                df['日期'] = pd.to_datetime(df['日期'], errors='coerce')
+
+            # 获取股本变动数据并合并
+            # 使用无复权数据的最早日期作为查询起始日期
+            min_date = df["日期"].min()
+            start_date_share = min_date.strftime("%Y%m%d")
+            # 当前日期作为结束日期（已在 YYYYMMDD 格式下）
+            end_date_share = current_date
+
+            try:
+                share_list_df = ak.stock_ipo_summary_cninfo(
+                    symbol=stock_code,
+                )
+                share_list_df = share_list_df[["上市日期", "总发行数量"]]
+                share_list_df.rename(columns={"上市日期": "变动日期", "总发行数量": "总股本"}, inplace=True)
+                share_change_df = ak.stock_share_change_cninfo(
+                    symbol=stock_code,
+                    start_date=start_date_share,
+                    end_date=end_date_share
+                )
+                share_change_df = share_change_df[["变动日期", "总股本"]]
+                share_change_df = pd.concat([share_list_df, share_change_df], ignore_index=True).reset_index(drop=True)
+                share_change_df.dropna(subset=["变动日期", "总股本"], inplace=True)
+            except Exception as e:
+                logger.error("Error fetching share change data for stock %s: %s", stock_code, e)
+                share_change_df = pd.DataFrame()
+
+            # 如果接口返回不为空，预处理数据
+            if not share_change_df.empty and "变动日期" in share_change_df.columns and "总股本" in share_change_df.columns:
+                # 将“变动日期”转换为日期对象
+                share_change_df["变动日期"] = pd.to_datetime(share_change_df["变动日期"], errors="coerce")
+                # 按“变动日期”升序排序
+                share_change_df = share_change_df.sort_values(by="变动日期")
+                # 仅保留需要的字段
+                share_change_df = share_change_df[["变动日期", "总股本"]]
+                # 利用 merge_asof 合并（方向为 backward：取最近且不超过当天的记录）
+                df = pd.merge_asof(
+                    df.sort_values(by="日期"),
+                    share_change_df.sort_values(by="变动日期"),
+                    left_on="日期",
+                    right_on="变动日期",
+                    direction="backward"
+                )
+                # 合并结果中，字段“总股本”即为每个交易日对应的总股本，重命名为 total_shares
+                df.rename(columns={"总股本": "total_shares"}, inplace=True)
+                # total_shares 是“万股”：
+                df['total_shares'] = df['total_shares'] * 1e4
+                # 计算总市值，公式： mkt_cap = close * total_shares
+                df["mkt_cap"] = df["收盘"] * df["total_shares"]
+            else:
+                # 如果接口无数据，则填充为空值
+                df["total_shares"] = None
+                df["mkt_cap"] = None
 
             # 4. 处理 DataFrame 数据，构造 StockHist 对象列表
             new_records = []
             for _, row in df.iterrows():
                 record = StockHistUnadj(
-                    date=row["日期"],
+                    date=row["日期"].date(),
                     stock_code=row["股票代码"],
                     open=row["开盘"],
                     close=row["收盘"],
@@ -181,7 +234,9 @@ class StockHistSynchronizer:
                     amplitude=row["振幅"],
                     change_percent=row["涨跌幅"],
                     change=row["涨跌额"],
-                    turnover_rate=row["换手率"]
+                    turnover_rate=row["换手率"],
+                    total_shares = row.get("total_shares"),
+                    mkt_cap = row.get("mkt_cap")
                 )
                 new_records.append(record)
 
@@ -348,7 +403,9 @@ class StockHistSynchronizer:
                             amplitude = adj_amplitude,
                             change_percent = adj_change_percent,
                             change = adj_change,
-                            turnover_rate = row.get("turnover_rate")
+                            turnover_rate = row.get("turnover_rate"),
+                            total_shares = row.get("total_shares"),
+                            mkt_cap = row.get("mkt_cap")
                         )
                         adj_records.append(record)
                     # 批量插入前复权数据
@@ -384,7 +441,9 @@ class StockHistSynchronizer:
                                 amplitude = row["amplitude"],
                                 change_percent = row["change_percent"],
                                 change = row["change"],
-                                turnover_rate = row["turnover_rate"]
+                                turnover_rate = row["turnover_rate"],
+                                total_shares = row.get("total_shares"),
+                                mkt_cap = row.get("mkt_cap")
                             )
                             new_adj_records.append(record)
                         self.stock_hist_adj_dao.batch_insert(new_adj_records)
@@ -530,3 +589,246 @@ class CompanyActionSynchronizer:
             else:
                 logger.info("No new company action records for %s.", stock_code)
             self.update_flag_dao.update_action_flag(stock_code, "0")
+
+class FundamentalDataSynchronizer:
+    def __init__(self):
+        self.stock_info_dao = StockInfoDao._instance  # 单例
+        self.fundamental_dao = FundamentalDataDao._instance
+
+    def sync(self):
+        logger.info("Starting fundamental data synchronization.")
+        # 1. 获取股票列表
+        stock_list = self.stock_info_dao.load_stock_info()
+        logger.info("Found %d stocks to process.", len(stock_list))
+        
+        for stock in stock_list:
+            stock_code = stock.stock_code
+            logger.info("Processing fundamental data for stock %s", stock_code)
+            # 2. 查询 fundamental_data 表中最新的报告期
+            latest_date = self.fundamental_dao.get_latest_report_date(stock_code)
+            if latest_date is None:
+                latest_date = datetime.date(1900, 1, 1)
+            logger.info("Latest fundamental report date for %s: %s", stock_code, latest_date)
+            
+            # 3. 调用 akshare 接口获取三个数据源，indicator 均采用 "按报告期"
+            try:
+                df_debt = ak.stock_financial_debt_ths(symbol=stock_code, indicator="按报告期")
+            except Exception as e:
+                logger.error("Error fetching debt data for %s: %s", stock_code, e)
+                continue
+            try:
+                df_benefit = ak.stock_financial_benefit_ths(symbol=stock_code, indicator="按报告期")
+            except Exception as e:
+                logger.error("Error fetching benefit data for %s: %s", stock_code, e)
+                continue
+            try:
+                df_cash = ak.stock_financial_cash_ths(symbol=stock_code, indicator="按报告期")
+            except Exception as e:
+                logger.error("Error fetching cash data for %s: %s", stock_code, e)
+                continue
+
+            # 4. 将“报告期”转换为 Pandas Timestamp 类型，并过滤出报告期 > latest_date 的记录
+            for df in [df_debt, df_benefit, df_cash]:
+                if "报告期" in df.columns:
+                    df["报告期"] = pd.to_datetime(df["报告期"], errors="coerce")
+                else:
+                    logger.error("DataFrame missing '报告期' column for stock %s", stock_code)
+                    continue
+
+            df_debt = df_debt[df_debt["报告期"].dt.date > latest_date]
+            df_benefit = df_benefit[df_benefit["报告期"].dt.date > latest_date]
+            df_cash = df_cash[df_cash["报告期"].dt.date > latest_date]
+
+            if df_debt.empty or df_benefit.empty or df_cash.empty:
+                logger.info("No new fundamental data for stock %s.", stock_code)
+                continue
+
+            # 5. 合并三个 DataFrame，按 "报告期" 列内连接（假设各报表数据报告期一致）
+            df_merge = pd.merge(df_debt, df_benefit, on="报告期", suffixes=("_debt", "_benefit"))
+            df_merge = pd.merge(df_merge, df_cash, on="报告期")
+            # 此时 df_merge 包含 "报告期" 以及各表中关键字段
+
+            # 6. 根据合并结果构造 FundamentalData 对象列表
+            fundamental_records = []
+            for _, row in df_merge.iterrows():
+                try:
+                    report_ts = row["报告期"]
+                    if pd.isnull(report_ts):
+                        continue
+                    report_date = report_ts.date()
+                except Exception as e:
+                    logger.error("Error parsing report_date for stock %s: %s", stock_code, e)
+                    continue
+
+                total_equity = parse_amount(row.get("*归属于母公司所有者权益合计"))
+                total_assets = parse_amount(row.get("*资产合计"))
+                current_liabilities = parse_amount(row.get("流动负债合计"))
+                noncurrent_liabilities = parse_amount(row.get("非流动负债合计"))
+                net_profit = parse_amount(row.get("*归属于母公司所有者的净利润"))
+                operating_profit = parse_amount(row.get("三、营业利润"))
+                total_revenue = parse_amount(row.get("*营业总收入"))
+                total_cost = parse_amount(row.get("*营业总成本"))
+                net_cash_from_operating = parse_amount(row.get("*经营活动产生的现金流量净额"))
+                cash_for_fixed_assets = parse_amount(row.get("购建固定资产、无形资产和其他长期资产支付的现金"))
+                
+                record = FundamentalData(
+                    stock_code = stock_code,
+                    report_date = report_date,
+                    total_equity = total_equity,
+                    total_assets = total_assets,
+                    current_liabilities = current_liabilities,
+                    noncurrent_liabilities = noncurrent_liabilities,
+                    net_profit = net_profit,
+                    operating_profit = operating_profit,
+                    total_revenue = total_revenue,
+                    total_cost = total_cost,
+                    net_cash_from_operating = net_cash_from_operating,
+                    cash_for_fixed_assets = cash_for_fixed_assets
+                )
+                fundamental_records.append(record)
+            
+            # 7. 批量插入 fundamental_records 到数据库
+            if fundamental_records:
+                try:
+                    self.fundamental_dao.batch_insert(fundamental_records)
+                    logger.info("Inserted %d new fundamental records for stock %s.", len(fundamental_records), stock_code)
+                except Exception as e:
+                    logger.error("Error inserting fundamental records for stock %s: %s", stock_code, e)
+            else:
+                logger.info("No new fundamental records to insert for stock %s.", stock_code)
+
+
+class SuspendDataSynchronizer:
+    def __init__(self):
+        self.suspend_data_dao = SuspendDataDao._instance
+
+    def _parse_date(self, val):
+        """
+        将输入值转换为 datetime.date，如果值为 NaT 或无法转换，则返回 None
+        """
+        if pd.isnull(val):
+            return None
+        try:
+            dt = pd.to_datetime(val, errors="coerce")
+            if pd.isnull(dt):
+                return None
+            return dt.date()
+        except Exception as e:
+            logger.error("Error parsing date %s: %s", val, e)
+            return None
+        
+    def sync_all(self, date: str):
+        """
+        获取指定日期（全量数据查询日期，例如 "20120222"）的停复牌数据，
+        将数据入库。接口返回的是从该日期起的全量数据。
+        """
+        try:
+            logger.info("Fetching full suspend data from date %s", date)
+            df = ak.stock_tfp_em(date=date)
+        except Exception as e:
+            logger.error("Error fetching suspend data for date %s: %s", date, e)
+            return
+
+        if df.empty:
+            logger.info("No suspend data fetched for date %s.", date)
+            return
+
+        # 预处理：转换日期字段
+        df["停牌时间"] = df["停牌时间"].apply(self._parse_date)
+        df["停牌截止时间"] = df["停牌截止时间"].apply(self._parse_date)
+        
+        records = []
+        for _, row in df.iterrows():
+            stock_code = row.get("代码")
+            suspend_date = row.get("停牌时间")
+            # 忽略停牌时间为空的记录
+            if suspend_date is None:
+                continue
+            resume_date = row.get("停牌截止时间")
+            suspend_period = row.get("停牌期限")
+            suspend_reason = row.get("停牌原因")
+            market = row.get("所属市场")
+            record = SuspendData(
+                stock_code = stock_code,
+                suspend_date = suspend_date,
+                resume_date = resume_date,
+                suspend_period = suspend_period,
+                suspend_reason = suspend_reason,
+                market = market
+            )
+            records.append(record)
+        if records:
+            self.suspend_data_dao.batch_upsert(records)
+            logger.info("Full sync: Processed %d suspend data records.", len(records))
+        else:
+            logger.info("Full sync: No suspend data records to process.")
+
+    def sync_today(self):
+        """
+        获取当天增量停复牌数据（接口参数 date 为当天），
+        对于每条记录，根据股票代码+停牌时间判断是否已存在，存在则更新，否则新增。
+        """
+        today = datetime.date.today()
+        today_str = today.strftime("%Y%m%d")
+        try:
+            logger.info("Fetching today's suspend data for date %s", today_str)
+            df = ak.stock_tfp_em(date=today_str)
+        except Exception as e:
+            logger.error("Error fetching today's suspend data for date %s: %s", today_str, e)
+            return
+
+        if df.empty:
+            logger.info("No suspend data fetched for today %s.", today_str)
+            return
+
+        df["停牌时间"] = df["停牌时间"].apply(self._parse_date)
+        df["停牌截止时间"] = df["停牌截止时间"].apply(self._parse_date)
+        
+        records = []
+        for _, row in df.iterrows():
+            stock_code = row.get("代码")
+            suspend_date = row.get("停牌时间")
+            if suspend_date is None:
+                continue
+            resume_date = row.get("停牌截止时间")
+            suspend_period = row.get("停牌期限")
+            suspend_reason = row.get("停牌原因")
+            market = row.get("所属市场")
+            record = SuspendData(
+                stock_code = stock_code,
+                suspend_date = suspend_date,
+                resume_date = resume_date,
+                suspend_period = suspend_period,
+                suspend_reason = suspend_reason,
+                market = market
+            )
+            records.append(record)
+        if records:
+            self.suspend_data_dao.batch_upsert(records)
+            logger.info("Incremental sync: Processed %d suspend data records for today.", len(records))
+        else:
+            logger.info("Incremental sync: No suspend data records to process for today.")
+
+def parse_amount(s: Union[str, float, None]) -> Union[float, None]:
+    """
+    将金额字符串转换为 float 数值，统一单位为亿：
+      - 如果金额以“亿”结尾，去除后缀直接转换；
+      - 如果以“万”结尾，则转换后除以 10000；
+      - 否则尝试直接转换。
+    如果转换失败，返回 None。
+    """
+    if pd.isnull(s) or s is None:
+        return None
+    try:
+        s = str(s).strip()
+        if s.endswith("万亿"):
+            return float(s[:-2]) * 1e12
+        elif s.endswith("亿"):
+            return float(s[:-1]) * 100000000
+        elif s.endswith("万"):
+            return float(s[:-1]) * 10000.0
+        else:
+            return float(s)
+    except Exception as e:
+        logger.error("parse_amount error for value %s: %s", s, e)
+        return None

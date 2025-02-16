@@ -1,15 +1,16 @@
 import pytest
+import datetime
 from app import create_app
 from app.database import Base, engine
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
-from app.data.fetcher import StockInfoSynchronizer, StockHistSynchronizer, CompanyActionSynchronizer
+from app.data.fetcher import StockInfoSynchronizer, StockHistSynchronizer, CompanyActionSynchronizer, FundamentalDataSynchronizer, SuspendDataSynchronizer
 from types import SimpleNamespace
 from app.database import get_db
 
 # Use the TestConfig from our config module
 from app.config import TestConfig
-from app.dao.stock_info_dao import StockInfoDao, StockHistUnadjDao, StockHistAdjDao
+from app.dao.stock_info_dao import StockInfoDao, StockHistUnadjDao, StockHistAdjDao, FundamentalDataDao, SuspendDataDao
 
 # Create the Flask app using TestConfig
 @pytest.fixture
@@ -97,3 +98,26 @@ def test_AdjSynchronizer(app, init_update_flag_data, monkeypatch, dummy_stock_li
     stock_hist_adj_dao = StockHistAdjDao._instance
     df = stock_hist_adj_dao.select_all_as_dataframe("600655")
     print(df)
+
+def test_FundamentalDataSynchronizer(app, monkeypatch, dummy_stock_list):
+    def fake_load_stock_info(self):
+        return dummy_stock_list
+    
+    monkeypatch.setattr(StockInfoDao, "load_stock_info", fake_load_stock_info)
+
+    fundatmental_data_synchronizer = FundamentalDataSynchronizer()
+    fundatmental_data_synchronizer.sync()
+
+    fundamental_data_dao = FundamentalDataDao._instance
+    df = fundamental_data_dao.select_all_as_dataframe("600655")
+    print(df)
+
+def test_SuspendDataSynchronizer(app):
+    suspend_data_synchronizer = SuspendDataSynchronizer()
+    suspend_data_synchronizer.sync_all("20120222")
+    suspend_data_synchronizer.sync_today()
+    suspend_data_dao = SuspendDataDao._instance
+    df1 = suspend_data_dao.select_all_as_dataframe()
+    print(df1)
+    df2 = suspend_data_dao.get_suspended_stocks_by_date(datetime.date(2024, 10, 22))
+    print(df2)
