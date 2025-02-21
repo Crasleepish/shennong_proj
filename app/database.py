@@ -30,6 +30,7 @@ def init_db():
     """
     from app.models import models  # ensure all models are imported
     from app.models import stock_models
+    from app.models import task_record
     Base.metadata.create_all(bind=engine)
 
 @contextmanager

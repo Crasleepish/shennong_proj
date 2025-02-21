@@ -14,6 +14,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def safe_value(val):
+    return None if pd.isna(val) else val
+
 class StockInfoSynchronizer:
     """
     同步股票信息数据到数据库。
@@ -53,7 +56,7 @@ class StockInfoSynchronizer:
         df = pd.concat([sh_a_list, sz_a_list], ignore_index=True).sort_values('ipo_date').reset_index(drop=True)
         return df
 
-    def sync(self):
+    def sync(self, progress_callback=None):
         """
         同步数据：将接口返回的新增记录插入到数据库中
         """
@@ -82,9 +85,9 @@ class StockInfoSynchronizer:
             for idx, row in new_data.iterrows():
                 record = StockInfo(
                     stock_code=row['code'],
-                    stock_name=row['name'],
-                    listing_date=row['ipo_date'],
-                    market=row['market']
+                    stock_name=safe_value(row['name']),
+                    listing_date=safe_value(row['ipo_date']),
+                    market=safe_value(row['market'])
                 )
                 new_records.append(record)
             
@@ -92,9 +95,14 @@ class StockInfoSynchronizer:
             self.stock_info_dao.batch_insert(new_records)
 
             # 将新数据插入到update_flag表中
-            for record in new_records:
-                self.update_flag_dao.insert_one(UpdateFlag(stock_code=record.stock_code, action_update_flag='1', fundamental_update_flag='1'))
+            for idx, record in enumerate(new_records, start=1):
+                self.update_flag_dao.upsert_one(UpdateFlag(stock_code=record.stock_code, action_update_flag='1', fundamental_update_flag='1'))
+                if progress_callback:
+                    if idx % 100 == 0:
+                        progress_callback(idx, len(new_records))
             logger.info("Inserted %d new records into the database.", len(new_records))
+            if progress_callback:
+                progress_callback(len(new_records), len(new_records))
         except Exception as e:
             logger.exception("Error during synchronization: %s", str(e))
             raise e
@@ -118,13 +126,15 @@ class StockHistSynchronizer:
         self.stock_hist_adj_dao = StockHistAdjDao()
         self.future_task_dao = FutureTaskDao._instance
 
-    def sync(self):
+    def sync(self, progress_callback=None):
         logger.info("Starting stock historical data synchronization.")
         # 1. 获取当前数据库中的股票列表
         stock_list = self.stock_info_dao.load_stock_info()
         logger.info("Found %d stocks to synchronize.", len(stock_list))
         
-        for stock in stock_list:
+        for idx, stock in enumerate(stock_list, start=1):
+            if progress_callback:
+                progress_callback(idx, len(stock_list))
             stock_code = stock.stock_code
             logger.info("Synchronizing stock %s", stock_code)
             # 2. 查询该股票在历史行情数据表中的最新日期
@@ -157,7 +167,6 @@ class StockHistSynchronizer:
                 )
             except Exception as e:
                 logger.error("Error fetching historical data for stock %s: %s", stock_code, e)
-                continue
 
             if df.empty:
                 logger.info("No new historical data for stock %s.", stock_code)
@@ -167,57 +176,36 @@ class StockHistSynchronizer:
             if '日期' in df.columns:
                 df['日期'] = pd.to_datetime(df['日期'], errors='coerce')
 
-            # 获取股本变动数据并合并
-            # 使用无复权数据的最早日期作为查询起始日期
-            min_date = df["日期"].min()
-            start_date_share = min_date.strftime("%Y%m%d")
-            # 当前日期作为结束日期（已在 YYYYMMDD 格式下）
-            end_date_share = current_date
+            # 获取个股估值数据并合并
 
             try:
-                share_list_df = ak.stock_ipo_summary_cninfo(
+                share_list_df = ak.ak.stock_value_em(
                     symbol=stock_code,
                 )
-                share_list_df = share_list_df[["上市日期", "总发行数量"]]
-                share_list_df.rename(columns={"上市日期": "变动日期", "总发行数量": "总股本"}, inplace=True)
-                share_change_df = ak.stock_share_change_cninfo(
-                    symbol=stock_code,
-                    start_date=start_date_share,
-                    end_date=end_date_share
-                )
-                share_change_df = share_change_df[["变动日期", "总股本"]]
-                share_change_df = pd.concat([share_list_df, share_change_df], ignore_index=True).reset_index(drop=True)
-                share_change_df.dropna(subset=["变动日期", "总股本"], inplace=True)
+                share_list_df = share_list_df[["数据日期", "总市值", "流通市值", "总股本", "流通股本"]]
             except Exception as e:
-                logger.error("Error fetching share change data for stock %s: %s", stock_code, e)
-                share_change_df = pd.DataFrame()
+                logger.error("Error fetching evaluate data for stock %s: %s", stock_code, e)
+                share_list_df = pd.DataFrame()
 
             # 如果接口返回不为空，预处理数据
-            if not share_change_df.empty and "变动日期" in share_change_df.columns and "总股本" in share_change_df.columns:
+            if not share_list_df.empty:
                 # 将“变动日期”转换为日期对象
-                share_change_df["变动日期"] = pd.to_datetime(share_change_df["变动日期"], errors="coerce")
+                share_list_df["数据日期"] = pd.to_datetime(share_list_df["数据日期"], errors="coerce")
                 # 按“变动日期”升序排序
-                share_change_df = share_change_df.sort_values(by="变动日期")
-                # 仅保留需要的字段
-                share_change_df = share_change_df[["变动日期", "总股本"]]
+                share_list_df = share_list_df.sort_values(by="数据日期")
                 # 利用 merge_asof 合并（方向为 backward：取最近且不超过当天的记录）
-                df = pd.merge_asof(
-                    df.sort_values(by="日期"),
-                    share_change_df.sort_values(by="变动日期"),
-                    left_on="日期",
-                    right_on="变动日期",
-                    direction="backward"
-                )
+                # 合并两个 DataFrame
+                df = pd.merge(df, share_list_df, how="left", left_on="日期", right_on="数据日期")
+                columns_to_fill = ["总市值", "流通市值", "总股本", "流通股本"]
+                df[columns_to_fill] = df[columns_to_fill].ffill()
                 # 合并结果中，字段“总股本”即为每个交易日对应的总股本，重命名为 total_shares
-                df.rename(columns={"总股本": "total_shares"}, inplace=True)
-                # total_shares 是“万股”：
-                df['total_shares'] = df['total_shares'] * 1e4
-                # 计算总市值，公式： mkt_cap = close * total_shares
-                df["mkt_cap"] = df["收盘"] * df["total_shares"]
+                df.rename(columns={"总市值": "mkt_cap", "流通市值": "circ_mkt_cap", "总股本": "total_shares", "流通股本": "circ_total_shares"}, inplace=True)
             else:
                 # 如果接口无数据，则填充为空值
-                df["total_shares"] = None
                 df["mkt_cap"] = None
+                df["circ_mkt_cap"] = None
+                df["total_shares"] = None
+                df["circ_total_shares"] = None
 
             # 4. 处理 DataFrame 数据，构造 StockHist 对象列表
             new_records = []
@@ -225,18 +213,20 @@ class StockHistSynchronizer:
                 record = StockHistUnadj(
                     date=row["日期"].date(),
                     stock_code=row["股票代码"],
-                    open=row["开盘"],
-                    close=row["收盘"],
-                    high=row["最高"],
-                    low=row["最低"],
-                    volume=row["成交量"] * 100,
-                    turnover=row["成交额"],
-                    amplitude=row["振幅"],
-                    change_percent=row["涨跌幅"],
-                    change=row["涨跌额"],
-                    turnover_rate=row["换手率"],
-                    total_shares = row.get("total_shares"),
-                    mkt_cap = row.get("mkt_cap")
+                    open=safe_value(row["开盘"]),
+                    close=safe_value(row["收盘"]),
+                    high=safe_value(row["最高"]),
+                    low=safe_value(row["最低"]),
+                    volume=safe_value(row["成交量"]) * 100,
+                    turnover=safe_value(row["成交额"]),
+                    amplitude=safe_value(row["振幅"]),
+                    change_percent=safe_value(row["涨跌幅"]),
+                    change=safe_value(row["涨跌额"]),
+                    turnover_rate=safe_value(row["换手率"]),
+                    mkt_cap = safe_value(row.get("mkt_cap")),
+                    circ_mkt_cap = safe_value(row.get("circ_mkt_cap")),
+                    total_shares = safe_value(row.get("total_shares")),
+                    circ_total_shares = safe_value(row.get("circ_total_shares"))
                 )
                 new_records.append(record)
 
@@ -251,8 +241,10 @@ class StockHistSynchronizer:
                     raise e
             else:
                 logger.info("No new records to insert for stock %s.", stock_code)
+        if progress_callback:
+            progress_callback(len(stock_list), len(stock_list))
 
-    def sync_adj(self):
+    def sync_adj(self, progress_callback=None):
         """
         同步前复权历史行情数据。
         
@@ -275,7 +267,9 @@ class StockHistSynchronizer:
         stock_list = self.stock_info_dao.load_stock_info()
         logger.info("Processing forward-adjusted data for %d stocks.", len(stock_list))
         
-        for stock in stock_list:
+        for idx, stock in enumerate(stock_list, start=1):
+            if progress_callback:
+                progress_callback(idx, len(stock_list))
             stock_code = stock.stock_code
             logger.info("Processing stock %s", stock_code)
             # 检查未来任务是否存在 UPDATE_ADJ 任务，状态为 INIT
@@ -368,11 +362,16 @@ class StockHistSynchronizer:
                         # 查找累计复权因子
                         cumulative_factor = get_cum_factor_for_trade(trade_date)
                         # 计算前复权价格
-                        adj_open = row["open"] * cumulative_factor if row["open"] is not None else None
-                        adj_close = row["close"] * cumulative_factor if row["close"] is not None else None
-                        adj_high = row["high"] * cumulative_factor if row["high"] is not None else None
-                        adj_low = row["low"] * cumulative_factor if row["low"] is not None else None
-                        adj_volume = row["volume"] / cumulative_factor if row["volume"] is not None else None
+                        row_open = safe_value(row["open"])
+                        row_close = safe_value(row["close"])
+                        row_high = safe_value(row["high"])
+                        row_low = safe_value(row["low"])
+                        row_volume = safe_value(row["volume"])
+                        adj_open = row_open * cumulative_factor if row_open is not None else None
+                        adj_close = row_close * cumulative_factor if row_close is not None else None
+                        adj_high = row_high * cumulative_factor if row_high is not None else None
+                        adj_low = row_low * cumulative_factor if row_low is not None else None
+                        adj_volume = row_volume / cumulative_factor if row_volume is not None else None
                         # 重新计算涨跌指标：若存在前一交易日的前复权收盘价，则计算差值和百分比变化
                         if previous_adj_close is None:
                             adj_change = None
@@ -403,9 +402,11 @@ class StockHistSynchronizer:
                             amplitude = adj_amplitude,
                             change_percent = adj_change_percent,
                             change = adj_change,
-                            turnover_rate = row.get("turnover_rate"),
-                            total_shares = row.get("total_shares"),
-                            mkt_cap = row.get("mkt_cap")
+                            turnover_rate = safe_value(row.get("turnover_rate")),
+                            mkt_cap = safe_value(row.get("mkt_cap")),
+                            circ_mkt_cap = safe_value(row.get("circ_mkt_cap")),
+                            total_shares = safe_value(row.get("total_shares")),
+                            circ_total_shares = safe_value(row.get("circ_total_shares"))
                         )
                         adj_records.append(record)
                     # 批量插入前复权数据
@@ -433,22 +434,26 @@ class StockHistSynchronizer:
                             record = StockHistAdj(
                                 stock_code = stock_code,
                                 date = row["date"],
-                                open = row["open"],
-                                close = row["close"],
-                                high = row["high"],
-                                low = row["low"],
-                                volume = row["volume"],
-                                amplitude = row["amplitude"],
-                                change_percent = row["change_percent"],
-                                change = row["change"],
-                                turnover_rate = row["turnover_rate"],
-                                total_shares = row.get("total_shares"),
-                                mkt_cap = row.get("mkt_cap")
+                                open = safe_value(row["open"]),
+                                close = safe_value(row["close"]),
+                                high = safe_value(row["high"]),
+                                low = safe_value(row["low"]),
+                                volume = safe_value(row["volume"]),
+                                amplitude = safe_value(row["amplitude"]),
+                                change_percent = safe_value(row["change_percent"]),
+                                change = safe_value(row["change"]),
+                                turnover_rate = safe_value(row["turnover_rate"]),
+                                mkt_cap = safe_value(row.get("mkt_cap")),
+                                circ_mkt_cap = safe_value(row.get("circ_mkt_cap")),
+                                total_shares = safe_value(row.get("total_shares")),
+                                circ_total_shares = safe_value(row.get("circ_total_shares"))
                             )
                             new_adj_records.append(record)
                         self.stock_hist_adj_dao.batch_insert(new_adj_records)
                         logger.info("Copied %d new non-adjusted records for stock %s to adjusted table.", len(new_adj_records), stock_code)
                     break
+        if progress_callback:
+            progress_callback(len(stock_list), len(stock_list))
 
 
 class CompanyActionSynchronizer:
@@ -470,12 +475,14 @@ class CompanyActionSynchronizer:
         self.update_flag_dao = UpdateFlagDao._instance
         self.future_task_dao = FutureTaskDao._instance
 
-    def sync(self):
+    def sync(self, progress_callback=None):
         logger.info("Starting company action synchronization.")
         # 1. 获取当前股票列表
         stock_list: List[StockInfo] = self.stock_info_dao.load_stock_info()
         logger.info("Found %d stocks to process.", len(stock_list))
-        for stock in stock_list:
+        for idx, stock in enumerate(stock_list, start=1):
+            if progress_callback:
+                progress_callback(idx, len(stock_list))
             stock_code = stock.stock_code
             update_flags = self.update_flag_dao.select_one_by_code(stock_code)
 
@@ -561,7 +568,7 @@ class CompanyActionSynchronizer:
 
                     record = CompanyAction(
                         stock_code = stock_code,
-                        ex_dividend_date = row["ex_date"],
+                        ex_dividend_date = safe_value(row["ex_date"]),
                         bonus_ratio = bonus_ratio,
                         conversion_ratio = conversion_ratio,
                         dividend_per_share = dividend_per_share,
@@ -589,6 +596,8 @@ class CompanyActionSynchronizer:
             else:
                 logger.info("No new company action records for %s.", stock_code)
             self.update_flag_dao.update_action_flag(stock_code, "0")
+        if progress_callback:
+            progress_callback(len(stock_list), len(stock_list))
 
 class FundamentalDataSynchronizer:
     def __init__(self):
@@ -596,13 +605,15 @@ class FundamentalDataSynchronizer:
         self.fundamental_dao = FundamentalDataDao._instance
         self.update_flag_dao = UpdateFlagDao._instance
 
-    def sync(self):
+    def sync(self, progress_callback):
         logger.info("Starting fundamental data synchronization.")
         # 1. 获取股票列表
         stock_list = self.stock_info_dao.load_stock_info()
         logger.info("Found %d stocks to process.", len(stock_list))
         
-        for stock in stock_list:
+        for idx, stock in enumerate(stock_list, start=1):
+            if progress_callback:
+                progress_callback(idx, len(stock_list))
             stock_code = stock.stock_code
             logger.info("Processing fundamental data for stock %s", stock_code)
 
@@ -694,6 +705,8 @@ class FundamentalDataSynchronizer:
                     logger.error("Error inserting fundamental records for stock %s: %s", stock_code, e)
             else:
                 logger.info("No new fundamental records to insert for stock %s.", stock_code)
+        if progress_callback:
+            progress_callback(len(stock_list), len(stock_list))
 
 
 class SuspendDataSynchronizer:
@@ -738,14 +751,14 @@ class SuspendDataSynchronizer:
         records = []
         for _, row in df.iterrows():
             stock_code = row.get("代码")
-            suspend_date = row.get("停牌时间")
+            suspend_date = safe_value(row.get("停牌时间"))
             # 忽略停牌时间为空的记录
             if suspend_date is None:
                 continue
-            resume_date = row.get("停牌截止时间")
-            suspend_period = row.get("停牌期限")
-            suspend_reason = row.get("停牌原因")
-            market = row.get("所属市场")
+            resume_date = safe_value(row.get("停牌截止时间"))
+            suspend_period = safe_value(row.get("停牌期限"))
+            suspend_reason = safe_value(row.get("停牌原因"))
+            market = safe_value(row.get("所属市场"))
             record = SuspendData(
                 stock_code = stock_code,
                 suspend_date = suspend_date,
@@ -785,13 +798,13 @@ class SuspendDataSynchronizer:
         records = []
         for _, row in df.iterrows():
             stock_code = row.get("代码")
-            suspend_date = row.get("停牌时间")
+            suspend_date = safe_value(row.get("停牌时间"))
             if suspend_date is None:
                 continue
-            resume_date = row.get("停牌截止时间")
-            suspend_period = row.get("停牌期限")
-            suspend_reason = row.get("停牌原因")
-            market = row.get("所属市场")
+            resume_date = safe_value(row.get("停牌截止时间"))
+            suspend_period = safe_value(row.get("停牌期限"))
+            suspend_reason = safe_value(row.get("停牌原因"))
+            market = safe_value(row.get("所属市场"))
             record = SuspendData(
                 stock_code = stock_code,
                 suspend_date = suspend_date,
@@ -830,3 +843,9 @@ def parse_amount(s: Union[str, float, None]) -> Union[float, None]:
     except Exception as e:
         logger.error("parse_amount error for value %s: %s", s, e)
         return None
+    
+stock_info_synchronizer = StockInfoSynchronizer()
+stock_hist_synchronizer = StockHistSynchronizer()
+company_action_synchronizer = CompanyActionSynchronizer()
+fundamental_data_synchronizer = FundamentalDataSynchronizer()
+suspend_data_synchronizer = SuspendDataSynchronizer()

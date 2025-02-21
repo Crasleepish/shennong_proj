@@ -2,6 +2,8 @@ from flask import Flask
 from .config import Config
 from .database import init_engine, init_db
 from .routes.routes import bp as users_bp
+from .routes.fin_data_routes import fin_data_bp
+from .routes.task_routes import task_bp
 import logging
 import logging.config
 
@@ -22,5 +24,7 @@ def create_app(config_class=Config):
     
     # Register blueprints for modular route definitions
     app.register_blueprint(users_bp)
+    app.register_blueprint(fin_data_bp)
+    app.register_blueprint(task_bp)
     
     return app

@@ -56,15 +56,33 @@ class UpdateFlagDao:
         if not hasattr(self, '_initialized'):
             self._initialized = True
 
-    def insert_one(self, obj: UpdateFlag):
+    def upsert_one(self, obj: UpdateFlag) -> UpdateFlag:
+        """
+        根据主键 stock_code 判断记录是否存在，
+        如果存在则更新（更新 action_update_flag 与 fundamental_update_flag 字段），
+        如果不存在则插入记录。
+        """
         try:
             with get_db() as db:
-                db.add(obj)
-                db.commit()
-                return obj
+                existing = db.query(UpdateFlag).filter(UpdateFlag.stock_code == obj.stock_code).first()
+                if existing:
+                    # 更新已有记录的字段
+                    existing.action_update_flag = obj.action_update_flag
+                    existing.fundamental_update_flag = obj.fundamental_update_flag
+                    db.commit()
+                    db.refresh(existing)
+                    logger.info("Updated update flag for stock %s", obj.stock_code)
+                    return existing
+                else:
+                    db.add(obj)
+                    db.commit()
+                    db.refresh(obj)
+                    logger.info("Inserted new update flag for stock %s", obj.stock_code)
+                    return obj
         except Exception as e:
-            logger.error("Error during insert: %s", e)
-            db.rollback()
+            logger.error("Error during upsert: %s", e)
+            # 若在 with 块中发生异常，get_db() 应该自动回滚，但可以手动调用 rollback() 如下：
+            db.rollback()  
             raise e
         
     def select_one_by_code(self, stock_code: str):

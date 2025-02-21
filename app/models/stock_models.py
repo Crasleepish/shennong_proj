@@ -29,8 +29,10 @@ class StockHistUnadj(Base):
     change_percent = Column("change_percent", Float)      # 单位：%
     change = Column("change", Float)             # 单位：元
     turnover_rate = Column("turnover_rate", Float)      # 单位：%
-    total_shares = Column("total_shares", BigInteger)  # 单位：原数据成交量单位为“万股”, 入库单位为“股”
     mkt_cap = Column("mkt_cap", BigInteger)  # 单位：元
+    circ_mkt_cap = Column("circ_mkt_cap", BigInteger)   # 单位：元
+    total_shares = Column("total_shares", BigInteger)  # 单位：股
+    circ_total_shares = Column("circ_total_shares", BigInteger) # 单位：股
     
     def __repr__(self):
         return f"<StockHistUnadj(stock_code='{self.stock_code}', date='{self.date}')>"
@@ -91,8 +93,10 @@ class StockHistAdj(Base):
     change_percent = Column("change_percent", Float)      # 单位：%
     change = Column("change", Float)             # 单位：元
     turnover_rate = Column("turnover_rate", Float)      # 单位：%
-    total_shares = Column("total_shares", BigInteger)  # 单位：原数据成交量单位为“万股”, 入库单位为“股”
     mkt_cap = Column("mkt_cap", BigInteger)  # 单位：元
+    circ_mkt_cap = Column("circ_mkt_cap", BigInteger)   # 单位：元
+    total_shares = Column("total_shares", BigInteger)  # 单位：股
+    circ_total_shares = Column("circ_total_shares", BigInteger) # 单位：股
     
     def __repr__(self):
         return f"<StockHistAdj(stock_code='{self.stock_code}', date='{self.date}')>"
