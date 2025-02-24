@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Float, Date, BigInteger, Index, Integer
+from sqlalchemy import Column, String, Float, Date, BigInteger, Index, Integer, Numeric, Sequence
 from app.database import Base
 
 
@@ -24,15 +24,13 @@ class StockHistUnadj(Base):
     high = Column("high", Float)
     low = Column("low", Float)
     volume = Column("volume", BigInteger)      # 注意：原数据成交量单位为“手”，入库单位为“股”
-    turnover = Column("amount", Float)          # 单位：元
+    amount = Column("amount", Float)          # 单位：元
     amplitude = Column("amplitude", Float)           # 单位：%
     change_percent = Column("change_percent", Float)      # 单位：%
     change = Column("change", Float)             # 单位：元
     turnover_rate = Column("turnover_rate", Float)      # 单位：%
     mkt_cap = Column("mkt_cap", BigInteger)  # 单位：元
-    circ_mkt_cap = Column("circ_mkt_cap", BigInteger)   # 单位：元
     total_shares = Column("total_shares", BigInteger)  # 单位：股
-    circ_total_shares = Column("circ_total_shares", BigInteger) # 单位：股
     
     def __repr__(self):
         return f"<StockHistUnadj(stock_code='{self.stock_code}', date='{self.date}')>"
@@ -88,15 +86,13 @@ class StockHistAdj(Base):
     high = Column("high", Float)
     low = Column("low", Float)
     volume = Column("volume", BigInteger)      # 注意：原数据成交量单位为“手”，入库单位为“股”
-    turnover = Column("amount", Float)          # 单位：元
+    amount = Column("amount", Float)          # 单位：元
     amplitude = Column("amplitude", Float)           # 单位：%
     change_percent = Column("change_percent", Float)      # 单位：%
     change = Column("change", Float)             # 单位：元
     turnover_rate = Column("turnover_rate", Float)      # 单位：%
     mkt_cap = Column("mkt_cap", BigInteger)  # 单位：元
-    circ_mkt_cap = Column("circ_mkt_cap", BigInteger)   # 单位：元
     total_shares = Column("total_shares", BigInteger)  # 单位：股
-    circ_total_shares = Column("circ_total_shares", BigInteger) # 单位：股
     
     def __repr__(self):
         return f"<StockHistAdj(stock_code='{self.stock_code}', date='{self.date}')>"
@@ -127,7 +123,7 @@ class SuspendData(Base):
     __tablename__ = "suspend_data"
     
     # 主键：序号
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
     #停复牌数据
     stock_code = Column(String(10), nullable=False)         # 股票代码
     suspend_date = Column(Date, nullable=False)             # 停牌时间
@@ -142,3 +138,58 @@ class SuspendData(Base):
 
     def __repr__(self):
         return f"<SuspendData(id='{self.id}'>"
+
+class StockShareChangeCNInfo(Base):
+    __tablename__ = 'stock_share_change_cn_info'
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+
+    SECCODE = Column(String, comment='证券代码')
+    SECNAME = Column(String, comment='证券简称')
+    ORGNAME = Column(String, comment='机构名称')
+    DECLAREDATE = Column(Date, comment='公告日期')
+    VARYDATE = Column(Date, comment='变动日期')
+    F001V = Column(String, comment='变动原因编码')
+    F002V = Column(String, comment='变动原因')
+    F003N = Column(Numeric(12, 4), comment='总股本 (单位：万股)')
+    F004N = Column(Numeric(12, 4), comment='未流通股份 (单位：万股)')
+    F005N = Column(Numeric(12, 4), comment='发起人股份 (单位：万股)')
+    F006N = Column(Numeric(12, 4), comment='国家持股 (单位：万股)')
+    F007N = Column(Numeric(12, 4), comment='国有法人持股 (单位：万股)')
+    F008N = Column(Numeric(12, 4), comment='境内法人持股 (单位：万股)')
+    F009N = Column(Numeric(12, 4), comment='境外法人持股 (单位：万股)')
+    F010N = Column(Numeric(12, 4), comment='自然人持股 (单位：万股)')
+    F011N = Column(Numeric(12, 4), comment='募集法人股 (单位：万股)')
+    F012N = Column(Numeric(12, 4), comment='内部职工股 (单位：万股)')
+    F013N = Column(Numeric(12, 4), comment='转配股 (单位：万股)')
+    F014N = Column(Numeric(12, 4), comment='其他流通受限股份 (单位：万股)')
+    F015N = Column(Numeric(12, 4), comment='优先股 (单位：万股)')
+    F016N = Column(Numeric(12, 4), comment='其他未流通股 (单位：万股)')
+    
+    F021N = Column(Numeric(12, 4), comment='已流通股份 (单位：万股)')
+    F022N = Column(Numeric(12, 4), comment='人民币普通股 (单位：万股)')
+    F023N = Column(Numeric(12, 4), comment='境内上市外资股（B股） (单位：万股)')
+    F024N = Column(Numeric(12, 4), comment='境外上市外资股（H股） (单位：万股)')
+    F025N = Column(Numeric(12, 4), comment='高管股 (单位：万股)')
+    F026N = Column(Numeric(12, 4), comment='其他流通股 (单位：万股)')
+    F028N = Column(Numeric(12, 4), comment='流通受限股份 (单位：万股)')
+    
+    F017N = Column(Numeric(12, 4), comment='配售法人股 (单位：万股)')
+    F018N = Column(Numeric(12, 4), comment='战略投资者持股 (单位：万股)')
+    F019N = Column(Numeric(12, 4), comment='证券投资基金持股 (单位：万股)')
+    F020N = Column(Numeric(12, 4), comment='一般法人持股 (单位：万股)')
+    F029N = Column(Numeric(12, 4), comment='国家持股（受限） (单位：万股)')
+    F030N = Column(Numeric(12, 4), comment='国有法人持股（受限） (单位：万股)')
+    F031N = Column(Numeric(12, 4), comment='其他内资持股（受限） (单位：万股)')
+    F032N = Column(Numeric(12, 4), comment='其中：境内法人持股 (单位：万股)')
+    F033N = Column(Numeric(12, 4), comment='其中：境内自然人持股 (单位：万股)')
+    F034N = Column(Numeric(12, 4), comment='外资持股（受限） (单位：万股)')
+    F035N = Column(Numeric(12, 4), comment='其中：境外法人持股 (单位：万股)')
+    F036N = Column(Numeric(12, 4), comment='其中：境外自然人持股 (单位：万股)')
+    
+    F037N = Column(Numeric(12, 4), comment='其中：限售高管股 (单位：万股)')
+    F038N = Column(Numeric(12, 4), comment='其中：限售B股 (单位：万股)')
+    F040N = Column(Numeric(12, 4), comment='其中：限售H股 (单位：万股)')
+    F027C = Column(String(1), comment='最新记录标识 (0-否，1-是)')
+    F049N = Column(Numeric(12, 4), comment='其他 (单位：万股，仅适用于北交所上市公司)')
+    F050N = Column(Numeric(12, 4), comment='控股股东、实际控制人 (单位：万股，仅适用于北交所上市公司)')
+    

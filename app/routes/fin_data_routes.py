@@ -3,7 +3,8 @@ from flask import Blueprint, request, jsonify
 import logging
 
 # 导入各同步器（注意根据实际项目的模块路径调整）
-from app.data.fetcher import stock_info_synchronizer, stock_hist_synchronizer, company_action_synchronizer, fundamental_data_synchronizer, suspend_data_synchronizer
+from app.data.fetcher import stock_info_synchronizer, stock_hist_synchronizer, stock_adj_hist_synchronizer, company_action_synchronizer, fundamental_data_synchronizer, suspend_data_synchronizer
+from app.data.cninfo_fetcher import cninfo_stock_share_change_fetcher
 from app.dao.task_record_dao import task_record_dao
 from app.utils.async_task import launch_background_task
 from app.models.task_record import TaskRecord
@@ -94,7 +95,7 @@ def sync_stock_hist():
         logger.exception("Error creating stock hist sync task.")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-@fin_data_bp.route("/stock_hist/sync_adj", methods=["POST"])
+@fin_data_bp.route("/stock_adj_hist/sync", methods=["POST"])
 def sync_stock_hist_adj():
     """
     同步股票前复权历史行情数据
@@ -116,7 +117,7 @@ def sync_stock_hist_adj():
         progress_cb = make_progress_callback(task_id)
 
         def task_func():
-            stock_hist_synchronizer.sync_adj(progress_callback=progress_cb)
+            stock_adj_hist_synchronizer.sync(progress_callback=progress_cb)
 
         # 启动后台任务
         launch_background_task(task_id, task_func)
@@ -348,7 +349,7 @@ def sync_all_hist():
         progress_cb = make_progress_callback(task_id)
 
         # 调用同步器，并传入进度回调
-        stock_hist_synchronizer.sync_adj(progress_callback=progress_cb)
+        stock_adj_hist_synchronizer.sync(progress_callback=progress_cb)
 
         # 同步完成后，将任务状态更新为 DONE
         task_dao.update_status(task_id, "DONE", "Task completed.")
@@ -357,4 +358,34 @@ def sync_all_hist():
         return jsonify({"status": "success", "task_id": task_id, "message": "Stock historical all data sync completed."}), 200
     except Exception as e:
         logger.exception("Error executing stock hist sync task.")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    
+
+@fin_data_bp.route("/cninfo/share_change/sync", methods=["POST"])
+def sync_cninfo_share_change():
+    try:
+        new_task = TaskRecord(
+            task_type="CNINFO_SHARE_CHANGE_SYNC",
+            task_status="RUNNING",
+            progress_current=0,
+            progress_total=0,
+            message="Task started."
+        )
+        new_task = task_dao.insert(new_task)
+        task_id = new_task.id
+        logger.info("Created task id %d for stock info data sync.", task_id)
+
+        # 定义进度回调函数
+        progress_cb = make_progress_callback(task_id)
+
+        # 定义后台任务函数
+        def task_func():
+            cninfo_stock_share_change_fetcher.fetch_cninfo_data(progress_callback=progress_cb)
+
+        # 启动后台任务
+        launch_background_task(task_id, task_func)
+
+        return jsonify({"status": "success", "task_id": task_id, "message": "Task started"}), 200
+    except Exception as e:
+        logger.exception("Error cninfo share change data sync task.")
         return jsonify({"status": "error", "message": str(e)}), 500

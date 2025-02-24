@@ -1,7 +1,7 @@
 from typing import List, Union
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, tuple_
-from app.models.stock_models import StockInfo, StockHistUnadj, UpdateFlag, FutureTask, CompanyAction, StockHistAdj, FundamentalData, SuspendData
+from app.models.stock_models import StockInfo, StockHistUnadj, UpdateFlag, FutureTask, CompanyAction, StockHistAdj, FundamentalData, SuspendData, StockShareChangeCNInfo
 from app.database import get_db
 from app.utils.data_utils import process_in_batches
 import logging
@@ -149,19 +149,27 @@ class FutureTaskDao:
                 return result
         except Exception as e:
             logger.error("Error querying update flag for %s: %s", stock_code, e)
-            return None
+            return pd.DataFrame()
         
-    def select_by_code_date_type(self, stock_code, date, task_type) -> List[FutureTask]:
+    def select_by_code_date_type(self, stock_code, date, task_type, task_status) -> List[FutureTask]:
         """
         根据股票代码、日期和任务类型查询FutureTask对象
         """
         try:
             with get_db() as db:
-                result = db.query(FutureTask).filter(
-                    FutureTask.stock_code == stock_code, 
-                    FutureTask.task_date <= date,
-                    FutureTask.task_type == task_type
-                ).all()
+                if task_status is not None:
+                    result = db.query(FutureTask).filter(
+                        FutureTask.stock_code == stock_code, 
+                        FutureTask.task_date <= date,
+                        FutureTask.task_type == task_type, 
+                        FutureTask.task_status == task_status
+                    ).all()
+                else:
+                    result = db.query(FutureTask).filter(
+                        FutureTask.stock_code == stock_code, 
+                        FutureTask.task_date <= date,
+                        FutureTask.task_type == task_type
+                    ).all()
                 return result
         except Exception as e:
             logger.error("Error querying update flag for %s: %s", stock_code, e)
@@ -191,6 +199,16 @@ class FutureTaskDao:
             logger.error("Error updating task status for task %s:%s", task_id, e)
             db.rollback()
             raise e
+        
+    def delete_all(self):
+        try:
+            with get_db() as db:
+                db.query(FutureTask).delete()
+                db.commit()
+        except Exception as e:
+            logger.error("Error deleting all tasks: %s", e)
+            db.rollback()
+            raise e
 
 
 class StockHistUnadjDao:
@@ -212,6 +230,7 @@ class StockHistUnadjDao:
         """
         try:
             with get_db() as db:
+                logger.info(f"Using database bind: {db.bind}")
                 result = db.query(StockHistUnadj.date).filter(StockHistUnadj.stock_code == stock_code).order_by(StockHistUnadj.date.desc()).first()
                 if result:
                     return result[0]
@@ -228,6 +247,7 @@ class StockHistUnadjDao:
         
         try:
             with get_db() as db:
+                logger.info(f"Using database bind: {db.bind}")
                 def insert_one_batch(batch: List[StockHistUnadj]):
                     db.add_all(batch)
                     db.commit()
@@ -246,12 +266,15 @@ class StockHistUnadjDao:
         :param stock_code: 股票代码，例如 "600012"
         :return: 包含查询结果的 DataFrame，如果没有数据则返回空 DataFrame。
         """
-        with get_db() as db:
-            # 构造查询条件
-            query = db.query(StockHistUnadj).filter(StockHistUnadj.stock_code == stock_code)
-            # 使用 pd.read_sql 将 SQLAlchemy 查询转换为 DataFrame
-            df = pd.read_sql(query.statement, db.bind)
-        return df
+        try:
+            with get_db() as db:
+                # 构造查询条件
+                query = db.query(StockHistUnadj).filter(StockHistUnadj.stock_code == stock_code)
+                # 使用 pd.read_sql 将 SQLAlchemy 查询转换为 DataFrame
+                df = pd.read_sql(query.statement, db.bind)
+            return df
+        except Exception as e:
+            return pd.DataFrame()
     
     def select_after_date_as_dataframe(self, stock_code: str, date: Union[str, datetime.date]):
         """
@@ -259,15 +282,29 @@ class StockHistUnadjDao:
         :param stock_code: 股票代码
         :return: 包含查询结果的 DataFrame，如果没有数据则返回空 DataFrame。
         """
-        with get_db() as db:
-            # 构造查询条件，查找 stock_code 相等且 date 大于指定日期的记录
-            query = db.query(StockHistUnadj).filter(
-                StockHistUnadj.stock_code == stock_code,
-                StockHistUnadj.date >= date
-            )
-            # 使用 pd.read_sql 将查询结果转换为 DataFrame，
-            df = pd.read_sql(query.statement, db.bind)
-        return df
+        try:
+            with get_db() as db:
+                # 构造查询条件，查找 stock_code 相等且 date 大于指定日期的记录
+                query = db.query(StockHistUnadj).filter(
+                    StockHistUnadj.stock_code == stock_code,
+                    StockHistUnadj.date >= date
+                )
+                # 使用 pd.read_sql 将查询结果转换为 DataFrame，
+                df = pd.read_sql(query.statement, db.bind)
+            return df
+        except Exception as e:
+            logger.error("Error querying after date for %s: %s", stock_code, e)
+            return pd.DataFrame()
+    
+    def delete_all(self):
+        try:
+            with get_db() as db:
+                db.query(StockHistUnadj).delete()
+                db.commit()
+        except Exception as e:
+            logger.error("Error deleting allrecords", e)
+            db.rollback()
+            raise e
 
 
 class CompanyActionDao:
@@ -313,6 +350,47 @@ class CompanyActionDao:
             db.rollback()
             raise e
         
+    def batch_insert_if_not_exists(self, records: List[CompanyAction]):
+        """
+        批量插入公司行动数据记录到数据库，如果记录已存在则跳过。
+        每个批次提交一次。
+        """
+        try:
+            with get_db() as db:
+                inserted_all = []  # 用于保存所有批次中实际插入的记录
+
+                def insert_one_batch(batch: List[CompanyAction]):
+                    # 查询现有记录，检查是否存在相同 stock_code 和 ex_dividend_date
+                    existing_records = db.query(CompanyAction).filter(
+                        CompanyAction.stock_code.in_([record.stock_code for record in batch]),
+                        CompanyAction.ex_dividend_date.in_([record.ex_dividend_date for record in batch])
+                    ).all()
+                    
+                    # 从返回的查询结果中提取已存在的记录的组合（stock_code, ex_dividend_date）
+                    existing_keys = set((record.stock_code, record.ex_dividend_date) for record in existing_records)
+                    
+                    # 仅保留不存在的记录
+                    records_to_insert = [
+                        record for record in batch
+                        if (record.stock_code, record.ex_dividend_date) not in existing_keys
+                    ]
+                    
+                    if records_to_insert:
+                        db.add_all(records_to_insert)
+                        db.commit()
+                    
+                    return records_to_insert
+                
+                # 处理批次插入
+                batch_results  = process_in_batches(records, insert_one_batch)
+                for sublist in batch_results:
+                    inserted_all.extend(sublist)
+                return inserted_all
+        except Exception as e:
+            logger.error("Error during batch insert if not exists: %s", e)
+            db.rollback()
+            raise e
+        
     def select_all_as_dataframe(self, stock_code: str):
         """
         查询指定股票的所有公司行动数据，并返回为 Pandas DataFrame。
@@ -326,6 +404,16 @@ class CompanyActionDao:
             # 使用 pd.read_sql 将 SQLAlchemy 查询转换为 DataFrame
             df = pd.read_sql(query.statement, db.bind)
         return df
+    
+    def delete_all(self):
+        try:
+            with get_db() as db:
+                db.query(CompanyAction).delete()
+                db.commit()
+        except Exception as e:
+            logger.error("Error deleting all records", e)
+            db.rollback()
+            raise e
         
 
 class StockHistAdjDao:
@@ -392,6 +480,16 @@ class StockHistAdjDao:
         try:
             with get_db() as db:
                 db.query(StockHistAdj).filter(StockHistAdj.stock_code == stock_code).delete()
+                db.commit()
+        except Exception as e:
+            logger.error("Error during delete: %s", e)
+            db.rollback()
+            raise e
+        
+    def delete_all(self):
+        try:
+            with get_db() as db:
+                db.query(StockHistAdj).delete()
                 db.commit()
         except Exception as e:
             logger.error("Error during delete: %s", e)
@@ -575,6 +673,57 @@ class SuspendDataDao:
             df = pd.read_sql(query.statement, db.bind)
             return df
 
+class StockShareChangeCNInfoDao:
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        # 始终返回已经创建好的 _instance
+        return cls._instance
+
+    def __init__(self):
+        # __init__ 可能会被多次调用，因此通过 _initialized 标识确保只初始化一次
+        if not hasattr(self, '_initialized'):
+            self._initialized = True
+
+    def insert(self, record: StockShareChangeCNInfo):
+        try:
+            with get_db() as db:
+                db.add(record)
+                db.commit()
+            return record
+        except Exception as e:
+            logger.error("Error insert suspend data: %s", e)
+            db.rollback()
+            raise e
+        
+    def delete_all(self):
+        try:
+            with get_db() as db:
+                db.query(StockShareChangeCNInfo).delete()
+                db.commit()
+        except Exception as e:
+            logger.error("Error delete all stock share change records: %s", e)
+            db.rollback()
+            raise e
+        
+    def select_all_as_dataframe(self):
+        try:
+            with get_db() as db:
+                query = db.query(StockShareChangeCNInfo)
+                df = pd.read_sql(query.statement, db.bind)
+                return df
+        except Exception as e:
+            return pd.DataFrame()
+    
+    def select_dataframe_by_stock_code(self, stock_code: str):
+        try:
+            with get_db() as db:
+                query = db.query(StockShareChangeCNInfo).filter(StockShareChangeCNInfo.SECCODE == stock_code)
+                df = pd.read_sql(query.statement, db.bind)
+                return df
+        except Exception as e:
+            return pd.DataFrame()
+
 
 StockInfoDao._instance = object.__new__(StockInfoDao)
 StockInfoDao._instance.__init__()
@@ -592,3 +741,5 @@ FundamentalDataDao._instance = object.__new__(FundamentalDataDao)
 FundamentalDataDao._instance.__init__()
 SuspendDataDao._instance = object.__new__(SuspendDataDao)
 SuspendDataDao._instance.__init__()
+StockShareChangeCNInfoDao._instance = object.__new__(StockShareChangeCNInfoDao)
+StockShareChangeCNInfoDao._instance.__init__()

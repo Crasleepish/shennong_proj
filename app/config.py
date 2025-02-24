@@ -53,7 +53,9 @@ class Config:
 class TestConfig(Config):
     TESTING = True
     # Use an in-memory SQLite database for tests.
-    SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
+    SQLALCHEMY_DATABASE_URI = os.environ.get(
+        'DATABASE_URI',
+    )
     SQLALCHEMY_ECHO = True
     LOGGING_CONFIG = {
         'version': 1,

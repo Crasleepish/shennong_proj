@@ -5,12 +5,14 @@ from app.database import Base, engine
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from app.data.fetcher import StockInfoSynchronizer, StockHistSynchronizer, CompanyActionSynchronizer, FundamentalDataSynchronizer, SuspendDataSynchronizer
+from app.data.fetcher import stock_adj_hist_synchronizer
+from app.data.cninfo_fetcher import cninfo_stock_share_change_fetcher
 from types import SimpleNamespace
 from app.database import get_db
 
 # Use the TestConfig from our config module
 from app.config import TestConfig
-from app.dao.stock_info_dao import StockInfoDao, StockHistUnadjDao, StockHistAdjDao, FundamentalDataDao, SuspendDataDao
+from app.dao.stock_info_dao import StockInfoDao, StockHistUnadjDao, StockHistAdjDao, FundamentalDataDao, SuspendDataDao, StockShareChangeCNInfoDao, CompanyActionDao, FutureTaskDao
 
 # Create the Flask app using TestConfig
 @pytest.fixture
@@ -48,13 +50,16 @@ def init_update_flag_data(app):
     """
     # 获取数据库会话
     with get_db() as db:
-        # 执行插入 SQL
-        sql = """
-        INSERT INTO update_flag (stock_code, action_update_flag, fundamental_update_flag)
-        VALUES ('000004', '0', '1'), ('600655', '0', '1'), ('600519', '0', '1');
-        """
-        db.execute(text(sql))
-        db.commit()
+        try:
+            # 执行插入 SQL
+            sql = """
+            INSERT INTO update_flag (stock_code, action_update_flag, fundamental_update_flag)
+            VALUES ('000004', '0', '1'), ('600655', '0', '1'), ('600519', '0', '1');
+            """
+            db.execute(text(sql))
+            db.commit()
+        except Exception as e:
+            print(f"Error executing SQL: {e}")
 
 
 def test_StockHistSynchronizer(app, monkeypatch, dummy_stock_list):
@@ -67,6 +72,12 @@ def test_StockHistSynchronizer(app, monkeypatch, dummy_stock_list):
     # 2. 创建同步器实例并调用 sync 方法
     synchronizer = StockHistSynchronizer()
     synchronizer.sync()
+
+    stock_hist_unadj_dao = StockHistUnadjDao._instance
+    df0 = stock_hist_unadj_dao.select_all_as_dataframe("600655")
+    print(df0)
+
+    stock_hist_unadj_dao.delete_all()
 
 def test_CompanyActionSynchronizer(app, init_update_flag_data, monkeypatch, dummy_stock_list):
     def fake_load_stock_info(self):
@@ -84,20 +95,38 @@ def test_AdjSynchronizer(app, init_update_flag_data, monkeypatch, dummy_stock_li
         return dummy_stock_list
     
     monkeypatch.setattr(StockInfoDao, "load_stock_info", fake_load_stock_info)
+    try:
+        stock_hist_synchronizer = StockHistSynchronizer()
+        stock_hist_synchronizer.sync()
+        synchronizer = CompanyActionSynchronizer()
+        synchronizer.sync()
+        stock_adj_hist_synchronizer.sync()
 
-    stock_hist_synchronizer = StockHistSynchronizer()
-    stock_hist_synchronizer.sync()
-    synchronizer = CompanyActionSynchronizer()
-    synchronizer.sync()
-    stock_hist_synchronizer.sync_adj()
+        stock_hist_unadj_dao = StockHistUnadjDao._instance
+        df0 = stock_hist_unadj_dao.select_all_as_dataframe("600655")
+        print(df0)
 
-    stock_hist_unadj_dao = StockHistUnadjDao._instance
-    df0 = stock_hist_unadj_dao.select_all_as_dataframe("600655")
-    print(df0)
+        stock_hist_adj_dao = StockHistAdjDao._instance
+        df = stock_hist_adj_dao.select_all_as_dataframe("600655")
+        print(df)
 
-    stock_hist_adj_dao = StockHistAdjDao._instance
-    df = stock_hist_adj_dao.select_all_as_dataframe("600655")
-    print(df)
+        stock_hist_synchronizer.sync()
+        synchronizer.sync()
+        stock_adj_hist_synchronizer.sync()
+
+        df2 = stock_hist_adj_dao.select_all_as_dataframe("600655")
+        print(df2)
+
+        assert df2.equals(df)
+
+        company_action_dao = CompanyActionDao._instance
+        future_task_dao = FutureTaskDao._instance
+    finally:
+        stock_hist_unadj_dao.delete_all()
+        stock_hist_adj_dao.delete_all()
+        company_action_dao.delete_all()
+        future_task_dao.delete_all()
+
 
 def test_FundamentalDataSynchronizer(app, init_update_flag_data, monkeypatch, dummy_stock_list):
     def fake_load_stock_info(self):
@@ -122,3 +151,16 @@ def test_SuspendDataSynchronizer(app):
     print(df1)
     df2 = suspend_data_dao.get_suspended_stocks_by_date(datetime.date(2024, 10, 22))
     print(df2)
+
+def test_CninfoStockShareChangeFetcher(app, monkeypatch, dummy_stock_list):
+    def fake_load_stock_info(self):
+        return dummy_stock_list
+    
+    monkeypatch.setattr(StockInfoDao, "load_stock_info", fake_load_stock_info)
+
+    cninfo_stock_share_change_fetcher.fetch_cninfo_data()
+    stock_share_change_cninfo_dao = StockShareChangeCNInfoDao._instance
+    df = stock_share_change_cninfo_dao.select_all_as_dataframe()
+    print(df)
+    stock_share_change_cninfo_dao.delete_all()
+    
