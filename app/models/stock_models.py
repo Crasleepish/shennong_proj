@@ -105,15 +105,15 @@ class FundamentalData(Base):
     report_date = Column(Date, primary_key=True)
     
     # 基本面数据字段
-    total_equity = Column(Float, nullable=False)                # 归属于母公司所有者权益合计
-    total_assets = Column(Float, nullable=False)                # 资产合计
-    current_liabilities = Column(Float, nullable=True)          # 流动负债合计
+    total_equity = Column(Float, nullable=True)                # 归属于母公司所有者权益合计
+    total_assets = Column(Float, nullable=True)                # 资产合计
+    current_liabilities = Column(Float, nullable=True)         # 流动负债合计
     noncurrent_liabilities = Column(Float, nullable=True)       # 非流动负债合计
-    net_profit = Column(Float, nullable=False)                  # 归属于母公司所有者的净利润
+    net_profit = Column(Float, nullable=True)                  # 归属于母公司所有者的净利润
     operating_profit = Column(Float, nullable=True)             # 营业利润
-    total_revenue = Column(Float, nullable=False)               # 营业总收入
-    total_cost = Column(Float, nullable=False)                  # 营业总成本
-    net_cash_from_operating = Column(Float, nullable=False)     # 经营活动产生的现金流量净额
+    total_revenue = Column(Float, nullable=True)               # 营业总收入
+    total_cost = Column(Float, nullable=True)                  # 营业总成本
+    net_cash_from_operating = Column(Float, nullable=True)     # 经营活动产生的现金流量净额
     cash_for_fixed_assets = Column(Float, nullable=True)        # 购建固定资产、无形资产和其他长期资产支付的现金
 
     def __repr__(self):

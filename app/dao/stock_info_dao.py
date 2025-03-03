@@ -259,7 +259,18 @@ class StockHistUnadjDao:
             db.rollback()
             raise e
         
-    def select_all_as_dataframe(self, stock_code: str):
+    def select_dataframe_all(self):
+        try:
+            with get_db() as db:
+                # 构造查询条件
+                query = db.query(StockHistUnadj)
+                # 使用 pd.read_sql 将 SQLAlchemy 查询转换为 DataFrame
+                df = pd.read_sql(query.statement, db.bind)
+            return df
+        except Exception as e:
+            return pd.DataFrame()
+        
+    def select_dataframe_by_code(self, stock_code: str):
         """
         查询指定股票的所有前复权历史数据，并返回为 Pandas DataFrame。
         
@@ -391,7 +402,7 @@ class CompanyActionDao:
             db.rollback()
             raise e
         
-    def select_all_as_dataframe(self, stock_code: str):
+    def select_dataframe_by_code(self, stock_code: str):
         """
         查询指定股票的所有公司行动数据，并返回为 Pandas DataFrame。
         
@@ -461,8 +472,22 @@ class StockHistAdjDao:
             logger.error("Error during batch insert: %s", e)
             db.rollback()
             raise e
+        
+    def select_dataframe_all(self):
+        """
+        查询指定股票的所有无复权历史数据，并返回为 Pandas DataFrame。
+        
+        :param stock_code: 股票代码，例如 "600012"
+        :return: 包含查询结果的 DataFrame，如果没有数据则返回空 DataFrame。
+        """
+        with get_db() as db:
+            # 构造查询条件
+            query = db.query(StockHistAdj)
+            # 使用 pd.read_sql 将 SQLAlchemy 查询转换为 DataFrame
+            df = pd.read_sql(query.statement, db.bind)
+        return df
     
-    def select_all_as_dataframe(self, stock_code: str):
+    def select_dataframe_by_code(self, stock_code: str):
         """
         查询指定股票的所有无复权历史数据，并返回为 Pandas DataFrame。
         
@@ -568,13 +593,23 @@ class FundamentalDataDao:
             db.rollback()
             raise e
         
-    def select_all_as_dataframe(self, stock_code: str):
+    def select_dataframe_by_code(self, stock_code: str):
         with get_db() as db:
             # 构造查询条件
             query = db.query(FundamentalData).filter(FundamentalData.stock_code == stock_code)
             # 使用 pd.read_sql 将 SQLAlchemy 查询转换为 DataFrame
             df = pd.read_sql(query.statement, db.bind)
         return df
+    
+    def delete_all(self):
+        try:
+            with get_db() as db:
+                db.query(FundamentalData).delete()
+                db.commit()
+        except Exception as e:
+            logger.error("Error during delete: %s", e)
+            db.rollback()
+            raise e
 
 
 class SuspendDataDao:
@@ -646,7 +681,7 @@ class SuspendDataDao:
                 results.append(inserted)
         return results
     
-    def select_all_as_dataframe(self):
+    def select_dataframe_all(self):
         with get_db() as db:
             # 构造查询条件
             query = db.query(SuspendData)
@@ -706,7 +741,7 @@ class StockShareChangeCNInfoDao:
             db.rollback()
             raise e
         
-    def select_all_as_dataframe(self):
+    def select_dataframe_all(self):
         try:
             with get_db() as db:
                 query = db.query(StockShareChangeCNInfo)

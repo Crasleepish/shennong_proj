@@ -19,7 +19,7 @@ def safe_value(val):
     return None if pd.isna(val) else val
 
 def safe_get(val):
-    return 0.0 if math.isnan(val) else val
+    return 0.0 if val is None or pd.isna(val) else val
 
 class StockInfoSynchronizer:
     """
@@ -133,8 +133,19 @@ class StockHistSynchronizer:
         self.loop = asyncio.get_event_loop()
         self.stock_list_size = 0
         self.completed_num = 0
+        self.is_running = False
         self.lock = asyncio.Lock()
         self.semaphore = asyncio.Semaphore(6)
+
+    def initialize(self):
+        self.stock_list_size = 0
+        self.completed_num = 0
+        self.is_running = True
+
+    def terminate(self):
+        self.stock_list_size = 0
+        self.completed_num = 0
+        self.is_running = False
 
     async def fetch_stock_data(self, stock_code, start_date, current_date):
         """异步获取股票历史行情数据"""
@@ -263,41 +274,45 @@ class StockHistSynchronizer:
                     progress_callback(self.completed_num, self.stock_list_size)
 
     def sync(self, progress_callback=None):
-        logger.info("Starting stock historical data synchronization.")
-        # 1. 获取当前数据库中的股票列表
-        stock_list = self.stock_info_dao.load_stock_info()
-        self.stock_list_size = len(stock_list)
-        logger.info("Found %d stocks to synchronize.", len(stock_list))
+        self.initialize()
+        try:
+            logger.info("Starting stock historical data synchronization.")
+            # 1. 获取当前数据库中的股票列表
+            stock_list = self.stock_info_dao.load_stock_info()
+            self.stock_list_size = len(stock_list)
+            logger.info("Found %d stocks to synchronize.", len(stock_list))
 
-        task = []
-        for idx, stock in enumerate(stock_list, start=1):
-            stock_code = stock.stock_code
-            logger.info("Synchronizing stock %s", stock_code)
-            # 2. 查询该股票在历史行情数据表中的最新日期
-            latest_date = self.stock_hist_unadj_dao.get_latest_date(stock_code)
-            if latest_date is None:
-                # 如果没有数据，则从一个默认的开始日期开始，例如 19901126
-                start_date = "19901126"
-            else:
-                # 否则从最新日期的下一天开始同步
-                next_date = latest_date + datetime.timedelta(days=1)
-                start_date = next_date.strftime("%Y%m%d")
+            batch_size = 20
+            for i in range(0, len(stock_list), batch_size):
+                batch = stock_list[i : i + batch_size]
+                tasks = []
+                for stock in batch:
+                    stock_code = stock.stock_code
+                    logger.info("Synchronizing stock %s", stock_code)
+                    # 2. 查询该股票在历史行情数据表中的最新日期
+                    latest_date = self.stock_hist_unadj_dao.get_latest_date(stock_code)
+                    if latest_date is None:
+                        # 如果没有数据，则从一个默认的开始日期开始，例如 19901126
+                        start_date = "19901126"
+                    else:
+                        # 否则从最新日期的下一天开始同步
+                        next_date = latest_date + datetime.timedelta(days=1)
+                        start_date = next_date.strftime("%Y%m%d")
+                    
+                    # 当前日期，格式化为 YYYYMMDD
+                    current_date = datetime.datetime.now().strftime("%Y%m%d")
+                    
+                    # 如果开始日期大于当前日期，说明数据已更新完毕
+                    if start_date > current_date:
+                        logger.info("Stock %s is up to date. (start_date: %s, current_date: %s)", stock_code, start_date, current_date)
+                        continue
+
+                    tasks.append(self.loop.create_task(self.process_data_unadj(stock_code, start_date, current_date, progress_callback)))
+                    if tasks:
+                        self.loop.run_until_complete(asyncio.gather(*tasks))
+        finally:
+            self.terminate()
             
-            # 当前日期，格式化为 YYYYMMDD
-            current_date = datetime.datetime.now().strftime("%Y%m%d")
-            
-            # 如果开始日期大于当前日期，说明数据已更新完毕
-            if start_date > current_date:
-                logger.info("Stock %s is up to date. (start_date: %s, current_date: %s)", stock_code, start_date, current_date)
-                continue
-
-            task.append(self.loop.create_task(self.process_data_unadj(stock_code, start_date, current_date)))
-
-        self.loop.run_until_complete(asyncio.gather(*task))
-            
-        if progress_callback:
-            progress_callback(len(stock_list), len(stock_list))
-
 
 class StockAdjHistSynchronizer:
     """
@@ -329,8 +344,19 @@ class StockAdjHistSynchronizer:
         self.loop = asyncio.get_event_loop()
         self.stock_list_size = 0
         self.completed_num = 0
+        self.is_running = False
         self.lock = asyncio.Lock()
         self.semaphore = asyncio.Semaphore(6)
+
+    def initialize(self):
+        self.stock_list_size = 0
+        self.completed_num = 0
+        self.is_running = True
+
+    def terminate(self):
+        self.stock_list_size = 0
+        self.completed_num = 0
+        self.is_running = False
 
     async def process_data_adj(self, stock_code: str, progress_callback=None):
         try:
@@ -342,12 +368,12 @@ class StockAdjHistSynchronizer:
                     logger.info("Found UPDATE_ADJ task for %s, updating forward-adjusted history.", stock_code)
                     
                     # 获取所有无复权数据，按日期升序排列
-                    df_unadj = await asyncio.to_thread(self.stock_hist_unadj_dao.select_all_as_dataframe, stock_code)
+                    df_unadj = await asyncio.to_thread(self.stock_hist_unadj_dao.select_dataframe_by_code, stock_code)
                     if df_unadj is None or df_unadj.empty:
                         logger.info("No non-adjusted data for stock %s, skipping.", stock_code)
                         return
                     # 获取所有公司行动记录（已转换为每股数据），按 ex_dividend_date 升序排列
-                    df_action = await asyncio.to_thread(self.company_action_dao.select_all_as_dataframe, stock_code)
+                    df_action = await asyncio.to_thread(self.company_action_dao.select_dataframe_by_code, stock_code)
                     if df_action is None or df_action.empty:
                         logger.info("No company action data for stock %s.", stock_code)
                         await self.fetch_data_from_unadj_data(stock_code)
@@ -530,19 +556,28 @@ class StockAdjHistSynchronizer:
             logger.info("Copied %d new non-adjusted records for stock %s to adjusted table.", len(new_adj_records), stock_code)
 
     def sync(self, progress_callback=None):
-        
-        # 获取股票列表（此处采用 stock_info 表中的股票）
-        stock_list = self.stock_info_dao.load_stock_info()
-        logger.info("Processing forward-adjusted data for %d stocks.", len(stock_list))
-        
-        tasks = []
-        for idx, stock in enumerate(stock_list, start=1):
-            stock_code = stock.stock_code
-            logger.info("Processing stock %s", stock_code)
-            tasks.append(self.loop.create_task(self.process_data_adj(stock_code, progress_callback)))
-        self.loop.run_until_complete(asyncio.gather(*tasks))
-        if progress_callback:
-            progress_callback(len(stock_list), len(stock_list))
+        self.initialize()
+        try:
+            # 获取股票列表（此处采用 stock_info 表中的股票）
+            stock_list = self.stock_info_dao.load_stock_info()
+            self.stock_list_size = len(stock_list)
+            logger.info("Processing forward-adjusted data for %d stocks.", len(stock_list))
+            
+            batch_size = 20
+            for i in range(0, len(stock_list), batch_size):
+                batch = stock_list[i : i + batch_size]
+                tasks = []
+                for stock in batch:
+                    stock_code = stock.stock_code
+                    logger.info("Processing stock %s", stock_code)
+                    tasks.append(self.loop.create_task(self.process_data_adj(stock_code, progress_callback)))
+                if tasks:
+                    self.loop.run_until_complete(asyncio.gather(*tasks))
+
+            if progress_callback:
+                progress_callback(len(stock_list), len(stock_list))
+        finally:
+            self.terminate()
 
 
 class CompanyActionSynchronizer:
@@ -563,11 +598,25 @@ class CompanyActionSynchronizer:
         self.company_action_dao = CompanyActionDao._instance
         self.update_flag_dao = UpdateFlagDao._instance
         self.future_task_dao = FutureTaskDao._instance
+        self.df_rights_all = None
         self.loop = asyncio.get_event_loop()
         self.stock_list_size = 0
         self.completed_num = 0
+        self.is_running = False
         self.lock = asyncio.Lock()
         self.semaphore = asyncio.Semaphore(6)
+
+    def initialize(self):
+        self.df_rights_all = None
+        self.stock_list_size = 0
+        self.completed_num = 0
+        self.is_running = True
+
+    def terminate(self):
+        self.df_rights_all = None
+        self.stock_list_size = 0
+        self.completed_num = 0
+        self.is_running = False
 
     async def process_data(self, stock_code: str, progress_callback=None):
         try:
@@ -575,13 +624,13 @@ class CompanyActionSynchronizer:
                 # 3. 分别获取分红和配股数据
                 logger.info("Processing stock %s", stock_code)
                 try:
-                    df_dividend = await asyncio.to_thread(ak.stock_history_dividend_detail, symbol=stock_code, indicator="分红")
+                    df_dividend = await asyncio.to_thread(ak.stock_fhps_detail_em, symbol=stock_code)
                 except Exception as e:
                     logger.error("Error fetching dividend data for %s: %s", stock_code, e)
                     df_dividend = pd.DataFrame()
                 try:
                     # df_rights = ak.stock_history_dividend_detail(symbol=stock_code, indicator="配股")
-                    df_rights = await asyncio.to_thread(ak.stock_history_dividend_detail, symbol=stock_code, indicator="配股")
+                    df_rights = self.df_rights_all[self.df_rights_all["股票代码"]==stock_code]
                 except Exception as e:
                     logger.error("Error fetching rights data for %s: %s", stock_code, e)
                     df_rights = pd.DataFrame()
@@ -593,20 +642,20 @@ class CompanyActionSynchronizer:
                     df_dividend = df_dividend[df_dividend["ex_date"].notnull()]
                     # 按 ex_date 分组，聚合各字段：对于比例字段采用求和（假设同一交易日内多个记录需要合并），对于日期字段采用首个非空值
                     df_dividend = df_dividend.groupby("ex_date").agg({
-                        "公告日期": "first",
-                        "送股": "sum",
-                        "转增": "sum",
-                        "派息": "sum",
+                        "最新公告日期": "first",
+                        "送转股份-送股比例": "sum",
+                        "送转股份-转股比例": "sum",
+                        "现金分红-现金分红比例": "sum",
                         "股权登记日": "first"
                     }).reset_index()
                 else:
-                    df_dividend = pd.DataFrame(columns=["ex_date", "公告日期", "送股", "转增", "派息", "股权登记日"])
+                    df_dividend = pd.DataFrame(columns=["ex_date", "最新公告日期", "送转股份-送股比例", "送转股份-转股比例", "现金分红-现金分红比例", "股权登记日"])
                 # 对配股数据：重命名“除权日”为 ex_date，并过滤出 ex_date 不为空 的记录
                 if not df_rights.empty and "除权日" in df_rights.columns:
                     df_rights["ex_date"] = pd.to_datetime(df_rights["除权日"], errors="coerce").dt.date
                     df_rights = df_rights[df_rights["ex_date"].notnull()]
                 else:
-                    df_rights = pd.DataFrame(columns=["ex_date", "公告日期", "配股方案", "配股价格", "股权登记日"])
+                    df_rights = pd.DataFrame(columns=["ex_date", "公告日期", "配股比例", "配股价", "股权登记日"])
 
                 # 5. 合并分红和配股数据：以 ex_date 为键，外连接
                 df_merged = pd.merge(df_dividend, df_rights, on="ex_date", how="outer", suffixes=('_div', '_right'))
@@ -617,26 +666,26 @@ class CompanyActionSynchronizer:
                 for _, row in df_merged.iterrows():
                     try:
                         # 对比例字段除以10转换为每股数据
-                        bonus_ratio = safe_value(row.get("送股"))
+                        bonus_ratio = safe_value(row.get("送转股份-送股比例"))
                         if pd.notnull(bonus_ratio):
                             bonus_ratio = bonus_ratio / 10
-                        conversion_ratio = safe_value(row.get("转增"))
+                        conversion_ratio = safe_value(row.get("送转股份-转股比例"))
                         if pd.notnull(conversion_ratio):
                             conversion_ratio = conversion_ratio / 10
-                        dividend_per_share = safe_value(row.get("派息"))
+                        dividend_per_share = safe_value(row.get("现金分红-现金分红比例"))
                         if pd.notnull(dividend_per_share):
                             dividend_per_share = dividend_per_share / 10
-                        rights_issue_ratio = safe_value(row.get("配股方案"))
+                        rights_issue_ratio = safe_value(row.get("配股比例"))
                         if pd.notnull(rights_issue_ratio):
                             rights_issue_ratio = rights_issue_ratio / 10
-                        rights_issue_price = safe_value(row.get("配股价格"))
+                        rights_issue_price = safe_value(row.get("配股价"))
 
                         # 对公告日期和股权登记日，优先选用分红数据，如无则选用配股数据
                         ann_date = None
-                        if pd.notnull(row.get("公告日期_div")):
-                            ann_date = pd.to_datetime(row.get("公告日期_div"), errors="coerce").date()
-                        elif pd.notnull(row.get("公告日期_right")):
-                            ann_date = pd.to_datetime(row.get("公告日期_right"), errors="coerce").date()
+                        if pd.notnull(row.get("最新公告日期")):
+                            ann_date = pd.to_datetime(row.get("最新公告日期"), errors="coerce").date()
+                        elif pd.notnull(row.get("公告日期")):
+                            ann_date = pd.to_datetime(row.get("公告日期"), errors="coerce").date()
 
                         rec_date = None
                         if pd.notnull(row.get("股权登记日_div")):
@@ -686,66 +735,63 @@ class CompanyActionSynchronizer:
         
 
     def sync(self, progress_callback=None):
-        logger.info("Starting company action synchronization.")
-        # 1. 获取当前股票列表
-        stock_list: List[StockInfo] = self.stock_info_dao.load_stock_info()
-        logger.info("Found %d stocks to process.", len(stock_list))
-        tasks=[]
-        for idx, stock in enumerate(stock_list, start=1):
-            stock_code = stock.stock_code
-            update_flags = self.update_flag_dao.select_one_by_code(stock_code)
+        self.initialize()
+        try:
+            logger.info("Starting company action synchronization.")
+            # 1. 获取当前股票列表
+            stock_list: List[StockInfo] = self.stock_info_dao.load_stock_info()
+            self.stock_list_size = len(stock_list)
+            logger.info("Found %d stocks to process.", len(stock_list))
 
-            if update_flags["action_update_flag"] == "0":
-                logger.info("Stock %s is up-to-date.", stock_code)
-                continue
+            self.df_rights_all = ak.stock_pg_em()
+            batch_size = 20
+            for i in range(0, len(stock_list), batch_size):
+                batch = stock_list[i : i + batch_size]
+                tasks=[]
+                for stock in batch:
+                    stock_code = stock.stock_code
+                    update_flags = self.update_flag_dao.select_one_by_code(stock_code)
 
-            # process_data
-            tasks.append(self.loop.create_task(self.process_data(stock_code, progress_callback)))
+                    if update_flags["action_update_flag"] == "0":
+                        logger.info("Stock %s is up-to-date.", stock_code)
+                        continue
 
-        self.loop.run_until_complete(asyncio.gather(*tasks))
-        if progress_callback:
-            progress_callback(len(stock_list), len(stock_list))
+                    # process_data
+                    tasks.append(self.loop.create_task(self.process_data(stock_code, progress_callback)))
+                if tasks:
+                    self.loop.run_until_complete(asyncio.gather(*tasks))
+        finally:
+            self.terminate()
+        
 
 class FundamentalDataSynchronizer:
     def __init__(self):
         self.stock_info_dao = StockInfoDao._instance  # 单例
         self.fundamental_dao = FundamentalDataDao._instance
         self.update_flag_dao = UpdateFlagDao._instance
+        self.loop = asyncio.get_event_loop()
+        self.stock_list_size = 0
+        self.completed_num = 0
+        self.is_running = False
+        self.lock = asyncio.Lock()
+        self.semaphore = asyncio.Semaphore(6)
 
-    def sync(self, progress_callback):
-        logger.info("Starting fundamental data synchronization.")
-        # 1. 获取股票列表
-        stock_list = self.stock_info_dao.load_stock_info()
-        logger.info("Found %d stocks to process.", len(stock_list))
-        
-        for idx, stock in enumerate(stock_list, start=1):
-            if progress_callback:
-                progress_callback(idx, len(stock_list))
-            stock_code = stock.stock_code
-            logger.info("Processing fundamental data for stock %s", stock_code)
+    def initialize(self):
+        self.stock_list_size = 0
+        self.completed_num = 0
+        self.is_running = True
 
-            # 2. 查询 update_flag表中，当前股票代码是否允许更新基本面数据
-            update_flags = self.update_flag_dao.select_one_by_code(stock_code)
-            if update_flags["fundamental_update_flag"] == "0":
-                logger.info("Fundamental data update for stock %s is disabled.", stock_code)
-                continue
-            
-            # 3. 调用 akshare 接口获取三个数据源，indicator 均采用 "按报告期"
-            try:
-                df_debt = ak.stock_financial_debt_ths(symbol=stock_code, indicator="按报告期")
-            except Exception as e:
-                logger.error("Error fetching debt data for %s: %s", stock_code, e)
-                continue
-            try:
-                df_benefit = ak.stock_financial_benefit_ths(symbol=stock_code, indicator="按报告期")
-            except Exception as e:
-                logger.error("Error fetching benefit data for %s: %s", stock_code, e)
-                continue
-            try:
-                df_cash = ak.stock_financial_cash_ths(symbol=stock_code, indicator="按报告期")
-            except Exception as e:
-                logger.error("Error fetching cash data for %s: %s", stock_code, e)
-                continue
+    def terminate(self):
+        self.stock_list_size = 0
+        self.completed_num = 0
+        self.is_running = False
+
+    async def process_data(self, stock_code: str, progress_callback=None):
+        # 3. 调用 akshare 接口获取三个数据源，indicator 均采用 "按报告期"
+        try:
+            df_debt = await asyncio.to_thread(ak.stock_financial_debt_ths, symbol=stock_code, indicator="按报告期")
+            df_benefit = await asyncio.to_thread(ak.stock_financial_benefit_ths, symbol=stock_code, indicator="按报告期")
+            df_cash = await asyncio.to_thread(ak.stock_financial_cash_ths, symbol=stock_code, indicator="按报告期")
 
             # 4. 将“报告期”转换为 Pandas Timestamp 类型
             for df in [df_debt, df_benefit, df_cash]:
@@ -753,11 +799,11 @@ class FundamentalDataSynchronizer:
                     df["报告期"] = pd.to_datetime(df["报告期"], errors="coerce")
                 else:
                     logger.error("DataFrame missing '报告期' column for stock %s", stock_code)
-                    continue
+                    return
 
             if df_debt.empty or df_benefit.empty or df_cash.empty:
-                logger.info("No new fundamental data for stock %s.", stock_code)
-                continue
+                logger.info("No fundamental data for stock %s.", stock_code)
+                return
 
             # 5. 合并三个 DataFrame，按 "报告期" 列内连接（假设各报表数据报告期一致）
             df_merge = pd.merge(df_debt, df_benefit, on="报告期", suffixes=("_debt", "_benefit"))
@@ -780,10 +826,16 @@ class FundamentalDataSynchronizer:
                 total_assets = parse_amount(row.get("*资产合计"))
                 current_liabilities = parse_amount(row.get("流动负债合计"))
                 noncurrent_liabilities = parse_amount(row.get("非流动负债合计"))
+                if current_liabilities is None and noncurrent_liabilities is None:
+                    current_liabilities = parse_amount(row.get("*负债合计"))
                 net_profit = parse_amount(row.get("*归属于母公司所有者的净利润"))
+                if net_profit is None:
+                    net_profit = parse_amount(row.get("*净利润"))
                 operating_profit = parse_amount(row.get("三、营业利润"))
                 total_revenue = parse_amount(row.get("*营业总收入"))
                 total_cost = parse_amount(row.get("*营业总成本"))
+                if total_cost is None:
+                    total_cost = parse_amount(row.get("*营业支出"))
                 net_cash_from_operating = parse_amount(row.get("*经营活动产生的现金流量净额"))
                 cash_for_fixed_assets = parse_amount(row.get("购建固定资产、无形资产和其他长期资产支付的现金"))
                 
@@ -806,14 +858,52 @@ class FundamentalDataSynchronizer:
             # 7. 批量插入 fundamental_records 到数据库
             if fundamental_records:
                 try:
-                    self.fundamental_dao.batch_upsert(fundamental_records)
+                    await asyncio.to_thread(self.fundamental_dao.batch_upsert, fundamental_records)
                     logger.info("Inserted %d new fundamental records for stock %s.", len(fundamental_records), stock_code)
                 except Exception as e:
                     logger.error("Error inserting fundamental records for stock %s: %s", stock_code, e)
+                    raise e
             else:
                 logger.info("No new fundamental records to insert for stock %s.", stock_code)
-        if progress_callback:
-            progress_callback(len(stock_list), len(stock_list))
+        except Exception as e:
+            logger.error("Error processing fundamental data for stock %s: %s", stock_code, e)
+        finally:
+            async with self.lock:
+                self.completed_num = self.completed_num + 1
+                if progress_callback:
+                    progress_callback(self.completed_num, self.stock_list_size)
+
+    def sync(self, progress_callback=None):
+        self.initialize()
+        try:
+            logger.info("Starting fundamental data synchronization.")
+            # 1. 获取股票列表
+            stock_list = self.stock_info_dao.load_stock_info()
+            self.stock_list_size = len(stock_list)
+            logger.info("Found %d stocks to process.", len(stock_list))
+
+            batch_size = 20
+            for i in range(0, len(stock_list), batch_size):
+                batch = stock_list[i : i + batch_size]
+                tasks = []
+                for stock in batch:
+                    stock_code = stock.stock_code
+                    logger.info("Processing fundamental data for stock %s", stock_code)
+
+                    # 2. 查询 update_flag表中，当前股票代码是否允许更新基本面数据
+                    update_flags = self.update_flag_dao.select_one_by_code(stock_code)
+                    if update_flags["fundamental_update_flag"] == "0":
+                        logger.info("Fundamental data update for stock %s is disabled.", stock_code)
+                        self.completed_num = self.completed_num + 1
+                        if progress_callback:
+                            progress_callback(self.completed_num, self.stock_list_size)
+                        continue
+
+                    tasks.append(self.loop.create_task(self.process_data(stock_code, progress_callback)))
+                if tasks:
+                    self.loop.run_until_complete(asyncio.gather(*tasks))
+        finally:
+            self.terminate()
 
 
 class SuspendDataSynchronizer:
