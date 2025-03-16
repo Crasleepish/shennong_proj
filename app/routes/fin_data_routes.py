@@ -215,7 +215,7 @@ def sync_suspend_all():
         progress_cb = make_progress_callback(task_id)
 
         def task_func():
-            suspend_data_synchronizer.sync_all(progress_callback=progress_cb)
+            suspend_data_synchronizer.sync_all(date=date_param, progress_callback=progress_cb)
 
         # 启动后台任务
         launch_background_task(task_id, task_func)

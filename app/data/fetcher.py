@@ -925,7 +925,7 @@ class SuspendDataSynchronizer:
             logger.error("Error parsing date %s: %s", val, e)
             return None
         
-    def sync_all(self, date: str):
+    def sync_all(self, date: str, progress_callback=None):
         """
         获取指定日期（全量数据查询日期，例如 "20120222"）的停复牌数据，
         将数据入库。接口返回的是从该日期起的全量数据。
@@ -946,7 +946,7 @@ class SuspendDataSynchronizer:
         df["停牌截止时间"] = df["停牌截止时间"].apply(self._parse_date)
         
         records = []
-        for _, row in df.iterrows():
+        for idx, row in df.iterrows():
             stock_code = row.get("代码")
             suspend_date = safe_value(row.get("停牌时间"))
             # 忽略停牌时间为空的记录
@@ -965,13 +965,15 @@ class SuspendDataSynchronizer:
                 market = market
             )
             records.append(record)
+            if progress_callback:
+                progress_callback(idx, len(df))
         if records:
             self.suspend_data_dao.batch_upsert(records)
             logger.info("Full sync: Processed %d suspend data records.", len(records))
         else:
             logger.info("Full sync: No suspend data records to process.")
 
-    def sync_today(self):
+    def sync_today(self, progress_callback=None):
         """
         获取当天增量停复牌数据（接口参数 date 为当天），
         对于每条记录，根据股票代码+停牌时间判断是否已存在，存在则更新，否则新增。
@@ -993,7 +995,7 @@ class SuspendDataSynchronizer:
         df["停牌截止时间"] = df["停牌截止时间"].apply(self._parse_date)
         
         records = []
-        for _, row in df.iterrows():
+        for idx, row in df.iterrows():
             stock_code = row.get("代码")
             suspend_date = safe_value(row.get("停牌时间"))
             if suspend_date is None:
@@ -1011,6 +1013,8 @@ class SuspendDataSynchronizer:
                 market = market
             )
             records.append(record)
+            if progress_callback:
+                progress_callback(idx, len(df))
         if records:
             self.suspend_data_dao.batch_upsert(records)
             logger.info("Incremental sync: Processed %d suspend data records for today.", len(records))

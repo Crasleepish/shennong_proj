@@ -41,8 +41,29 @@ class StockInfoDao:
             logger.error("Error during batch insert: %s", e)
             db.rollback()
             raise e
+    
+    def select_dataframe_all(self) -> pd.DataFrame:
+        try:
+            with get_db() as db:
+                # 构造查询条件
+                query = db.query(StockInfo)
+                # 使用 pd.read_sql 将 SQLAlchemy 查询转换为 DataFrame
+                df = pd.read_sql(query.statement, db.bind)
+            return df
+        except Exception as e:
+            return pd.DataFrame()
         
-
+    def delete_all(self):
+        try:
+            with get_db() as db:
+                db.query(StockInfo).delete()
+                db.commit()
+        except Exception as e:
+            logger.error("Error deleting all StockInfo: %s", e)
+            db.rollback()
+            raise e
+                
+        
 class UpdateFlagDao:
 
     _instance = None  # 用于保存单例对象
@@ -481,11 +502,22 @@ class StockHistAdjDao:
         :return: 包含查询结果的 DataFrame，如果没有数据则返回空 DataFrame。
         """
         with get_db() as db:
-            # 构造查询条件
             query = db.query(StockHistAdj)
-            # 使用 pd.read_sql 将 SQLAlchemy 查询转换为 DataFrame
-            df = pd.read_sql(query.statement, db.bind)
-        return df
+            # 设置每次读取10000条记录
+            chunksize = 10000
+            logger.info("开始分块读取数据，每次读取 %d 条记录", chunksize)
+            chunks = pd.read_sql(query.statement, db.bind, chunksize=chunksize)
+            
+            df_list = []
+            chunk_index = 0
+            for chunk in chunks:
+                chunk_index += 1
+                logger.info("已读取第 %d 块数据，大小：%d", chunk_index, len(chunk))
+                df_list.append(chunk)
+                
+            df = pd.concat(df_list, ignore_index=True) if df_list else pd.DataFrame()
+            logger.info("数据读取完毕，总记录数：%d", len(df))
+            return df
     
     def select_dataframe_by_code(self, stock_code: str):
         """
@@ -601,6 +633,14 @@ class FundamentalDataDao:
             df = pd.read_sql(query.statement, db.bind)
         return df
     
+    def select_dataframe_all(self):
+        with get_db() as db:
+            # 构造查询条件
+            query = db.query(FundamentalData)
+            # 使用 pd.read_sql 将 SQLAlchemy 查询转换为 DataFrame
+            df = pd.read_sql(query.statement, db.bind)
+        return df
+    
     def delete_all(self):
         try:
             with get_db() as db:
@@ -707,6 +747,16 @@ class SuspendDataDao:
             )
             df = pd.read_sql(query.statement, db.bind)
             return df
+        
+    def delete_all(self):
+        try:
+            with get_db() as db:
+                db.query(SuspendData).delete()
+                db.commit()
+        except Exception as e:
+            logger.error("Error during delete: %s", e)
+            db.rollback()
+            raise e
 
 class StockShareChangeCNInfoDao:
     _instance = None
