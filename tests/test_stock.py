@@ -39,9 +39,9 @@ def dummy_stock_list():
     使用 SimpleNamespace 模拟股票对象，要求至少有 stock_code 属性。
     """
     return [
-        SimpleNamespace(stock_code="000004"),
-        SimpleNamespace(stock_code="600655"),
-        SimpleNamespace(stock_code="000001"),
+        SimpleNamespace(stock_code="000004", market="SZ"),
+        SimpleNamespace(stock_code="600655", market="SH"),
+        SimpleNamespace(stock_code="301600", market="SZ"),
     ]
 
 @pytest.fixture
@@ -55,7 +55,7 @@ def init_update_flag_data(app):
             # 执行插入 SQL
             sql = """
             INSERT INTO update_flag (stock_code, action_update_flag, fundamental_update_flag)
-            VALUES ('000004', '0', '1'), ('600655', '0', '1'), ('000001', '0', '1');
+            VALUES ('000004', '0', '1'), ('600655', '0', '1'), ('301600', '0', '1');
             """
             db.execute(text(sql))
             db.commit()

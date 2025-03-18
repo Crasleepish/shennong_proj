@@ -10,6 +10,8 @@ from app.models.stock_models import StockInfo, StockHistUnadj, UpdateFlag, Compa
 from app.dao.stock_info_dao import StockInfoDao, StockHistUnadjDao, UpdateFlagDao, CompanyActionDao, FutureTaskDao, StockHistAdjDao, FundamentalDataDao, SuspendDataDao, StockShareChangeCNInfoDao
 from app.constants.enums import TaskType, TaskStatus
 from typing import Union
+from .custom_api import fetch_stock_equity_changes
+import re
 
 import logging
 
@@ -31,8 +33,7 @@ class StockInfoSynchronizer:
       3. 筛选出新增记录（基于证券代码）
       4. 将新增记录插入数据库（仅新增，不更新或删除）
     """
-    def __init__(self, symbol="主板A股"):
-        self.symbol = symbol
+    def __init__(self):
         self.stock_info_dao = StockInfoDao._instance
         self.update_flag_dao = UpdateFlagDao._instance
         self.future_task_dao = FutureTaskDao._instance
@@ -45,19 +46,34 @@ class StockInfoSynchronizer:
             import akshare as ak
             df = ak.stock_info_sh_name_code(symbol="主板A股")
         """
-        logger.info("Fetching data from akshare for symbol: %s", self.symbol)
-        sh_a_list = ak.stock_info_sh_name_code(symbol=self.symbol)[['证券代码', '证券简称', '上市日期']]
+        logger.info("Fetching data from akshare ...")
+        sh_a_list = ak.stock_info_sh_name_code(symbol="主板A股")[['证券代码', '证券简称', '上市日期']]
         sh_a_list = sh_a_list.rename(columns={'证券代码': 'code', '证券简称': 'name', '上市日期': 'ipo_date'})
         sh_a_list['market'] = 'SH'
         # 将上市日期转换为日期类型（若转换失败则置为 NaT）
         if 'ipo_date' in sh_a_list.columns:
             sh_a_list['ipo_date'] = pd.to_datetime(sh_a_list['ipo_date'], errors='coerce').dt.date
+
         sz_a_list = ak.stock_info_sz_name_code(symbol="A股列表")[['A股代码', 'A股简称', 'A股上市日期']]
         sz_a_list = sz_a_list.rename(columns={'A股代码': 'code', 'A股简称': 'name', 'A股上市日期': 'ipo_date'})
         sz_a_list['market'] = 'SZ'
         if 'ipo_date' in sz_a_list.columns:
             sz_a_list['ipo_date'] = pd.to_datetime(sz_a_list['ipo_date'], errors='coerce').dt.date
-        df = pd.concat([sh_a_list, sz_a_list], ignore_index=True).sort_values('ipo_date').reset_index(drop=True)
+
+        sh_ts_list = ak.stock_info_sh_delist(symbol="全部")[['公司代码', '公司简称', '上市日期']]
+        sh_ts_list = sh_ts_list.rename(columns={'公司代码': 'code', '公司简称': 'name', '上市日期': 'ipo_date'})
+        sh_ts_list['market'] = 'SH'
+        if 'ipo_date' in sh_ts_list.columns:
+            sh_ts_list['ipo_date'] = pd.to_datetime(sh_ts_list['ipo_date'], errors='coerce').dt.date
+
+        sz_ts_list = ak.stock_info_sz_delist(symbol="终止上市公司")[['证券代码', '证券简称', '上市日期']]
+        sz_ts_list = sz_ts_list.rename(columns={'证券代码': 'code', '证券简称': 'name', '上市日期': 'ipo_date'})
+        sz_ts_list['market'] = 'SZ'
+        if 'ipo_date' in sz_ts_list.columns:
+            sz_ts_list['ipo_date'] = pd.to_datetime(sz_ts_list['ipo_date'], errors='coerce').dt.date
+
+        df = pd.concat([sh_a_list, sz_a_list, sh_ts_list, sz_ts_list], ignore_index=True).sort_values('ipo_date').reset_index(drop=True)
+        df.drop_duplicates(subset=['code'], keep='last', inplace=True)
         return df
 
     def sync(self, progress_callback=None):
@@ -162,19 +178,28 @@ class StockHistSynchronizer:
             logger.error("Error fetching stock data for %s: %s", stock_code, e)
             return pd.DataFrame()
         
-    async def fetch_share_value_data(self, stock_code, start_date):
-        """异步获取股票估值数据"""
+    async def fetch_share_value_data(self, stock_code, market):
+        """异步获取股票股本数据"""
         try:
             async with self.semaphore:
-                if start_date < "20200101":
-                    source_df = await asyncio.to_thread(self.stock_share_change_dao.select_dataframe_by_stock_code, stock_code)
+                # 尝试获取本地cninfo里的数据
+                source_df = await asyncio.to_thread(self.stock_share_change_dao.select_dataframe_by_stock_code, stock_code)
+                if not source_df.empty:
                     df = source_df[["VARYDATE", "F003N"]]
                     df.rename(columns={"VARYDATE": "日期", "F003N": "总股本"}, inplace=True)
                     df["总股本"] = df["总股本"] * 1e4
-                else:
-                    source_df = await asyncio.to_thread(ak.stock_value_em, symbol=stock_code)
+                    return df
+                
+                source_df = await asyncio.to_thread(fetch_stock_equity_changes, stock_code + '.' + market)
+                if not source_df.empty:
                     df = source_df[["数据日期", "总股本"]]
+                    df["数据日期"] = pd.to_datetime(df["数据日期"], errors="coerce")
                     df.rename(columns={"数据日期": "日期"}, inplace=True)
+                    return df
+                
+                source_df = await asyncio.to_thread(ak.stock_value_em, symbol=stock_code)
+                df = source_df[["数据日期", "总股本"]]
+                df.rename(columns={"数据日期": "日期"}, inplace=True)
                 return df
         except Exception as e:
             logger.error("Error fetching share value data for %s: %s", stock_code, e)
@@ -221,12 +246,12 @@ class StockHistSynchronizer:
         async with self.semaphore:
             return await asyncio.to_thread(_syn_batch_insert_unadj, stock_code, new_records)
     
-    async def process_data_unadj(self, stock_code, start_date, current_date, progress_callback=None):
+    async def process_data_unadj(self, stock_code, market, start_date, current_date, progress_callback=None):
         try:
             # 3. 调用 akshare 接口获取该股票从 start_date 到 current_date 的历史行情数据（不复权）
             logger.info("Fetching historical data for stock %s from %s to %s", stock_code, start_date, current_date)
             df_task = self.loop.create_task(self.fetch_stock_data(stock_code, start_date, current_date))
-            share_list_df_task = self.loop.create_task(self.fetch_share_value_data(stock_code, start_date))
+            share_list_df_task = self.loop.create_task(self.fetch_share_value_data(stock_code, market))
             df, share_list_df = await asyncio.gather(df_task, share_list_df_task)
 
             if df.empty:
@@ -288,6 +313,7 @@ class StockHistSynchronizer:
                 tasks = []
                 for stock in batch:
                     stock_code = stock.stock_code
+                    market = stock.market
                     logger.info("Synchronizing stock %s", stock_code)
                     # 2. 查询该股票在历史行情数据表中的最新日期
                     latest_date = self.stock_hist_unadj_dao.get_latest_date(stock_code)
@@ -307,7 +333,7 @@ class StockHistSynchronizer:
                         logger.info("Stock %s is up to date. (start_date: %s, current_date: %s)", stock_code, start_date, current_date)
                         continue
 
-                    tasks.append(self.loop.create_task(self.process_data_unadj(stock_code, start_date, current_date, progress_callback)))
+                    tasks.append(self.loop.create_task(self.process_data_unadj(stock_code, market, start_date, current_date, progress_callback)))
                     if tasks:
                         self.loop.run_until_complete(asyncio.gather(*tasks))
         finally:
@@ -372,14 +398,17 @@ class StockAdjHistSynchronizer:
                     if df_unadj is None or df_unadj.empty:
                         logger.info("No non-adjusted data for stock %s, skipping.", stock_code)
                         return
+                    # 遍历无复权记录，确保按交易日期升序排列
+                    df_unadj = df_unadj.sort_values(by="date")
+                    earliest_date = df_unadj.iloc[0]['date']
                     # 获取所有公司行动记录（已转换为每股数据），按 ex_dividend_date 升序排列
                     df_action = await asyncio.to_thread(self.company_action_dao.select_dataframe_by_code, stock_code)
                     if df_action is None or df_action.empty:
                         logger.info("No company action data for stock %s.", stock_code)
                         await self.fetch_data_from_unadj_data(stock_code)
                         return
-                    # 遍历无复权记录，确保按交易日期升序排列
-                    df_unadj = df_unadj.sort_values(by="date")
+                    #仅过滤有意义的行动数据
+                    df_action = df_action[df_action['ex_dividend_date'] >= earliest_date]
                     # 获取交易日期列表和对应的收盘价列表
                     trade_dates = df_unadj["date"].tolist()
                     close_prices = df_unadj["close"].tolist()
@@ -618,6 +647,52 @@ class CompanyActionSynchronizer:
         self.completed_num = 0
         self.is_running = False
 
+    def parse_ths_dividend(self, df):
+        # 筛选实施方案的行
+        df = df[df['方案进度'] == '实施方案'].copy()
+        
+        # 正则表达式匹配分红方案的每一段
+        pattern = re.compile(r'(送(\d+\.?\d*)股)|(转(\d+\.?\d*)股)|(派(\d+\.?\d*)元)')
+        
+        rows = []
+        for _, row in df.iterrows():
+            方案说明 = row['分红方案说明']
+            
+            # 初始化默认值
+            song, zhuan, pai = 0.0, 0.0, 0.0
+            
+            # 逐段匹配
+            remaining_text = 方案说明
+            while remaining_text:
+                match = pattern.search(remaining_text)
+                if not match:
+                    break  # 没有匹配项，退出循环
+                
+                # 根据匹配结果更新值
+                if match.group(1):  # 送股
+                    song = float(match.group(2))
+                elif match.group(3):  # 转股
+                    zhuan = float(match.group(4))
+                elif match.group(5):  # 派息
+                    pai = float(match.group(6))
+                
+                # 删除已匹配的部分，继续匹配剩余文本
+                remaining_text = remaining_text[match.end():]
+            
+            # 构造新行数据
+            new_row = {
+                '除权除息日': row['A股除权除息日'],
+                '最新公告日期': row['实施公告日'],
+                '送转股份-送股比例': song,
+                '送转股份-转股比例': zhuan,
+                '现金分红-现金分红比例': pai,
+                '股权登记日': row['A股股权登记日']
+            }
+            rows.append(new_row)
+        
+        # 创建新DataFrame
+        return pd.DataFrame(rows, columns=['除权除息日', '最新公告日期', '送转股份-送股比例', '送转股份-转股比例', '现金分红-现金分红比例', '股权登记日'])
+
     async def process_data(self, stock_code: str, progress_callback=None):
         try:
             async with self.semaphore:
@@ -626,10 +701,18 @@ class CompanyActionSynchronizer:
                 try:
                     df_dividend = await asyncio.to_thread(ak.stock_fhps_detail_em, symbol=stock_code)
                 except Exception as e:
-                    logger.error("Error fetching dividend data for %s: %s", stock_code, e)
+                    logger.error("Error fetching em dividend data for %s: %s", stock_code, e)
                     df_dividend = pd.DataFrame()
+                # 如果没取到东财数据，尝试获取同花顺数据
+                if df_dividend.empty:
+                    try:
+                        df_ths_dividend = await asyncio.to_thread(ak.stock_fhps_detail_ths, symbol=stock_code)
+                        df_dividend = self.parse_ths_dividend(df_ths_dividend)
+                        df_dividend.dropna(subset=['除权除息日', '最新公告日期', '股权登记日'], inplace=True)
+                    except Exception as e:
+                        logger.error("Error fetching ths dividend data for %s: %s", stock_code, e)
+                        df_dividend = pd.DataFrame()
                 try:
-                    # df_rights = ak.stock_history_dividend_detail(symbol=stock_code, indicator="配股")
                     df_rights = self.df_rights_all[self.df_rights_all["股票代码"]==stock_code]
                 except Exception as e:
                     logger.error("Error fetching rights data for %s: %s", stock_code, e)
@@ -650,12 +733,17 @@ class CompanyActionSynchronizer:
                     }).reset_index()
                 else:
                     df_dividend = pd.DataFrame(columns=["ex_date", "最新公告日期", "送转股份-送股比例", "送转股份-转股比例", "现金分红-现金分红比例", "股权登记日"])
+                    
                 # 对配股数据：重命名“除权日”为 ex_date，并过滤出 ex_date 不为空 的记录
                 if not df_rights.empty and "除权日" in df_rights.columns:
                     df_rights["ex_date"] = pd.to_datetime(df_rights["除权日"], errors="coerce").dt.date
                     df_rights = df_rights[df_rights["ex_date"].notnull()]
                 else:
                     df_rights = pd.DataFrame(columns=["ex_date", "公告日期", "配股比例", "配股价", "股权登记日"])
+
+                if df_dividend.empty or df_rights.empty:
+                    df_dividend["ex_date"] = df_dividend["ex_date"].astype(object)
+                    df_rights["ex_date"] = df_rights["ex_date"].astype(object)
 
                 # 5. 合并分红和配股数据：以 ex_date 为键，外连接
                 df_merged = pd.merge(df_dividend, df_rights, on="ex_date", how="outer", suffixes=('_div', '_right'))

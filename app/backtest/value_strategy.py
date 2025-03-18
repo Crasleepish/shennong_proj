@@ -176,7 +176,7 @@ def backtest_strategy(start_date: str, end_date: str):
 
 
     # 输出当日持仓详情到 CSV
-    target_weights.loc[rb_dates].to_csv(f"portfolio.csv")
+    target_weights.loc[rb_dates].to_csv(f"result/portfolio.csv")
 
     # -------------------------------
     # 定义回测所需的回调函数
@@ -260,11 +260,11 @@ def backtest_strategy(start_date: str, end_date: str):
     total_value = pf.value()
     daily_returns = pf.returns()
     # logger.info(pf.stats())
-    total_value.to_csv("portfolio_total_value.csv")
-    daily_returns.to_csv("portfolio_daily_returns.csv")
+    total_value.to_csv("result/portfolio_total_value.csv")
+    daily_returns.to_csv("result/portfolio_daily_returns.csv")
     logger.info("Latest Value: %s", pf.final_value())
     logger.info("Total Return: %s", pf.total_return())
     # 可视化（可选）
     fig = pf.value(group_by=True).vbt.plot(title="Portfolio Value Curve")
-    fig.write_html("portfolio_value.html")
+    fig.write_html("result/portfolio_value.html")
     return pf
