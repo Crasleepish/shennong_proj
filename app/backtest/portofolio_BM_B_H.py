@@ -1,7 +1,32 @@
+'''
+---
+
+### **1. 分组步骤**
+1. **按市值分组**：
+   - 使用全市场股票市值的中位数作为分界点，将所有股票分为**小市值（S）**和**大市值（B）**两组。
+2. **按BM分组**：
+   - 在**小市值（S）**组内，按BM的30%和70%分位数将股票分为**低BM（L）**、**中BM（M）**和**高BM（H）**三组。
+   - 在**大市值（B）**组内，同样按BM的30%和70%分位数将股票分为**低BM（L）**、**中BM（M）**和**高BM（H）**三组。
+
+---
+
+### **2. 构建组合**
+- 经过上述分组后，会形成 **2（市值） × 3（BM） = 6个组合**：
+  - 小市值 + 低BM（S/L）
+  - 小市值 + 中BM（S/M）
+  - 小市值 + 高BM（S/H）
+  - 大市值 + 低BM（B/L）
+  - 大市值 + 中BM（B/M）
+  - 大市值 + 高BM（B/H）
+
+---
+
+### 本组合为大市值 + 高BM（B/H）
+'''
 from app.data.helper import *
+import os
 import pandas as pd
 import numpy as np
-import datetime
 import vectorbt as vbt
 import logging
 from numba import njit
@@ -13,6 +38,8 @@ logging.getLogger('numba').setLevel(logging.INFO)
 
 fee_rate = 0.0003
 slippage_rate = 0.0001
+output_dir = r"./result"
+output_prefix = "portofolio_BM_B_H"
 
 def get_rebalance_dates(prices: pd.DataFrame, start_date: str, end_date: str) -> pd.DatetimeIndex:
     """
@@ -92,12 +119,11 @@ def backtest_strategy(start_date: str, end_date: str):
     target_weights = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)  # 目标持仓矩阵
     logger.info("Identified %d rebalance dates.", len(rb_dates))
     
-    # 初始化订单矩阵（不再使用权重矩阵）
-    # orders = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
+    # 初始化订单矩阵
     init_cash = 1000000
+    order_sizes = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
     
     # 维护动态持仓状态（用于计算订单）
-    order_sizes = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
     current_positions = pd.Series(0.0, index=prices.columns)  # 当前持仓数量
     segment_mask = np.full((prices.shape[0], 1), False, dtype=bool)
     current_cash = init_cash  # 当前现金
@@ -125,10 +151,10 @@ def backtest_strategy(start_date: str, end_date: str):
                 continue
         
             # 大市值组筛选
-            mkt_cap_sorted = mkt_cap_on_date.sort_values(ascending=False)
-            num_large = int(len(mkt_cap_sorted) * 0.5)
-            large_cap_stocks = mkt_cap_sorted.index[:num_large]
-            logger.info("Large cap group count on %s: %d", rb_date.strftime("%Y-%m-%d"), len(large_cap_stocks))
+            mkt_cap_sorted = mkt_cap_on_date.sort_values(ascending=True)
+            num_threslold = int(len(mkt_cap_sorted) * 0.5)
+            large_cap_stocks = mkt_cap_sorted.index[num_threslold:]
+            logger.info("Small cap group count on %s: %d", rb_date.strftime("%Y-%m-%d"), len(large_cap_stocks))
         
             # B/M筛选
             bm_ratios = {}
@@ -142,9 +168,9 @@ def backtest_strategy(start_date: str, end_date: str):
                 logger.info("No fundamental data for large cap group on %s.", rb_date.strftime("%Y-%m-%d"))
                 continue
             bm_series = pd.Series(bm_ratios)
-            bm_sorted = bm_series.sort_values(ascending=False)
-            num_selected = int(len(bm_sorted) * 0.3)
-            selected_stocks = bm_sorted.index[:num_selected]
+            bm_sorted = bm_series.sort_values(ascending=True)
+            num_high = int(len(bm_sorted) * 0.7)
+            selected_stocks = bm_sorted.index[num_high:]
             # 确保调仓日的价格无缺失或异常
             if prices.loc[rb_date, selected_stocks].isnull().any():
                 logger.warning("Missing price data for selected stocks on %s; skipping.", rb_date.strftime("%Y-%m-%d"))
@@ -176,7 +202,7 @@ def backtest_strategy(start_date: str, end_date: str):
 
 
     # 输出当日持仓详情到 CSV
-    target_weights.loc[rb_dates].to_csv(f"result/portfolio.csv")
+    target_weights.loc[rb_dates].to_csv(os.path.join(output_dir, output_prefix + "_portfolio.csv"))
 
     # -------------------------------
     # 定义回测所需的回调函数
@@ -260,11 +286,11 @@ def backtest_strategy(start_date: str, end_date: str):
     total_value = pf.value()
     daily_returns = pf.returns()
     # logger.info(pf.stats())
-    total_value.to_csv("result/portfolio_total_value.csv")
-    daily_returns.to_csv("result/portfolio_daily_returns.csv")
+    total_value.to_csv(os.path.join(output_dir, output_prefix + "_total_value.csv"))
+    daily_returns.to_csv(os.path.join(output_dir, output_prefix + "_daily_returns.csv"))
     logger.info("Latest Value: %s", pf.final_value())
     logger.info("Total Return: %s", pf.total_return())
     # 可视化（可选）
     fig = pf.value(group_by=True).vbt.plot(title="Portfolio Value Curve")
-    fig.write_html("result/portfolio_value.html")
+    fig.write_html(os.path.join(output_dir, output_prefix + "_value_plot.html"))
     return pf

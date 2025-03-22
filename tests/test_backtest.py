@@ -130,9 +130,9 @@ def test_backtest_strategy(
     
     # 验证 CSV 文件是否生成
     import os
-    assert os.path.exists("portfolio_total_value.csv"), "总价值 CSV 文件未生成"
-    assert os.path.exists("portfolio_daily_returns.csv"), "每日收益率 CSV 文件未生成"
+    assert os.path.exists("result/portfolio_total_value.csv"), "总价值 CSV 文件未生成"
+    assert os.path.exists("result/portfolio_daily_returns.csv"), "每日收益率 CSV 文件未生成"
     
     # 清理生成的 CSV 文件
-    os.remove("portfolio_total_value.csv")
-    os.remove("portfolio_daily_returns.csv")
+    os.remove("result/portfolio_total_value.csv")
+    os.remove("result/portfolio_daily_returns.csv")

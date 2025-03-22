@@ -54,6 +54,12 @@ class StockInfoSynchronizer:
         if 'ipo_date' in sh_a_list.columns:
             sh_a_list['ipo_date'] = pd.to_datetime(sh_a_list['ipo_date'], errors='coerce').dt.date
 
+        sh_kc_list = ak.stock_info_sh_name_code(symbol="科创板")[['证券代码', '证券简称', '上市日期']]
+        sh_kc_list = sh_kc_list.rename(columns={'证券代码': 'code', '证券简称': 'name', '上市日期': 'ipo_date'})
+        sh_kc_list['market'] = 'SH'
+        if 'ipo_date' in sh_kc_list.columns:
+            sh_kc_list['ipo_date'] = pd.to_datetime(sh_kc_list['ipo_date'], errors='coerce').dt.date
+
         sz_a_list = ak.stock_info_sz_name_code(symbol="A股列表")[['A股代码', 'A股简称', 'A股上市日期']]
         sz_a_list = sz_a_list.rename(columns={'A股代码': 'code', 'A股简称': 'name', 'A股上市日期': 'ipo_date'})
         sz_a_list['market'] = 'SZ'
@@ -72,7 +78,7 @@ class StockInfoSynchronizer:
         if 'ipo_date' in sz_ts_list.columns:
             sz_ts_list['ipo_date'] = pd.to_datetime(sz_ts_list['ipo_date'], errors='coerce').dt.date
 
-        df = pd.concat([sh_a_list, sz_a_list, sh_ts_list, sz_ts_list], ignore_index=True).sort_values('ipo_date').reset_index(drop=True)
+        df = pd.concat([sh_a_list, sh_kc_list, sz_a_list, sh_ts_list, sz_ts_list], ignore_index=True).sort_values('ipo_date').reset_index(drop=True)
         df.drop_duplicates(subset=['code'], keep='last', inplace=True)
         return df
 

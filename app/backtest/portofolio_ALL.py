@@ -1,7 +1,11 @@
+'''
+
+### 本组合为A股全市场组合
+'''
 from app.data.helper import *
+import os
 import pandas as pd
 import numpy as np
-import datetime
 import vectorbt as vbt
 import logging
 from numba import njit
@@ -13,6 +17,8 @@ logging.getLogger('numba').setLevel(logging.INFO)
 
 fee_rate = 0.0003
 slippage_rate = 0.0001
+output_dir = r"./result"
+output_prefix = "portofolio_ALL"
 
 def get_rebalance_dates(prices: pd.DataFrame, start_date: str, end_date: str) -> pd.DatetimeIndex:
     """
@@ -92,12 +98,11 @@ def backtest_strategy(start_date: str, end_date: str):
     target_weights = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)  # 目标持仓矩阵
     logger.info("Identified %d rebalance dates.", len(rb_dates))
     
-    # 初始化订单矩阵（不再使用权重矩阵）
-    # orders = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
+    # 初始化订单矩阵
     init_cash = 1000000
+    order_sizes = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
     
     # 维护动态持仓状态（用于计算订单）
-    order_sizes = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
     current_positions = pd.Series(0.0, index=prices.columns)  # 当前持仓数量
     segment_mask = np.full((prices.shape[0], 1), False, dtype=bool)
     current_cash = init_cash  # 当前现金
@@ -124,27 +129,7 @@ def backtest_strategy(start_date: str, end_date: str):
                 logger.warning("No market cap data on %s; skipping.", rb_date.strftime("%Y-%m-%d"))
                 continue
         
-            # 大市值组筛选
-            mkt_cap_sorted = mkt_cap_on_date.sort_values(ascending=False)
-            num_large = int(len(mkt_cap_sorted) * 0.5)
-            large_cap_stocks = mkt_cap_sorted.index[:num_large]
-            logger.info("Large cap group count on %s: %d", rb_date.strftime("%Y-%m-%d"), len(large_cap_stocks))
-        
-            # B/M筛选
-            bm_ratios = {}
-            for code in large_cap_stocks:
-                current_cap = mkt_cap.loc[rb_date, code]
-                fundamental = get_latest_fundamental(code, rb_date, fundamental_df)
-                if fundamental is not None and current_cap and current_cap != 0:
-                    bm = fundamental["total_equity"] / current_cap
-                    bm_ratios[code] = bm
-            if not bm_ratios:
-                logger.info("No fundamental data for large cap group on %s.", rb_date.strftime("%Y-%m-%d"))
-                continue
-            bm_series = pd.Series(bm_ratios)
-            bm_sorted = bm_series.sort_values(ascending=False)
-            num_selected = int(len(bm_sorted) * 0.3)
-            selected_stocks = bm_sorted.index[:num_selected]
+            selected_stocks = valid_stocks
             # 确保调仓日的价格无缺失或异常
             if prices.loc[rb_date, selected_stocks].isnull().any():
                 logger.warning("Missing price data for selected stocks on %s; skipping.", rb_date.strftime("%Y-%m-%d"))
@@ -176,7 +161,7 @@ def backtest_strategy(start_date: str, end_date: str):
 
 
     # 输出当日持仓详情到 CSV
-    target_weights.loc[rb_dates].to_csv(f"result/portfolio.csv")
+    target_weights.loc[rb_dates].to_csv(os.path.join(output_dir, output_prefix + "_portfolio.csv"))
 
     # -------------------------------
     # 定义回测所需的回调函数
@@ -260,11 +245,11 @@ def backtest_strategy(start_date: str, end_date: str):
     total_value = pf.value()
     daily_returns = pf.returns()
     # logger.info(pf.stats())
-    total_value.to_csv("result/portfolio_total_value.csv")
-    daily_returns.to_csv("result/portfolio_daily_returns.csv")
+    total_value.to_csv(os.path.join(output_dir, output_prefix + "_total_value.csv"))
+    daily_returns.to_csv(os.path.join(output_dir, output_prefix + "_daily_returns.csv"))
     logger.info("Latest Value: %s", pf.final_value())
     logger.info("Total Return: %s", pf.total_return())
     # 可视化（可选）
     fig = pf.value(group_by=True).vbt.plot(title="Portfolio Value Curve")
-    fig.write_html("result/portfolio_value.html")
+    fig.write_html(os.path.join(output_dir, output_prefix + "_value_plot.html"))
     return pf
