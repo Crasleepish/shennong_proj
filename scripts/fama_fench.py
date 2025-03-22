@@ -22,7 +22,7 @@ for group, path in file_map.items():
 merged_df = pd.concat(dfs, axis=1, join="inner")  # 确保日期对齐
 
 # 3. 将每日回报转换为月度回报（复利累积）
-monthly_returns = merged_df.resample("M").apply(lambda x: (1 + x).prod() - 1
+monthly_returns = merged_df.resample("M").apply(lambda x: (1 + x).prod() - 1)
 
 # 4. 计算SMB_BM（按BM分组）
 # 低BM分组：S_L - B_L
