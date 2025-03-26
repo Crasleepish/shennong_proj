@@ -1,18 +1,46 @@
+'''
+---
+
+### **1. 分组步骤**
+1. **按市值分组**：
+   - 使用全市场股票市值的中位数作为分界点，将所有股票分为**小市值（S）**和**大市值（B）**两组。
+2. **按INV(ROE)分组**：
+   - 在**小市值（S）**组内，按INV的30%和70%分位数将股票分为**低INV（L）**、**中INV（M）**和**高INV（H）**三组。
+   - 在**大市值（B）**组内，同样按INV的30%和70%分位数将股票分为**低INV（L）**、**中INV（M）**和**高INV（H）**三组。
+
+---
+
+### **2. 构建组合**
+- 经过上述分组后，会形成 **2（市值） × 3（INV） = 6个组合**：
+  - 小市值 + 低INV（S/L）
+  - 小市值 + 中INV（S/M）
+  - 小市值 + 高INV（S/H）
+  - 大市值 + 低INV（B/L）
+  - 大市值 + 中INV（B/M）
+  - 大市值 + 高INV（B/H）
+
+---
+
+### 本组合为小市值 + 中INV（S/M）
+'''
 from app.data.helper import *
+import os
 import pandas as pd
 import numpy as np
-import datetime
 import vectorbt as vbt
 import logging
 from numba import njit
 from vectorbt.portfolio.enums import Direction, OrderStatus, NoOrder, CallSeqType, SizeType
 from vectorbt.portfolio import nb
+from .compute_asset_growth import compute_and_cache_asset_growth, compute_and_cache_industry_avg_asset_growth
 
 logger = logging.getLogger(__name__)
 logging.getLogger('numba').setLevel(logging.INFO)
 
 fee_rate = 0.0003
 slippage_rate = 0.0001
+output_dir = r"./result"
+output_prefix = "portofolio_INV_S_M"
 
 def get_rebalance_dates(prices: pd.DataFrame, start_date: str, end_date: str) -> pd.DatetimeIndex:
     """
@@ -61,7 +89,7 @@ def get_latest_fundamental(stock_code: str, rb_date: pd.Timestamp, fundamental_d
     对于给定股票和再平衡日期，从 fundamental_df 中选取报告期不超过 rb_date 的90天前的最新记录，
     返回一行 Series，包含 total_equity 等基本面数据；若不存在则返回 None。
     """
-    latest_report_date = rb_date - pd.Timedelta(days=90)
+    latest_report_date = rb_date - pd.Timedelta(days=120)
     df = fundamental_df[fundamental_df["stock_code"] == stock_code]
     df = df[df["report_date"] <= latest_report_date]
     if df.empty:
@@ -150,12 +178,11 @@ def backtest_strategy(start_date: str, end_date: str):
     target_weights = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)  # 目标持仓矩阵
     logger.info("Identified %d rebalance dates.", len(rb_dates))
     
-    # 初始化订单矩阵（不再使用权重矩阵）
-    # orders = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
+    # 初始化订单矩阵
     init_cash = 1000000
+    order_sizes = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
     
     # 维护动态持仓状态（用于计算订单）
-    order_sizes = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
     current_positions = pd.Series(0.0, index=prices.columns)  # 当前持仓数量
     segment_mask = np.full((prices.shape[0], 1), False, dtype=bool)
     current_cash = init_cash  # 当前现金
@@ -182,27 +209,54 @@ def backtest_strategy(start_date: str, end_date: str):
                 logger.warning("No market cap data on %s; skipping.", rb_date.strftime("%Y-%m-%d"))
                 continue
         
-            # 大市值组筛选
-            mkt_cap_sorted = mkt_cap_on_date.sort_values(ascending=False)
-            num_large = int(len(mkt_cap_sorted) * 0.5)
-            large_cap_stocks = mkt_cap_sorted.index[:num_large]
-            logger.info("Large cap group count on %s: %d", rb_date.strftime("%Y-%m-%d"), len(large_cap_stocks))
+            # 市值组筛选
+            mkt_cap_sorted = mkt_cap_on_date.sort_values(ascending=True)
+            num_threslold = int(len(mkt_cap_sorted) * 0.5)
+            cap_selected_stocks = mkt_cap_sorted.index[:num_threslold]
+            logger.info("Small cap group count on %s: %d", rb_date.strftime("%Y-%m-%d"), len(cap_selected_stocks))
         
-            # B/M筛选
-            bm_ratios = {}
-            for code in large_cap_stocks:
-                current_cap = mkt_cap.loc[rb_date, code]
-                fundamental = get_latest_fundamental(code, rb_date, fundamental_df)
-                if fundamental is not None and current_cap and current_cap != 0:
-                    bm = fundamental["total_equity"] / current_cap
-                    bm_ratios[code] = bm
-            if not bm_ratios:
+            # INV筛选
+            # 先做行业中性化处理
+            asset_growth_cache = f'.cache/asset_growth_{rb_date}.csv'
+            industry_cache = f'.cache/industry_asset_growth_{rb_date}.csv'
+            if os.path.exists(asset_growth_cache):
+                logging.info("Loading cached asset growth data from %s", asset_growth_cache)
+                asset_growth_df = pd.read_csv(asset_growth_cache, dtype={'stock_code': str, 'industry': str, 'asset_growth': 'float64'})
+                asset_growth_dict = asset_growth_df.set_index('stock_code')['asset_growth'].to_dict()
+            else:
+                asset_growth_df, asset_growth_dict = compute_and_cache_asset_growth(rb_date, fundamental_df)
+
+            if os.path.exists(industry_cache):
+                logging.info("Loading cached industry avg asset growth data from %s", industry_cache)
+                industry_avg_df = pd.read_csv(industry_cache, dtype={'industry': str, 'avg_asset_growth': 'float64', 'std_asset_growth': 'float64'})
+                industry_avg_asset_growth = industry_avg_df.set_index('industry')['avg_asset_growth'].to_dict()
+                industry_std_asset_growth = industry_avg_df.set_index('industry')['std_asset_growth'].to_dict()
+            else:
+                industry_avg_asset_growth, industry_std_asset_growth = compute_and_cache_industry_avg_asset_growth(asset_growth_df, rb_date)
+            # 计算中性化后的盈利能力
+            inv_ratios = {}
+            for code in cap_selected_stocks:
+                if code not in asset_growth_dict:
+                    continue
+                asset_growth = asset_growth_dict[code]
+                industry = stock_info.loc[code, 'industry']
+                if industry not in industry_avg_asset_growth:
+                    logging.error("No industry avg asset growth for %s, please check", industry)
+                    raise Exception("No industry avg asset growth for %s, please check" % industry)
+                avg_asset_growth = industry_avg_asset_growth[industry]
+                if industry not in industry_std_asset_growth:
+                    logging.error("No industry std asset growth for %s, please check", industry)
+                    raise Exception("No industry std asset growth for %s, please check" % industry)
+                std_asset_growth = industry_std_asset_growth[industry]
+                inv_ratios[code] = (asset_growth - avg_asset_growth) / std_asset_growth
+            if not inv_ratios:
                 logger.info("No fundamental data for large cap group on %s.", rb_date.strftime("%Y-%m-%d"))
                 continue
-            bm_series = pd.Series(bm_ratios)
-            bm_sorted = bm_series.sort_values(ascending=False)
-            num_selected = int(len(bm_sorted) * 0.3)
-            selected_stocks = bm_sorted.index[:num_selected]
+            inv_series = pd.Series(inv_ratios)
+            inv_sorted = inv_series.sort_values(ascending=True)
+            num_selected_min = int(len(inv_sorted) * 0.3)
+            num_selected_max = int(len(inv_sorted) * 0.7)
+            selected_stocks = inv_sorted.index[num_selected_min:num_selected_max]
             # 确保调仓日的价格无缺失或异常
             if prices.loc[rb_date, selected_stocks].isnull().any():
                 logger.warning("Missing price data for selected stocks on %s; skipping.", rb_date.strftime("%Y-%m-%d"))
@@ -234,7 +288,7 @@ def backtest_strategy(start_date: str, end_date: str):
 
 
     # 输出当日持仓详情到 CSV
-    target_weights.loc[rb_dates].to_csv(f"result/portfolio.csv")
+    target_weights.loc[rb_dates].to_csv(os.path.join(output_dir, output_prefix + "_portfolio.csv"))
 
     # -------------------------------
     # 定义回测所需的回调函数
@@ -318,11 +372,11 @@ def backtest_strategy(start_date: str, end_date: str):
     total_value = pf.value()
     daily_returns = pf.returns()
     # logger.info(pf.stats())
-    total_value.to_csv("result/portfolio_total_value.csv")
-    daily_returns.to_csv("result/portfolio_daily_returns.csv")
+    total_value.to_csv(os.path.join(output_dir, output_prefix + "_total_value.csv"))
+    daily_returns.to_csv(os.path.join(output_dir, output_prefix + "_daily_returns.csv"))
     logger.info("Latest Value: %s", pf.final_value())
     logger.info("Total Return: %s", pf.total_return())
     # 可视化（可选）
     fig = pf.value(group_by=True).vbt.plot(title="Portfolio Value Curve")
-    fig.write_html("result/portfolio_value.html")
+    fig.write_html(os.path.join(output_dir, output_prefix + "_value_plot.html"))
     return pf

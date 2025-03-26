@@ -3,3 +3,5 @@
 /app/*.log
 result/*.*
 result/*.*
+.cache
+result

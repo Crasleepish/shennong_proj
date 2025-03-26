@@ -7,6 +7,7 @@ from app.utils.data_utils import process_in_batches
 import logging
 import pandas as pd
 import datetime
+import akshare as ak
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,33 @@ class StockInfoDao:
             return df
         except Exception as e:
             return pd.DataFrame()
+        
+    def update_all_industry(self):
+        logger.info("update all industry ...")
+        def safe_value(val):
+            if pd.isna(val) or val.strip() == '-':
+                return None 
+            else:
+                return val
+        try:
+            with get_db() as db:
+                # 构造查询条件
+                stock_info_lst = db.query(StockInfo).all()
+                for stock_info in stock_info_lst:
+                    stock_code = stock_info.stock_code
+                    try:
+                        info_df = ak.stock_individual_info_em(symbol=stock_code)
+                    except Exception as e:
+                        logger.error("更新行业信息失败，股票代码：%s，错误信息：%s", stock_code, e)
+                        continue
+                    industry = info_df[info_df["item"] == "行业"].iloc[0]['value']
+                    stock_info.industry = safe_value(industry)
+                    logger.info(f"更新行业信息成功，股票代码：{stock_code}，行业：{industry}")
+                db.commit()
+        except Exception as e:
+            logger.error("更新行业信息失败，错误信息：%s", e)
+            db.rollback()
+            raise e
         
     def delete_all(self):
         try:

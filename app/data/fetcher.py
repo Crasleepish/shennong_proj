@@ -87,6 +87,7 @@ class StockInfoSynchronizer:
         同步数据：将接口返回的新增记录插入到数据库中
         """
         logger.info("Starting synchronization for stock info.")
+        # self.stock_info_dao.update_all_industry()
         df = self.fetch_data()
         if df.empty:
             logger.warning("Fetched data is empty.")
@@ -109,13 +110,25 @@ class StockInfoSynchronizer:
             # 将 DataFrame 中每一行转换为 StockInfo 对象
             new_records = []
             for idx, row in new_data.iterrows():
+                try:
+                    info_df = ak.stock_individual_info_em(symbol=row['code'])
+                except Exception as e:
+                    logger.error("获取行业信息失败，股票代码：%s，错误信息：%s", row['code'], e)
+                    continue
+                industry = safe_value(info_df[info_df["item"] == "行业"].iloc[0]['value'])
+                if industry is not None and industry.strip() == "-":
+                    industry = None
                 record = StockInfo(
                     stock_code=row['code'],
                     stock_name=safe_value(row['name']),
                     listing_date=safe_value(row['ipo_date']),
-                    market=safe_value(row['market'])
+                    market=safe_value(row['market']),
+                    industry=industry
                 )
                 new_records.append(record)
+                if progress_callback:
+                    if idx % 100 == 0:
+                        progress_callback(idx, len(new_records))
             
             # 批量插入新增记录
             self.stock_info_dao.batch_insert(new_records)
@@ -123,9 +136,7 @@ class StockInfoSynchronizer:
             # 将新数据插入到update_flag表中
             for idx, record in enumerate(new_records, start=1):
                 self.update_flag_dao.upsert_one(UpdateFlag(stock_code=record.stock_code, action_update_flag='1', fundamental_update_flag='1'))
-                if progress_callback:
-                    if idx % 100 == 0:
-                        progress_callback(idx, len(new_records))
+                
             logger.info("Inserted %d new records into the database.", len(new_records))
             if progress_callback:
                 progress_callback(len(new_records), len(new_records))

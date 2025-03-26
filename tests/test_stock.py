@@ -25,9 +25,12 @@ def app():
 
 # Example test for the index route
 def test_StockInfoSynchronizer(app):
-    stock_info_synchronizer = StockInfoSynchronizer()
-    stock_info_synchronizer.sync()
-
+    try:
+        stock_info_synchronizer = StockInfoSynchronizer()
+        stock_info_synchronizer.sync()
+    finally:
+        stock_info_dao = StockInfoDao._instance
+        stock_info_dao.delete_all()
 
 @pytest.fixture
 def dummy_stock_list():
@@ -703,3 +706,7 @@ INSERT INTO public.fundamental_data (stock_code,report_date,total_equity,total_a
             fundamental_data_dao.delete_all()
             suspend_data_dao = SuspendDataDao._instance
             suspend_data_dao.delete_all()
+
+def test_update_industry(app):
+	stock_info_dao = StockInfoDao._instance
+	stock_info_dao.update_all_industry()

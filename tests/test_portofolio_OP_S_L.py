@@ -9,7 +9,7 @@ import vectorbt as vbt
 # Use the TestConfig from our config module
 from app.config import TestConfig
 
-from app.backtest.value_strategy import backtest_strategy
+from app.backtest.portofolio_OP_S_L import backtest_strategy
 # Create the Flask app using TestConfig
 @pytest.fixture
 def app():
@@ -68,7 +68,8 @@ def mock_fundamental_df():
     fundamental_df = pd.DataFrame({
         "stock_code": np.repeat(stocks, len(report_dates)),
         "report_date": np.tile(report_dates, len(stocks)),
-        "total_equity": np.random.uniform(1e6, 1e9, size=len(stocks) * len(report_dates))
+        "total_equity": np.random.uniform(1e6, 1e9, size=len(stocks) * len(report_dates)),
+        "net_profit": np.random.uniform(1e5, 1e8, size=len(stocks) * len(report_dates))
     })
     return fundamental_df
 
@@ -102,15 +103,19 @@ def mock_get_fundamental_df():
 def mock_get_suspend_df():
     return mock_suspend_df()
 
+def mock_compute_profit_stock_info_df():
+    return mock_stock_info()
+
 # 单元测试
-@patch("app.backtest.value_strategy.get_suspend_df", side_effect=mock_get_suspend_df)
-@patch("app.backtest.value_strategy.get_fundamental_df", side_effect=mock_get_fundamental_df)
-@patch("app.backtest.value_strategy.get_stock_info_df", side_effect=mock_get_stock_info_df)
-@patch("app.backtest.value_strategy.get_mkt_cap_df", side_effect=mock_get_mkt_cap_df)
-@patch("app.backtest.value_strategy.get_volume_df", side_effect=mock_get_volume_df)
-@patch("app.backtest.value_strategy.get_prices_df", side_effect=mock_get_prices_df)
-@patch("app.backtest.compute_profit.get_stock_info_df", side_effect=mock_get_stock_info_df)
+@patch("app.backtest.portofolio_OP_S_L.get_suspend_df", side_effect=mock_get_suspend_df)
+@patch("app.backtest.portofolio_OP_S_L.get_fundamental_df", side_effect=mock_get_fundamental_df)
+@patch("app.backtest.portofolio_OP_S_L.get_stock_info_df", side_effect=mock_get_stock_info_df)
+@patch("app.backtest.portofolio_OP_S_L.get_mkt_cap_df", side_effect=mock_get_mkt_cap_df)
+@patch("app.backtest.portofolio_OP_S_L.get_volume_df", side_effect=mock_get_volume_df)
+@patch("app.backtest.portofolio_OP_S_L.get_prices_df", side_effect=mock_get_prices_df)
+@patch("app.backtest.compute_profit.get_stock_info_df", side_effect=mock_compute_profit_stock_info_df)
 def test_backtest_strategy(
+    mock_compute_profit_stock_info_df,
     mock_prices_df,
     mock_volume_df, 
     mock_mkt_cap_df,
@@ -131,11 +136,3 @@ def test_backtest_strategy(
     assert portfolio.value().iloc[-1] > 0, "组合最终价值应大于 0"
     assert portfolio.returns().sum() != 0, "组合收益率不应为 0"
     
-    # 验证 CSV 文件是否生成
-    import os
-    assert os.path.exists("result/portfolio_total_value.csv"), "总价值 CSV 文件未生成"
-    assert os.path.exists("result/portfolio_daily_returns.csv"), "每日收益率 CSV 文件未生成"
-    
-    # 清理生成的 CSV 文件
-    os.remove("result/portfolio_total_value.csv")
-    os.remove("result/portfolio_daily_returns.csv")

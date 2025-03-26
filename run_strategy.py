@@ -7,18 +7,41 @@ from app.backtest.portofolio_BM_B_M import backtest_strategy as portofolio_BM_B_
 from app.backtest.portofolio_BM_S_H import backtest_strategy as portofolio_BM_S_H
 from app.backtest.portofolio_BM_B_H import backtest_strategy as portofolio_BM_B_H
 from app.backtest.portofolio_ALL import backtest_strategy as portofolio_ALL
+from app.backtest.portofolio_OP_S_L import backtest_strategy as portofolio_OP_S_L
+from app.backtest.portofolio_OP_B_L import backtest_strategy as portofolio_OP_B_L
+from app.backtest.portofolio_OP_S_M import backtest_strategy as portofolio_OP_S_M
+from app.backtest.portofolio_OP_B_M import backtest_strategy as portofolio_OP_B_M
+from app.backtest.portofolio_OP_S_H import backtest_strategy as portofolio_OP_S_H
+from app.backtest.portofolio_OP_B_H import backtest_strategy as portofolio_OP_B_H
+from app.backtest.portofolio_INV_S_L import backtest_strategy as portofolio_INV_S_L
+from app.backtest.portofolio_INV_B_L import backtest_strategy as portofolio_INV_B_L
+from app.backtest.portofolio_INV_S_M import backtest_strategy as portofolio_INV_S_M
+from app.backtest.portofolio_INV_B_M import backtest_strategy as portofolio_INV_B_M
+from app.backtest.portofolio_INV_S_H import backtest_strategy as portofolio_INV_S_H
+from app.backtest.portofolio_INV_B_H import backtest_strategy as portofolio_INV_B_H
 
 app = create_app()
 
 functions = {
-    0: strategy_1,
+    0: portofolio_ALL,
     1: portofolio_BM_S_L,
     2: portofolio_BM_B_L,
     3: portofolio_BM_S_M,
     4: portofolio_BM_B_M,
     5: portofolio_BM_S_H,
     6: portofolio_BM_B_H,
-    7: portofolio_ALL
+    7: portofolio_OP_S_L, 
+    8: portofolio_OP_B_L,
+    9: portofolio_OP_S_M,
+    10: portofolio_OP_B_M, 
+    11: portofolio_OP_S_H,
+    12: portofolio_OP_B_H,
+    13: portofolio_INV_S_L,
+    14: portofolio_INV_B_L,
+    15: portofolio_INV_S_M,
+    16: portofolio_INV_B_M,
+    17: portofolio_INV_S_H,
+    18: portofolio_INV_B_H
 }
 
 start_date = "2004-12-31"

@@ -9,6 +9,7 @@ class StockInfo(Base):
     stock_name = Column('stock_name', String(50), nullable=False)
     listing_date = Column('listing_date', Date, nullable=False)
     market = Column('market', String(10), nullable=False)
+    industry = Column('industry', String(50), nullable=True)
 
     def __repr__(self):
         return f"<StockInfo(stock_code='{self.stock_code}', stock_name='{self.stock_name}')>"

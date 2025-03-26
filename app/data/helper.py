@@ -82,7 +82,7 @@ def get_prices_df() -> pd.DataFrame:
     """
     df_all = stock_hist_adj_holder.get_stock_hist_adj_all()
     pivot_df = df_all.pivot(index="date", columns="stock_code", values="close")
-    pivot_df.ffill(inplace=True)
+    pivot_df = pivot_df.ffill()
     return pivot_df
 
 def get_volume_df() -> pd.DataFrame:
@@ -104,7 +104,7 @@ def get_volume_df() -> pd.DataFrame:
     """
     df_all = stock_hist_adj_holder.get_stock_hist_adj_all()
     pivot_df = df_all.pivot(index="date", columns="stock_code", values="volume")
-    pivot_df.fillna(0, inplace=True)
+    pivot_df = pivot_df.fillna(0)
     return pivot_df
 
 def get_mkt_cap_df() -> pd.DataFrame:
@@ -126,7 +126,7 @@ def get_mkt_cap_df() -> pd.DataFrame:
     """
     df_all = stock_hist_adj_holder.get_stock_hist_adj_all()
     pivot_df = df_all.pivot(index="date", columns="stock_code", values="mkt_cap")
-    pivot_df.ffill(inplace=True)
+    pivot_df = pivot_df.ffill()
     return pivot_df
 
 def get_stock_info_df() -> pd.DataFrame:
@@ -146,7 +146,7 @@ def get_stock_info_df() -> pd.DataFrame:
     ...
     """
     df = stock_info_holder.get_stock_info_all()
-    df.set_index("stock_code", drop=True, inplace=True)
+    df = df.set_index("stock_code", drop=True)
     return df
 
 def get_fundamental_df() -> pd.DataFrame:
