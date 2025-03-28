@@ -1,19 +1,45 @@
+'''
+---
+
+### **1. 分组步骤**
+1. **按市值分组**：
+   - 使用全市场股票市值的中位数作为分界点，将所有股票分为**小市值（S）**和**大市值（B）**两组。
+2. **按MOM分组**：
+   - 在**小市值（S）**组内，按MOM的30%和70%分位数将股票分为**低MOM（L）**、**中MOM（M）**和**高MOM（H）**三组。
+   - 在**大市值（B）**组内，同样按MOM的30%和70%分位数将股票分为**低MOM（L）**、**中MOM（M）**和**高MOM（H）**三组。
+
+---
+
+### **2. 构建组合**
+- 经过上述分组后，会形成 **2（市值） × 3（MOM） = 6个组合**：
+  - 小市值 + 低MOM（S/L）
+  - 小市值 + 中MOM（S/M）
+  - 小市值 + 高MOM（S/H）
+  - 大市值 + 低MOM（B/L）
+  - 大市值 + 中MOM（B/M）
+  - 大市值 + 高MOM（B/H）
+
+---
+
+### 本组合为小市值 + 高MOM（S/H）
+'''
 from app.data.helper import *
+import os
 import pandas as pd
 import numpy as np
-import datetime
 import vectorbt as vbt
 import logging
 from numba import njit
 from vectorbt.portfolio.enums import Direction, OrderStatus, NoOrder, CallSeqType, SizeType
 from vectorbt.portfolio import nb
-from app.utils.data_utils import calculate_volatility
 
 logger = logging.getLogger(__name__)
 logging.getLogger('numba').setLevel(logging.INFO)
 
 fee_rate = 0.0003
 slippage_rate = 0.0001
+output_dir = r"./result"
+output_prefix = "portofolio_MOM6_S_H"
 
 def get_rebalance_dates(prices: pd.DataFrame, start_date: str, end_date: str) -> pd.DatetimeIndex:
     """
@@ -23,7 +49,7 @@ def get_rebalance_dates(prices: pd.DataFrame, start_date: str, end_date: str) ->
     dates = prices.loc[start_date:end_date].index
     rebalance_dates = []
     for year in sorted(dates.year.unique()):
-        for month in [6, 12]:
+        for month in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]:
             month_dates = dates[(dates.year == year) & (dates.month == month)]
             if not month_dates.empty:
                 rebalance_dates.append(month_dates[-1])
@@ -60,8 +86,8 @@ def filter_universe(prices: pd.DataFrame, volumes: pd.DataFrame, mkt_cap: pd.Dat
     start_vol = rb_date - pd.DateOffset(months=3)
     try:
         price_3m = prices.loc[start_vol:rb_date]
-        returns_3m = price_3m.pct_change().dropna()
-        vol_series = returns_3m.std()  # 计算每只股票的日收益率标准差
+        returns_3m = price_3m.pct_change(fill_method=None).dropna(how='all')
+        vol_series = returns_3m.std().dropna()  # 计算每只股票的日收益率标准差
         vol_threshold = vol_series.quantile(0.9)  # 取90分位数作为阈值
         valid_volatility = set(vol_series[vol_series <= vol_threshold].index)
     except Exception as e:
@@ -83,64 +109,6 @@ def get_latest_fundamental(stock_code: str, rb_date: pd.Timestamp, fundamental_d
     if df.empty:
         return None
     return df.sort_values("report_date").iloc[-1]
-
-def get_ttm_value(stock_code: str, rb_date: pd.Timestamp, fundamental_df: pd.DataFrame, field: str) -> float:
-    """
-    1. 循环遍历满足日期条件的财报（从新到旧）
-    2. 对每个财报尝试计算 TTM
-    3. 若某个财报满足条件则返回，否则继续
-    """
-    # 获取所有满足日期条件的财报（按日期倒序排列）
-    latest_report_date = rb_date - pd.Timedelta(days=120)
-    candidate_reports = fundamental_df[
-        (fundamental_df["stock_code"] == stock_code) &
-        (fundamental_df["report_date"] <= latest_report_date)
-    ].sort_values("report_date", ascending=False)
-    
-    if candidate_reports.empty:
-        return None
-    
-    # 遍历所有候选财报
-    for _, report in candidate_reports.iterrows():
-        report_date = report["report_date"]
-        
-        # Case 1: 如果是 Q4 财报，直接返回
-        if report_date.month == 12:
-            return report[field]
-        
-        # Case 2: 非 Q4 财报，需要计算 TTM
-        current_year = report_date.year
-        current_month = report_date.month
-        
-        # 检查上一年年报是否存在
-        last_annual_date = pd.Timestamp(year=current_year-1, month=12, day=31)
-        last_annual_report = fundamental_df[
-            (fundamental_df["stock_code"] == stock_code) &
-            (fundamental_df["report_date"] == last_annual_date)
-        ]
-        if last_annual_report.empty:
-            continue  # 缺失年报，跳过此财报
-        
-        # 检查去年同期累计值（可能需向前查找多个季度）
-        same_period_last_year = pd.Timestamp(year=current_year-1, month=report_date.month + 1, day=1)
-        same_period_reports = fundamental_df[
-            (fundamental_df["stock_code"] == stock_code) &
-            (fundamental_df["report_date"] < same_period_last_year) &
-            (fundamental_df["report_date"].dt.month == current_month)
-        ]
-        
-        if same_period_reports.empty:
-            continue  # 缺失同期数据，跳过此财报
-        
-        # 取最近一期去年同期累计值
-        last_period_value = same_period_reports.iloc[0][field]
-        
-        # 计算 TTM
-        ttm_value = report[field] + last_annual_report.iloc[0][field] - last_period_value
-        return ttm_value
-    
-    # 所有候选财报均不满足条件
-    return None
 
 def safe_value(val):
     """将 NaN 转换为 None"""
@@ -166,12 +134,11 @@ def backtest_strategy(start_date: str, end_date: str):
     target_weights = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)  # 目标持仓矩阵
     logger.info("Identified %d rebalance dates.", len(rb_dates))
     
-    # 初始化订单矩阵（不再使用权重矩阵）
-    # orders = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
+    # 初始化订单矩阵
     init_cash = 1000000
+    order_sizes = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
     
     # 维护动态持仓状态（用于计算订单）
-    order_sizes = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
     current_positions = pd.Series(0.0, index=prices.columns)  # 当前持仓数量
     segment_mask = np.full((prices.shape[0], 1), False, dtype=bool)
     current_cash = init_cash  # 当前现金
@@ -198,27 +165,44 @@ def backtest_strategy(start_date: str, end_date: str):
                 logger.warning("No market cap data on %s; skipping.", rb_date.strftime("%Y-%m-%d"))
                 continue
         
-            # 大市值组筛选
-            mkt_cap_sorted = mkt_cap_on_date.sort_values(ascending=False)
-            num_large = int(len(mkt_cap_sorted) * 0.5)
-            large_cap_stocks = mkt_cap_sorted.index[:num_large]
-            logger.info("Large cap group count on %s: %d", rb_date.strftime("%Y-%m-%d"), len(large_cap_stocks))
+            # 小市值组筛选
+            mkt_cap_sorted = mkt_cap_on_date.sort_values(ascending=True)
+            num_threslold = int(len(mkt_cap_sorted) * 0.5)
+            large_cap_stocks = mkt_cap_sorted.index[:num_threslold]
+            logger.info("Small cap group count on %s: %d", rb_date.strftime("%Y-%m-%d"), len(large_cap_stocks))
         
-            # B/M筛选
-            bm_ratios = {}
-            for code in large_cap_stocks:
-                current_cap = mkt_cap.loc[rb_date, code]
-                fundamental = get_latest_fundamental(code, rb_date, fundamental_df)
-                if fundamental is not None and current_cap and current_cap != 0:
-                    bm = fundamental["total_equity"] / current_cap
-                    bm_ratios[code] = bm
-            if not bm_ratios:
-                logger.info("No fundamental data for large cap group on %s.", rb_date.strftime("%Y-%m-%d"))
+            # MOM筛选
+            # 计算三个月前的目标日期
+            one_months_ago = rb_date - pd.DateOffset(months=1)
+            seven_months_ago = rb_date - pd.DateOffset(months=7)
+
+            # 找到目标月份最后一个交易日
+            dates = prices.index
+
+            seven_months_ago_dates = dates[(dates.year == seven_months_ago.year) & (dates.month == seven_months_ago.month)]
+            if not seven_months_ago_dates.empty:
+                start_date = seven_months_ago_dates[-1]
+            else:
+                logging.error(f"未能找到 {seven_months_ago.year}-{seven_months_ago.month} 的交易日")
                 continue
-            bm_series = pd.Series(bm_ratios)
-            bm_sorted = bm_series.sort_values(ascending=False)
-            num_selected = int(len(bm_sorted) * 0.3)
-            selected_stocks = bm_sorted.index[:num_selected]
+
+            one_month_ago_dates = dates[(dates.year == one_months_ago.year) & (dates.month == one_months_ago.month)]
+            if not one_month_ago_dates.empty:
+                end_date = one_month_ago_dates[-1]
+            else:
+                logging.error(f"未能找到 {one_months_ago.year}-{one_months_ago.month} 的交易日")
+                continue
+
+            start_price = prices.loc[start_date, large_cap_stocks]
+            end_price = prices.loc[end_date, large_cap_stocks]
+            returns = (end_price - start_price) / start_price
+            returns.dropna(inplace=True)
+
+            # 选择收益率最高的20%股票
+            returns = returns.sort_values(ascending=True)
+            num_high = int(len(returns) * 0.8)
+            selected_stocks = returns.index[num_high:]
+                
             # 确保调仓日的价格无缺失或异常
             if prices.loc[rb_date, selected_stocks].isnull().any():
                 logger.warning("Missing price data for selected stocks on %s; skipping.", rb_date.strftime("%Y-%m-%d"))
@@ -250,7 +234,7 @@ def backtest_strategy(start_date: str, end_date: str):
 
 
     # 输出当日持仓详情到 CSV
-    target_weights.loc[rb_dates].to_csv(f"result/portfolio.csv")
+    target_weights.loc[rb_dates].to_csv(os.path.join(output_dir, output_prefix + "_portfolio.csv"))
 
     # -------------------------------
     # 定义回测所需的回调函数
@@ -334,11 +318,11 @@ def backtest_strategy(start_date: str, end_date: str):
     total_value = pf.value()
     daily_returns = pf.returns()
     # logger.info(pf.stats())
-    total_value.to_csv("result/portfolio_total_value.csv")
-    daily_returns.to_csv("result/portfolio_daily_returns.csv")
+    total_value.to_csv(os.path.join(output_dir, output_prefix + "_total_value.csv"))
+    daily_returns.to_csv(os.path.join(output_dir, output_prefix + "_daily_returns.csv"))
     logger.info("Latest Value: %s", pf.final_value())
     logger.info("Total Return: %s", pf.total_return())
     # 可视化（可选）
     fig = pf.value(group_by=True).vbt.plot(title="Portfolio Value Curve")
-    fig.write_html("result/portfolio_value.html")
+    fig.write_html(os.path.join(output_dir, output_prefix + "_value_plot.html"))
     return pf

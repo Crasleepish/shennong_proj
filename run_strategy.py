@@ -19,6 +19,12 @@ from app.backtest.portofolio_INV_S_M import backtest_strategy as portofolio_INV_
 from app.backtest.portofolio_INV_B_M import backtest_strategy as portofolio_INV_B_M
 from app.backtest.portofolio_INV_S_H import backtest_strategy as portofolio_INV_S_H
 from app.backtest.portofolio_INV_B_H import backtest_strategy as portofolio_INV_B_H
+from app.backtest.portofolio_MOM_S_H import backtest_strategy as portofolio_MOM_S_H
+from app.backtest.portofolio_MOM_B_H import backtest_strategy as portofolio_MOM_B_H
+from app.backtest.portofolio_MOM_S_L import backtest_strategy as portofolio_MOM_S_L
+from app.backtest.portofolio_MOM_B_L import backtest_strategy as portofolio_MOM_B_L
+from app.backtest.portofolio_MOM6_S_H import backtest_strategy as portofolio_MOM6_S_H
+from app.backtest.portofolio_MOM6_S_L import backtest_strategy as portofolio_MOM6_S_L
 
 app = create_app()
 
@@ -41,7 +47,13 @@ functions = {
     15: portofolio_INV_S_M,
     16: portofolio_INV_B_M,
     17: portofolio_INV_S_H,
-    18: portofolio_INV_B_H
+    18: portofolio_INV_B_H,
+    19: portofolio_MOM_S_H,
+    20: portofolio_MOM_B_H,
+    21: portofolio_MOM_S_L,
+    22: portofolio_MOM_B_L,
+    23: portofolio_MOM6_S_H,
+    24: portofolio_MOM6_S_L
 }
 
 start_date = "2004-12-31"
