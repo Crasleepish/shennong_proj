@@ -49,7 +49,7 @@ def get_rebalance_dates(prices: pd.DataFrame, start_date: str, end_date: str) ->
     dates = prices.loc[start_date:end_date].index
     rebalance_dates = []
     for year in sorted(dates.year.unique()):
-        for month in [3, 6, 9, 12]:
+        for month in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]:
             month_dates = dates[(dates.year == year) & (dates.month == month)]
             if not month_dates.empty:
                 rebalance_dates.append(month_dates[-1])
@@ -62,7 +62,7 @@ def filter_universe(prices: pd.DataFrame, volumes: pd.DataFrame, mkt_cap: pd.Dat
       1. 剔除成交量在当日最低 1% 的股票；
       2. 剔除上市未满 1 年的股票；
       3. 剔除停牌或过去 6 个月内发生过停牌且未复牌的股票；
-      4. 剔除过去 3 个月内波动率（标准差）最高的 10% 股票。
+      4. 剔除过去 3 个月内波动率（标准差）最高的 20% 股票。
       
     返回符合条件的股票代码列表。
     """
@@ -88,7 +88,7 @@ def filter_universe(prices: pd.DataFrame, volumes: pd.DataFrame, mkt_cap: pd.Dat
         price_3m = prices.loc[start_vol:rb_date]
         returns_3m = price_3m.pct_change(fill_method=None).dropna(how='all')
         vol_series = returns_3m.std().dropna()  # 计算每只股票的日收益率标准差
-        vol_threshold = vol_series.quantile(0.9)  # 取90分位数作为阈值
+        vol_threshold = vol_series.quantile(0.8)  # 取80分位数作为阈值
         valid_volatility = set(vol_series[vol_series <= vol_threshold].index)
     except Exception as e:
         logger.error("Error calculating volatility filter: %s", e)
@@ -165,28 +165,28 @@ def backtest_strategy(start_date: str, end_date: str):
                 logger.warning("No market cap data on %s; skipping.", rb_date.strftime("%Y-%m-%d"))
                 continue
         
-            # 小市值组筛选
+            # 市值组筛选
             mkt_cap_sorted = mkt_cap_on_date.sort_values(ascending=True)
             num_threslold = int(len(mkt_cap_sorted) * 0.5)
-            large_cap_stocks = mkt_cap_sorted.index[:num_threslold]
-            logger.info("Small cap group count on %s: %d", rb_date.strftime("%Y-%m-%d"), len(large_cap_stocks))
+            selcted_cap_stocks = mkt_cap_sorted.index[:num_threslold]
+            logger.info("Small cap group count on %s: %d", rb_date.strftime("%Y-%m-%d"), len(selcted_cap_stocks))
         
             # MOM筛选
-            # 计算三个月前的目标日期
-            three_months_ago = rb_date - pd.DateOffset(months=3)
-            target_year = three_months_ago.year
-            target_month = three_months_ago.month
+            # 计算一个月前的目标日期
+            one_months_ago = rb_date - pd.DateOffset(months=1)
+            target_year = one_months_ago.year
+            target_month = one_months_ago.month
 
             # 找到目标月份最后一个交易日
             dates = prices.index
             month_dates = dates[(dates.year == target_year) & (dates.month == target_month)]
             if not month_dates.empty:
-                start_date = month_dates[-1]
+                start_trade_date = month_dates[-1]
             else:
                 raise ValueError(f"未能找到 {target_year}-{target_month} 的交易日")
 
-            rb_price = prices.loc[rb_date, large_cap_stocks]
-            start_price = prices.loc[start_date, large_cap_stocks]
+            rb_price = prices.loc[rb_date, selcted_cap_stocks]
+            start_price = prices.loc[start_trade_date, selcted_cap_stocks]
             returns = (rb_price - start_price) / start_price
             returns.dropna(inplace=True)
 

@@ -61,3 +61,49 @@ def calculate_volatility(prices, stock_code, start_date, end_date):
         raise ValueError(f"股票代码 {stock_code} 不存在于数据中")
     except Exception as e:
         raise RuntimeError(f"计算波动率时出错: {str(e)}")
+    
+def calculate_column_volatility(prices_series):
+    """
+    计算指定股票在给定时间窗口内的波动率（日收益率标准差）
+    
+    参数:
+        prices_series (pd.Series): 日行情数据列
+        start_date (str): 起始日期（格式：'YYYY-MM-DD'）
+        end_date (str): 结束日期（格式：'YYYY-MM-DD'）
+        
+    返回:
+        float: 年化波动率（标准差）
+    """
+    try:
+        if len(prices_series) < 2:
+            return pd.NaT
+        
+        # 计算日收益率
+        returns = prices_series.pct_change().dropna()
+        
+        # 计算日波动率并年化（假设252个交易日）
+        daily_volatility = returns.std()
+        annualized_volatility = daily_volatility * np.sqrt(252)
+        
+        return annualized_volatility
+        
+    except Exception as e:
+        return pd.NaT
+    
+
+def get_nearest_data_front(prices: pd.DataFrame, refer_date: str):
+    """
+    prices 是一个索引为日期（Timestamp）的 DataFrame，
+    refer_date 是一个日期字符串，格式为 "yyyy-MM-dd"。
+    
+    返回 prices 中 refer_date 之前的最后一个日期对应的数据行。
+    如果没有符合条件的数据，则返回 None。
+    """
+    # 将日期字符串转换为 Timestamp 对象
+    ref_ts = pd.to_datetime(refer_date, format='%Y-%m-%d')
+    # 筛选出索引小于 refer_date 的所有行
+    subset = prices[prices.index < ref_ts]
+    if subset.empty:
+        return None
+    # 返回最后一行，即最大索引对应的那一行数据
+    return subset.iloc[-1]

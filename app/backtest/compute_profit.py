@@ -43,7 +43,7 @@ def get_ttm_value(stock_code: str, rb_date: pd.Timestamp, fundamental_df: pd.Dat
     candidate_reports = fundamental_df[
         (fundamental_df["stock_code"] == stock_code) &
         (fundamental_df["report_date"] <= latest_report_date) &
-        (fundamental_df["net_profit"].notna())
+        (fundamental_df["operating_profit"].notna())
     ].sort_values("report_date", ascending=False)
     
     if candidate_reports.empty:
@@ -99,9 +99,9 @@ def compute_profit(code, rb_date, fundamental_df):
     """
     try:
         fundamental = get_latest_fundamental(code, rb_date, fundamental_df, ["total_equity"])
-        net_profit = safe_value(get_ttm_value(code, rb_date, fundamental_df, "net_profit"))
-        if fundamental is not None and net_profit is not None and fundamental["total_equity"] != 0:
-            return net_profit / fundamental["total_equity"]
+        operating_profit = safe_value(get_ttm_value(code, rb_date, fundamental_df, "operating_profit"))
+        if fundamental is not None and operating_profit is not None and fundamental["total_equity"] != 0:
+            return operating_profit / fundamental["total_equity"]
         else:
             return None
     except Exception as e:

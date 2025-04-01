@@ -25,8 +25,20 @@ from app.backtest.portofolio_MOM_S_L import backtest_strategy as portofolio_MOM_
 from app.backtest.portofolio_MOM_B_L import backtest_strategy as portofolio_MOM_B_L
 from app.backtest.portofolio_MOM6_S_H import backtest_strategy as portofolio_MOM6_S_H
 from app.backtest.portofolio_MOM6_S_L import backtest_strategy as portofolio_MOM6_S_L
+from app.backtest.portofolio_VLT_S_L import backtest_strategy as portofolio_VLT_S_L
+from app.backtest.portofolio_VLT_B_L import backtest_strategy as portofolio_VLT_B_L
+from app.backtest.portofolio_VLT_S_H import backtest_strategy as portofolio_VLT_S_H
+from app.backtest.portofolio_VLT_B_H import backtest_strategy as portofolio_VLT_B_H
+from app.data.helper import get_index_daily_return
 
 app = create_app()
+
+def csi_index_zzqz(start_date: str, end_date: str):
+    df = get_index_daily_return("000985")
+    df = df.sort_index()
+    df = df.loc[start_date:end_date]
+    df.to_csv(r"./result/csi_index_zzqz.csv", index=True)
+    return df
 
 functions = {
     0: portofolio_ALL,
@@ -53,7 +65,12 @@ functions = {
     21: portofolio_MOM_S_L,
     22: portofolio_MOM_B_L,
     23: portofolio_MOM6_S_H,
-    24: portofolio_MOM6_S_L
+    24: portofolio_MOM6_S_L,
+    25: portofolio_VLT_S_L,
+    26: portofolio_VLT_B_L,
+    27: portofolio_VLT_S_H,
+    28: portofolio_VLT_B_H,
+    29: csi_index_zzqz
 }
 
 start_date = "2004-12-31"

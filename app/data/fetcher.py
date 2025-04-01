@@ -351,8 +351,8 @@ class StockHistSynchronizer:
                         continue
 
                     tasks.append(self.loop.create_task(self.process_data_unadj(stock_code, market, start_date, current_date, progress_callback)))
-                    if tasks:
-                        self.loop.run_until_complete(asyncio.gather(*tasks))
+                if tasks:
+                    self.loop.run_until_complete(asyncio.gather(*tasks))
         finally:
             self.terminate()
             

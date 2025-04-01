@@ -8,6 +8,7 @@ from app.config import Config
 from app.backtest.value_strategy import get_ttm_value  # 替换为实际模块名
 from app.backtest.compute_asset_growth import compute_asset_growth
 from app.data.helper import *
+from app.backtest.compute_leverageratio import compute_leverage_ratio
 
 
 @pytest.fixture
@@ -80,3 +81,7 @@ def test_missing_same_period(sample_data):
 def test_compute_asset_growth(app):
     fundamental_df = get_fundamental_df()
     compute_asset_growth('002005', datetime(2004, 12, 31), fundamental_df)
+
+def test_compute_leverage_ratio(app):
+    fundamental_df = get_fundamental_df()
+    compute_leverage_ratio("601398", datetime(2008, 12, 31), fundamental_df)

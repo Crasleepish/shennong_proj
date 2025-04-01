@@ -4,24 +4,24 @@
 ### **1. 分组步骤**
 1. **按市值分组**：
    - 使用全市场股票市值的中位数作为分界点，将所有股票分为**小市值（S）**和**大市值（B）**两组。
-2. **按MOM分组**：
-   - 在**小市值（S）**组内，按MOM的30%和70%分位数将股票分为**低MOM（L）**、**中MOM（M）**和**高MOM（H）**三组。
-   - 在**大市值（B）**组内，同样按MOM的30%和70%分位数将股票分为**低MOM（L）**、**中MOM（M）**和**高MOM（H）**三组。
+2. **按VLT分组**：
+   - 在**小市值（S）**组内，按VLT的30%和70%分位数将股票分为**低VLT（L）**、**中VLT（M）**和**高VLT（H）**三组。
+   - 在**大市值（B）**组内，同样按VLT的30%和70%分位数将股票分为**低VLT（L）**、**中VLT（M）**和**高VLT（H）**三组。
 
 ---
 
 ### **2. 构建组合**
-- 经过上述分组后，会形成 **2（市值） × 3（MOM） = 6个组合**：
-  - 小市值 + 低MOM（S/L）
-  - 小市值 + 中MOM（S/M）
-  - 小市值 + 高MOM（S/H）
-  - 大市值 + 低MOM（B/L）
-  - 大市值 + 中MOM（B/M）
-  - 大市值 + 高MOM（B/H）
+- 经过上述分组后，会形成 **2（市值） × 3（VLT） = 6个组合**：
+  - 小市值 + 低VLT（S/L）
+  - 小市值 + 中VLT（S/M）
+  - 小市值 + 高VLT（S/H）
+  - 大市值 + 低VLT（B/L）
+  - 大市值 + 中VLT（B/M）
+  - 大市值 + 高VLT（B/H）
 
 ---
 
-### 本组合为小市值 + 低MOM（S/L）
+### 本组合为小市值 + 低VLT（S/L）
 '''
 from app.data.helper import *
 import os
@@ -32,6 +32,8 @@ import logging
 from numba import njit
 from vectorbt.portfolio.enums import Direction, OrderStatus, NoOrder, CallSeqType, SizeType
 from vectorbt.portfolio import nb
+from .compute_asset_growth import compute_and_cache_asset_growth, compute_and_cache_industry_avg_asset_growth
+from app.utils.data_utils import calculate_column_volatility
 
 logger = logging.getLogger(__name__)
 logging.getLogger('numba').setLevel(logging.INFO)
@@ -39,7 +41,7 @@ logging.getLogger('numba').setLevel(logging.INFO)
 fee_rate = 0.0003
 slippage_rate = 0.0001
 output_dir = r"./result"
-output_prefix = "portofolio_MOM_S_L"
+output_prefix = "portofolio_VLT_S_L"
 
 def get_rebalance_dates(prices: pd.DataFrame, start_date: str, end_date: str) -> pd.DatetimeIndex:
     """
@@ -61,20 +63,18 @@ def filter_universe(prices: pd.DataFrame, volumes: pd.DataFrame, mkt_cap: pd.Dat
     在给定再平衡日 rb_date 下，过滤股票：
       1. 剔除成交量在当日最低 1% 的股票；
       2. 剔除上市未满 1 年的股票；
-      3. 剔除停牌或过去 6 个月内发生过停牌且未复牌的股票；
-      4. 剔除过去 3 个月内波动率（标准差）最高的 20% 股票。
-      
+      3. 剔除停牌或过去 6 个月内发生过停牌的股票；
     返回符合条件的股票代码列表。
     """
-    # 1. 成交量过滤：使用当日成交量数据
+    # a. 成交量过滤：当日成交量
     vol = volumes.loc[rb_date]
     threshold = vol.quantile(0.01)
     valid_volume = set(vol[vol > threshold].index)
     
-    # 2. 上市时间过滤：股票上市时间至少在 rb_date 前 1 年
+    # b. 上市时间过滤：上市时间至少在 rb_date 前 1 年
     valid_listing = set(stock_info.index[stock_info["listing_date"] <= (rb_date - pd.DateOffset(years=1))])
     
-    # 3. 停牌过滤：排除过去 6 个月内（包括当日）停牌且未复牌的股票
+    # c. 停牌过滤：假设 suspend_df 包含所有停牌记录，排除过去 6 个月内（包括当日）停牌且未复牌的股票
     six_months_ago = rb_date - pd.DateOffset(months=6)
     recent_suspend = suspend_df[(suspend_df["suspend_date"] >= six_months_ago) & (suspend_df["suspend_date"] <= rb_date)]
     suspended_stocks = recent_suspend[
@@ -82,20 +82,7 @@ def filter_universe(prices: pd.DataFrame, volumes: pd.DataFrame, mkt_cap: pd.Dat
     ]["stock_code"].unique()
     valid_suspension = set(prices.columns) - set(suspended_stocks)
     
-    # 4. 波动率过滤：计算过去3个月内的日收益率标准差（波动率），剔除波动率最高的10%
-    start_vol = rb_date - pd.DateOffset(months=3)
-    try:
-        price_3m = prices.loc[start_vol:rb_date]
-        returns_3m = price_3m.pct_change(fill_method=None).dropna(how='all')
-        vol_series = returns_3m.std().dropna()  # 计算每只股票的日收益率标准差
-        vol_threshold = vol_series.quantile(0.8)  # 取80分位数作为阈值
-        valid_volatility = set(vol_series[vol_series <= vol_threshold].index)
-    except Exception as e:
-        logger.error("Error calculating volatility filter: %s", e)
-        valid_volatility = set(prices.columns)
-    
-    # 综合所有条件
-    valid = valid_volume & valid_listing & valid_suspension & valid_volatility
+    valid = valid_volume & valid_listing & valid_suspension
     return list(valid)
 
 def get_latest_fundamental(stock_code: str, rb_date: pd.Timestamp, fundamental_df: pd.DataFrame) -> pd.Series:
@@ -103,7 +90,7 @@ def get_latest_fundamental(stock_code: str, rb_date: pd.Timestamp, fundamental_d
     对于给定股票和再平衡日期，从 fundamental_df 中选取报告期不超过 rb_date 的90天前的最新记录，
     返回一行 Series，包含 total_equity 等基本面数据；若不存在则返回 None。
     """
-    latest_report_date = rb_date - pd.Timedelta(days=90)
+    latest_report_date = rb_date - pd.Timedelta(days=120)
     df = fundamental_df[fundamental_df["stock_code"] == stock_code]
     df = df[df["report_date"] <= latest_report_date]
     if df.empty:
@@ -168,34 +155,23 @@ def backtest_strategy(start_date: str, end_date: str):
             # 市值组筛选
             mkt_cap_sorted = mkt_cap_on_date.sort_values(ascending=True)
             num_threslold = int(len(mkt_cap_sorted) * 0.5)
-            selcted_cap_stocks = mkt_cap_sorted.index[:num_threslold]
-            logger.info("Small cap group count on %s: %d", rb_date.strftime("%Y-%m-%d"), len(selcted_cap_stocks))
+            cap_selected_stocks = mkt_cap_sorted.index[:num_threslold]
+            logger.info("Small cap group count on %s: %d", rb_date.strftime("%Y-%m-%d"), len(cap_selected_stocks))
         
-            # MOM筛选
-            # 计算一个月前的目标日期
-            one_months_ago = rb_date - pd.DateOffset(months=1)
-            target_year = one_months_ago.year
-            target_month = one_months_ago.month
-
-            # 找到目标月份最后一个交易日
-            dates = prices.index
-            month_dates = dates[(dates.year == target_year) & (dates.month == target_month)]
-            if not month_dates.empty:
-                start_trade_date = month_dates[-1]
-            else:
-                raise ValueError(f"未能找到 {target_year}-{target_month} 的交易日")
-
-            rb_price = prices.loc[rb_date, selcted_cap_stocks]
-            start_price = prices.loc[start_trade_date, selcted_cap_stocks]
-            returns = (rb_price - start_price) / start_price
-            returns.dropna(inplace=True)
-
-            # 选择收益率最低的20%股票
-            returns = returns.sort_values(ascending=True)
-            num_low = int(len(returns) * 0.2)
-            num_high = int(len(returns) * 0.8)
-            selected_stocks = returns.index[:num_low]
-                
+            # VLT筛选
+            # 先做行业中性化处理
+            # 计算中性化后的盈利能力
+            # calculate_volatility(prices, code, start_date, end_date)
+            one_year_ago = rb_date - pd.DateOffset(years=1)
+            price_series = prices.loc[one_year_ago:rb_date, cap_selected_stocks]
+            volatility_series = price_series.apply(lambda col: calculate_column_volatility(col))
+            volatility_series = volatility_series.dropna()
+            if volatility_series.empty:
+                logger.info("No volatility_dict on %s.", rb_date.strftime("%Y-%m-%d"))
+                continue
+            vlt_sorted = volatility_series.sort_values(ascending=True)
+            num_selected = int(len(vlt_sorted) * 0.2)
+            selected_stocks = vlt_sorted.index[:num_selected]
             # 确保调仓日的价格无缺失或异常
             if prices.loc[rb_date, selected_stocks].isnull().any():
                 logger.warning("Missing price data for selected stocks on %s; skipping.", rb_date.strftime("%Y-%m-%d"))

@@ -215,10 +215,16 @@ def backtest_strategy(start_date: str, end_date: str):
             cap_selected_stocks = mkt_cap_sorted.index[num_threslold:]
             logger.info("Small cap group count on %s: %d", rb_date.strftime("%Y-%m-%d"), len(cap_selected_stocks))
         
-            # OP筛选
-            # 先做行业中性化处理
+            # quality筛选
+            # 定义缓存路径
             profitability_cache = f'.cache/profitability_{rb_date}.csv'
-            industry_cache = f'.cache/industry_profits_{rb_date}.csv'
+            industry_profit_cache = f'.cache/industry_profits_{rb_date}.csv'
+            cash_flow_quality_cache = f'.cache/cash_flow_quality_{rb_date}.csv'
+            industry_cash_flow_quality_cache = f'.cache/industry_cash_flow_quality_{rb_date}.csv'
+            leverage_cache = f'.cache/leverage_{rb_date}.csv'
+            industry_leverage_cache = f'.cache/industry_leverage_{rb_date}.csv'
+
+            # 加载或计算盈利能力
             if os.path.exists(profitability_cache):
                 logging.info("Loading cached profitability data from %s", profitability_cache)
                 profits_df = pd.read_csv(profitability_cache, dtype={'stock_code': str, 'industry': str, 'profitability': 'float64'})
@@ -226,31 +232,75 @@ def backtest_strategy(start_date: str, end_date: str):
             else:
                 profits_df, profits_dict = compute_and_cache_profitability(rb_date, fundamental_df)
 
-            if os.path.exists(industry_cache):
-                logging.info("Loading cached industry avg profit data from %s", industry_cache)
-                industry_avg_df = pd.read_csv(industry_cache, dtype={'industry': str, 'avg_profitability': 'float64'})
+            if os.path.exists(industry_profit_cache):
+                logging.info("Loading cached industry avg profit data from %s", industry_profit_cache)
+                industry_avg_df = pd.read_csv(industry_profit_cache, dtype={'industry': str, 'avg_profitability': 'float64', 'std_profitability': 'float64'})
                 industry_avg_profit = industry_avg_df.set_index('industry')['avg_profitability'].to_dict()
+                industry_std_profit = industry_avg_df.set_index('industry')['std_profitability'].to_dict()
             else:
-                industry_avg_profit = compute_and_cache_industry_avg_profit(profits_df, rb_date)
-            # 计算中性化后的盈利能力
-            op_ratios = {}
+                industry_avg_profit, industry_std_profit = compute_and_cache_industry_avg_profit(profits_df, rb_date)
+
+            # 加载或计算现金流质量
+            if os.path.exists(cash_flow_quality_cache):
+                logging.info("Loading cached cash flow quality data from %s", cash_flow_quality_cache)
+                cash_flow_df = pd.read_csv(cash_flow_quality_cache, dtype={'stock_code': str, 'industry': str, 'cash_flow_quality': 'float64'})
+                cash_flow_dict = cash_flow_df.set_index('stock_code')['cash_flow_quality'].to_dict()
+            else:
+                cash_flow_df, cash_flow_dict = compute_and_cache_cash_flow_quality(rb_date, fundamental_df)
+
+            if os.path.exists(industry_cash_flow_quality_cache):
+                logging.info("Loading cached industry avg cash flow quality data from %s", industry_cash_flow_quality_cache)
+                industry_cf_df = pd.read_csv(industry_cash_flow_quality_cache, dtype={'industry': str, 'avg_cash_flow_quality': 'float64', 'std_cash_flow_quality': 'float64'})
+                industry_avg_cash_flow = industry_cf_df.set_index('industry')['avg_cash_flow_quality'].to_dict()
+                industry_std_cash_flow = industry_cf_df.set_index('industry')['std_cash_flow_quality'].to_dict()
+            else:
+                industry_avg_cash_flow, industry_std_cash_flow = compute_and_cache_industry_avg_cash_flow_quality(cash_flow_df, rb_date)
+
+            # 加载或计算资产负债率
+            if os.path.exists(leverage_cache):
+                logging.info("Loading cached leverage data from %s", leverage_cache)
+                leverage_df = pd.read_csv(leverage_cache, dtype={'stock_code': str, 'industry': str, 'leverage_ratio': 'float64'})
+                leverage_dict = leverage_df.set_index('stock_code')['leverage_ratio'].to_dict()
+            else:
+                leverage_df, leverage_dict = compute_and_cache_leverage(rb_date, fundamental_df)
+
+            if os.path.exists(industry_leverage_cache):
+                logging.info("Loading cached industry avg leverage data from %s", industry_leverage_cache)
+                industry_leverage_df = pd.read_csv(industry_leverage_cache, dtype={'industry': str, 'avg_leverage_ratio': 'float64', 'std_leverage_ratio': 'float64'})
+                industry_avg_leverage = industry_leverage_df.set_index('industry')['avg_leverage_ratio'].to_dict()
+                industry_std_leverage = industry_leverage_df.set_index('industry')['std_leverage_ratio'].to_dict()
+            else:
+                industry_avg_leverage, industry_std_leverage = compute_and_cache_industry_avg_leverage(leverage_df, rb_date)
+
+            # 计算综合质量因子（Z-score标准化处理）
+            quality_ratios = {}
             for code in cap_selected_stocks:
-                if code not in profits_dict:
+                if code not in profits_dict or code not in cash_flow_dict or code not in leverage_dict:
                     continue
-                net_profit = profits_dict[code]
                 industry = stock_info.loc[code, 'industry']
-                if industry not in industry_avg_profit:
-                    logging.error("No industry avg profit for %s, please check", industry)
-                    raise Exception("No industry avg profit for %s, please check" % industry)
-                avg_profit = industry_avg_profit[industry]
-                op_ratios[code] = net_profit - avg_profit
-            if not op_ratios:
+                if industry is None or pd.isna(industry) or industry == '':
+                    continue
+                if (industry not in industry_avg_profit or industry not in industry_avg_cash_flow or 
+                    industry not in industry_avg_leverage):
+                    logging.error("Missing industry data for %s, please check", industry)
+                    raise Exception("Missing industry data for %s, please check" % industry)
+
+                neutral_profit = (profits_dict[code] - industry_avg_profit[industry]) / industry_std_profit[industry]
+                neutral_cash_flow = (cash_flow_dict[code] - industry_avg_cash_flow[industry]) / industry_std_cash_flow[industry]
+                neutral_leverage = (leverage_dict[code] - industry_avg_leverage[industry]) / industry_std_leverage[industry]
+
+                quality_value = neutral_profit + neutral_cash_flow - neutral_leverage
+
+                quality_ratios[code] = quality_value
+
+            if not quality_ratios:
                 logger.info("No fundamental data for large cap group on %s.", rb_date.strftime("%Y-%m-%d"))
-                continue
-            op_series = pd.Series(op_ratios)
-            op_sorted = op_series.sort_values(ascending=True)
-            num_selected_max = int(len(op_sorted) * 0.7)
-            selected_stocks = op_sorted.index[num_selected_max:]
+
+            quality_series = pd.Series(quality_ratios)
+
+            quality_sorted = quality_series.sort_values(ascending=True)
+            num_selected_max = int(len(quality_sorted) * 0.7)
+            selected_stocks = quality_sorted.index[num_selected_max:]
             # 确保调仓日的价格无缺失或异常
             if prices.loc[rb_date, selected_stocks].isnull().any():
                 logger.warning("Missing price data for selected stocks on %s; skipping.", rb_date.strftime("%Y-%m-%d"))
