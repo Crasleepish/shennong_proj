@@ -5,6 +5,7 @@ import logging
 # 导入各同步器（注意根据实际项目的模块路径调整）
 from app.data.fetcher import stock_info_synchronizer, stock_hist_synchronizer, stock_adj_hist_synchronizer, company_action_synchronizer, fundamental_data_synchronizer, suspend_data_synchronizer
 from app.data.index_fetcher import index_info_synchronizer, index_hist_synchronizer
+from app.data.fund_fetcher import fund_info_synchronizer, fund_hist_synchronizer
 from app.data.cninfo_fetcher import cninfo_stock_share_change_fetcher
 from app.dao.task_record_dao import task_record_dao
 from app.utils.async_task import launch_background_task
@@ -457,4 +458,72 @@ def sync_index_hist():
         return jsonify({"status": "success", "task_id": task_id, "message": "Task started"}), 200
     except Exception as e:
         logger.exception("Error creating index hist sync task.")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    
+
+@fin_data_bp.route("/fund_info/sync", methods=["POST"])
+def sync_fund_info():
+    """
+    同步基金基本信息数据
+    """
+    try:
+        # 创建任务记录（初始状态为 RUNNING，进度为 0）
+        new_task = TaskRecord(
+            task_type="FUND_INFO_SYNC",
+            task_status="RUNNING",
+            progress_current=0,
+            progress_total=0,
+            message="Task started."
+        )
+        new_task = task_dao.insert(new_task)
+        task_id = new_task.id
+        logger.info("Created task id %d for fund info data sync.", task_id)
+
+        # 定义进度回调函数
+        progress_cb = make_progress_callback(task_id)
+
+        # 定义后台任务函数
+        def task_func():
+            fund_info_synchronizer.sync(progress_callback=progress_cb)
+
+        # 启动后台任务
+        launch_background_task(task_id, task_func)
+
+        return jsonify({"status": "success", "task_id": task_id, "message": "Task started"}), 200
+    except Exception as e:
+        logger.exception("Error creating fund info sync task")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@fin_data_bp.route("/fund_hist/sync", methods=["POST"])
+def sync_fund_hist():
+    """
+    创建一个同步股票历史数据的任务，并启动同步。
+    请求参数（JSON）中可包含 task_type（例如 "FUND_HIST_SYNC"），
+    此处示例中直接固定为同步无复权数据。
+    """
+    try:
+        # 创建任务记录（初始状态为 RUNNING，进度为 0）
+        new_task = TaskRecord(
+            task_type="FUND_HIST_SYNC",
+            task_status="RUNNING",
+            progress_current=0,
+            progress_total=0,
+            message="Task started."
+        )
+        new_task = task_dao.insert(new_task)
+        task_id = new_task.id
+        logger.info("Created task id %d for fund historical data sync.", task_id)
+
+        # 定义进度回调函数
+        progress_cb = make_progress_callback(task_id)
+
+        def task_func():
+            fund_hist_synchronizer.sync(progress_callback=progress_cb)
+
+        # 启动后台任务
+        launch_background_task(task_id, task_func)
+
+        return jsonify({"status": "success", "task_id": task_id, "message": "Task started"}), 200
+    except Exception as e:
+        logger.exception("Error creating fund hist sync task.")
         return jsonify({"status": "error", "message": str(e)}), 500
