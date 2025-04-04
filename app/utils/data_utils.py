@@ -1,6 +1,7 @@
 from typing import List, Callable, Any
 import pandas as pd
 import numpy as np
+from datetime import datetime
 
 def process_in_batches(data_list: List[Any], 
                        func: Callable[[List[Any]], Any], 
@@ -107,3 +108,22 @@ def get_nearest_data_front(prices: pd.DataFrame, refer_date: str):
         return None
     # 返回最后一行，即最大索引对应的那一行数据
     return subset.iloc[-1]
+
+def format_date(date_str):
+    """
+    将日期字符串转换为 YYYYMMDD 格式的字符串。
+    
+    参数:
+        date_str (str): 日期字符串，格式为 "YYYY-MM-DD"
+        
+    返回:
+        str: YYYYMMDD 格式的日期字符串，如果解析失败则返回 "invaliddate"
+    """
+    try:
+        # 尝试解析日期字符串（格式：YYYY-MM-DD）
+        date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+        # 转换为 YYYYMMDD 格式
+        return date_obj.strftime("%Y%m%d")
+    except ValueError:
+        # 如果解析失败，返回 "invaliddate"
+        return "invaliddate"

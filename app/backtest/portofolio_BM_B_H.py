@@ -32,13 +32,14 @@ import logging
 from numba import njit
 from vectorbt.portfolio.enums import Direction, OrderStatus, NoOrder, CallSeqType, SizeType
 from vectorbt.portfolio import nb
+from app.utils.data_utils import format_date
 
 logger = logging.getLogger(__name__)
 logging.getLogger('numba').setLevel(logging.INFO)
 
 fee_rate = 0.0003
 slippage_rate = 0.0001
-output_dir = r"./result"
+output_dir = r"./bt_result"
 output_prefix = "portofolio_BM_B_H"
 
 def get_rebalance_dates(prices: pd.DataFrame, start_date: str, end_date: str) -> pd.DatetimeIndex:
@@ -202,7 +203,7 @@ def backtest_strategy(start_date: str, end_date: str):
 
 
     # 输出当日持仓详情到 CSV
-    target_weights.loc[rb_dates].to_csv(os.path.join(output_dir, output_prefix + "_portfolio.csv"))
+    target_weights.loc[rb_dates].to_csv(os.path.join(output_dir, format_date(end_date), output_prefix + "_portfolio.csv"))
 
     # -------------------------------
     # 定义回测所需的回调函数
@@ -286,11 +287,11 @@ def backtest_strategy(start_date: str, end_date: str):
     total_value = pf.value()
     daily_returns = pf.returns()
     # logger.info(pf.stats())
-    total_value.to_csv(os.path.join(output_dir, output_prefix + "_total_value.csv"))
-    daily_returns.to_csv(os.path.join(output_dir, output_prefix + "_daily_returns.csv"))
+    total_value.to_csv(os.path.join(output_dir, format_date(end_date), output_prefix + "_total_value.csv"))
+    daily_returns.to_csv(os.path.join(output_dir, format_date(end_date), output_prefix + "_daily_returns.csv"))
     logger.info("Latest Value: %s", pf.final_value())
     logger.info("Total Return: %s", pf.total_return())
     # 可视化（可选）
     fig = pf.value(group_by=True).vbt.plot(title="Portfolio Value Curve")
-    fig.write_html(os.path.join(output_dir, output_prefix + "_value_plot.html"))
+    fig.write_html(os.path.join(output_dir, format_date(end_date), output_prefix + "_value_plot.html"))
     return pf

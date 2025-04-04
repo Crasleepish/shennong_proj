@@ -73,8 +73,8 @@ functions = {
     29: csi_index_zzqz
 }
 
-start_date = "2004-12-31"
-end_date = "2025-03-18"
+start_date = "2024-12-31"
+end_date = "2025-03-31"
 
 def list_functions():
     """列出所有可用的函数及其序号"""

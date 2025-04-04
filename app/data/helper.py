@@ -1,5 +1,6 @@
 from app.dao.stock_info_dao import StockHistAdjDao, StockInfoDao, FundamentalDataDao, SuspendDataDao
 from app.dao.index_info_dao import IndexInfoDao, IndexHistDao
+from app.dao.fund_info_dao import FundInfoDao, FundHistDao
 import pandas as pd
 
 class StockHistAdjHolder:
@@ -83,6 +84,28 @@ class IndexHistHolder:
         return index_hist_dao.select_dataframe_by_code(index_code)
 
 index_hist_holder = IndexHistHolder()
+
+
+class FundHistHolder:
+
+    fund_hist_all = None
+
+    def __init__(self):
+        pass
+
+    def get_fund_hist_all(self):
+        if self.fund_hist_all is None:
+            fund_hist_dao = FundHistDao._instance
+            self.fund_hist_all = fund_hist_dao.select_dataframe_all()
+            self.fund_hist_all["date"] = pd.to_datetime(self.fund_hist_all["date"], errors="coerce")
+        return self.fund_hist_all
+    
+    def get_fund_hist_by_code(self, fund_code: str) -> pd.DataFrame:
+        fund_hist_dao = FundHistDao._instance
+        return fund_hist_dao.select_dataframe_by_code(fund_code)
+
+fund_hist_holder = FundHistHolder()
+
 
 def get_prices_df() -> pd.DataFrame:
     """
@@ -218,4 +241,13 @@ def get_index_daily_return(index_code: str) -> pd.DataFrame:
     df['change_percent'] = df['change_percent'] / 100.0
     df = df.rename(columns={'change_percent': 'daily_return'})
     df = df.set_index('date', drop=True)
+    return df
+
+def get_fund_daily_return(fund_code: str) -> pd.DataFrame:
+    """
+    返回基金历史每日回报率：
+    包含字段：date, daily_return
+    """
+    df = fund_hist_holder.get_fund_hist_by_code(fund_code)
+    df['date'] = pd.to_datetime(df['date'], errors="coerce")
     return df
