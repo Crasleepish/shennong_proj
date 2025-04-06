@@ -11,14 +11,14 @@ from types import SimpleNamespace
 from app.database import get_db
 
 # Use the TestConfig from our config module
-from app.config import TestConfig
+from app.config import TestConfig, Config
 from app.dao.stock_info_dao import StockInfoDao, StockHistUnadjDao, StockHistAdjDao, FundamentalDataDao, SuspendDataDao, StockShareChangeCNInfoDao, CompanyActionDao, FutureTaskDao
-from app.data.helper import get_prices_df
+from app.data.helper import get_prices_df, get_fund_prices_by_code_list, get_fund_fees_by_code_list
 
 # Create the Flask app using TestConfig
 @pytest.fixture
 def app():
-    app = create_app(config_class=TestConfig)
+    app = create_app(config_class=Config)
     # Note: since our app's init_db() was already called, we assume the tables are created.
     # If necessary, you could call init_db() again here.
     yield app
@@ -710,3 +710,13 @@ INSERT INTO public.fundamental_data (stock_code,report_date,total_equity,total_a
 def test_update_industry(app):
 	stock_info_dao = StockInfoDao._instance
 	stock_info_dao.update_all_industry()
+    
+def test_get_fund_prices_by_code_list(app):
+    code_list = ['008115', '019919', '018733']
+    df = get_fund_prices_by_code_list(code_list, '2024-03-01', '2025-01-05')
+    print(df)
+    
+def test_get_fund_fees_by_code_list(app):
+    code_list = ['008115', '019919', '018733']
+    fees_dict = get_fund_fees_by_code_list(code_list)
+    print(fees_dict)

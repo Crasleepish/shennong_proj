@@ -1,0 +1,139 @@
+import numpy as np
+import pandas as pd
+from scipy.optimize import minimize
+import sys
+import os
+import akshare as ak
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from app.dao.fund_info_dao import FundInfoDao
+from app.data.helper import get_fund_daily_return, get_index_daily_return
+from app import create_app
+
+app = create_app()
+
+# 假设输入数据格式：
+# df_rf: DataFrame, 包含两列 ['date', 'daily_return']（无风险利率）
+# df_list: 包含N个DataFrame的列表，每个DataFrame两列 ['date', 'daily_return']（资产收益率）
+
+def max_sharpe_portfolio(df_list, df_rf):
+    """
+    构建不允许做空条件下夏普比率最大的投资组合
+    
+    参数:
+        df_list: 包含N个资产历史收益率的DataFrame列表
+        df_rf: 无风险利率的DataFrame
+    
+    返回:
+        dict: 包含最优权重、预期收益率、波动率和夏普比率
+    """
+    # 检查输入
+    if len(df_list) < 2:
+        raise ValueError("至少需要2项资产")
+    
+    # 1. 合并数据（对齐日期）
+    df_merged = df_rf.rename(columns={'daily_return': 'rf'})
+    for i, df in enumerate(df_list):
+        df_merged = df_merged.merge(
+            df.rename(columns={'daily_return': f'asset_{i}'}),
+            on='date', how='inner'
+        )
+    
+    # 2. 提取收益率数据（去掉日期和无风险利率列）
+    df_merged = df_merged.ffill().dropna()
+    returns = df_merged.drop(columns=['date', 'rf']).values
+    rf_daily = df_merged['rf'].mean()  # 平均无风险利率
+    
+    # 3. 计算预期收益率和协方差矩阵
+    mu = np.mean(returns, axis=0)  # 各资产平均收益率
+    cov = np.cov(returns, rowvar=False)  # 协方差矩阵
+    
+    # 4. 定义优化问题（最大化夏普比率 = 最小化负夏普比率）
+    def negative_sharpe_ratio(weights):
+        port_return = np.dot(weights, mu)
+        port_vol = np.sqrt(np.dot(weights.T, np.dot(cov, weights)))
+        return -(port_return - rf_daily) / port_vol  # 负号因为最小化
+    
+    n_assets = len(mu)
+    constraints = (
+        {'type': 'eq', 'fun': lambda w: np.sum(w) - 1},  # 权重和为1
+    )
+    bounds = tuple((0, 1) for _ in range(n_assets))  # 不允许做空
+    
+    # 初始猜测（等权重）
+    init_weights = np.ones(n_assets) / n_assets
+    
+    # 优化
+    result = minimize(
+        negative_sharpe_ratio,
+        init_weights,
+        method='SLSQP',
+        bounds=bounds,
+        constraints=constraints,
+    )
+    
+    if not result.success:
+        raise ValueError("优化失败: " + result.message)
+    
+    optimal_weights = result.x
+    
+    # 计算组合性能
+    port_return = np.dot(optimal_weights, mu)
+    port_vol = np.sqrt(np.dot(optimal_weights.T, np.dot(cov, optimal_weights)))
+    sharpe = (port_return - rf_daily) / port_vol
+    
+    return {
+        'weights': optimal_weights,
+        'expected_return': port_return,
+        'volatility': port_vol,
+        'sharpe_ratio': sharpe
+    }
+
+def prepare_date(code_list: list, end_date: str):
+    shibor_data = ak.rate_interbank(market="上海银行同业拆借市场", symbol="Shibor人民币", indicator="1月")
+    rf_daily = (
+        shibor_data[["报告日", "利率"]]
+        .rename(columns={"报告日": "date", "利率": "rf_rate"})
+        .assign(date=lambda x: pd.to_datetime(x["date"]),
+                daily_return=lambda x: x["rf_rate"] / 100 / 252)  # 年化利率转日利率
+        .reset_index(drop=True)
+        .sort_values("date")[["date", "daily_return"]]
+    )
+    df_list = []
+    for fund_code in code_list:
+        fund = get_fund_daily_return(fund_code)
+        if not fund.empty:
+            fund['daily_return'] = fund['change_percent']
+            fund = fund.loc[:end_date]
+            fund = fund[["date", "daily_return"]]
+            fund = fund.reset_index(drop=True)
+            df_list.append(fund)
+    return df_list, rf_daily
+
+def prepare_index_date(index_list: list, end_date: str):
+    index_df_list = []
+    for index_code in index_list:
+        index_daily_return = get_index_daily_return(index_code)
+        if not index_daily_return.empty:
+            index_daily_return = index_daily_return.loc[:end_date]
+            index_df_list.append(index_daily_return)
+    return index_df_list
+
+
+# ============= 示例调用 =============
+if __name__ == '__main__':
+    with app.app_context():
+        code_list = ["003376", "004253", "100032"]
+        df_list, df_rf = prepare_date(code_list, end_date="2023-04-01")
+        index_list = ["932000", "H30269"] #"000919", "399631"
+        index_df_list = prepare_index_date(index_list, end_date="2023-04-01")
+        df_list = df_list + index_df_list
+        
+        # 调用函数
+        result = max_sharpe_portfolio(df_list=df_list, df_rf=df_rf)
+        
+        # 打印结果
+        print("最优权重:", result['weights'])
+        print("预期收益率:", result['expected_return'])
+        print("波动率:", result['volatility'])
+        print("夏普比率:", result['sharpe_ratio'])

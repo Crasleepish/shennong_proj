@@ -36,7 +36,7 @@ def percent_to_float(value):
 
 class FundInfoSynchronizer:
     """
-    同步股票信息数据到数据库。
+    同步基金信息数据到数据库。
     
     主要流程：
       1. 调用 akshare 接口获取数据（pandas DataFrame）
@@ -56,8 +56,8 @@ class FundInfoSynchronizer:
             df = ak.fund_open_fund_daily_em()
         """
         logger.info("Fetching data from akshare ...")
-        fund_list = ak.fund_open_fund_daily_em()[['基金代码', '基金简称', '申购状态', '赎回状态', '手续费']]
-        df = fund_list.rename(columns={'基金代码': 'fund_code', '基金简称': 'fund_name', '申购状态': 'subscribe_status', '赎回状态': 'redeem_status', '手续费': 'fee_rete'})
+        fund_list = ak.fund_info_index_em(symbol="全部", indicator="全部")[['基金代码', '基金名称', '手续费']]
+        df = fund_list.rename(columns={'基金代码': 'fund_code', '基金名称': 'fund_name', '手续费': 'fee_rete'})
 
         df.drop_duplicates(subset=['fund_code'], keep='last', inplace=True)
         return df
@@ -92,8 +92,6 @@ class FundInfoSynchronizer:
                 record = FundInfo(
                     fund_code=row['fund_code'],
                     fund_name=safe_value(row['fund_name']),
-                    subscribe_status=safe_value(row['subscribe_status']),
-                    redeem_status=safe_value(row['redeem_status']),
                     fee_rete=percent_to_float(safe_value(row['fee_rete']))
                 )
                 new_records.append(record)

@@ -7,8 +7,6 @@ class FundInfo(Base):
     # 使用证券代码作为主键
     fund_code = Column('fund_code', String(10), primary_key=True)
     fund_name = Column('fund_name', String(50), nullable=False)
-    subscribe_status = Column('subscribe_status', String(10))
-    redeem_status = Column('redeem_status', String(10))
     fee_rete = Column('fee_rete', Float)
 
     def __repr__(self):

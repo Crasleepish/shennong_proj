@@ -30,6 +30,7 @@ from app.backtest.portofolio_VLT_B_L import backtest_strategy as portofolio_VLT_
 from app.backtest.portofolio_VLT_S_H import backtest_strategy as portofolio_VLT_S_H
 from app.backtest.portofolio_VLT_B_H import backtest_strategy as portofolio_VLT_B_H
 from app.data.helper import get_index_daily_return
+from app.backtest.portofolio_fund import backtest_strategy as portofolio_fund
 
 app = create_app()
 
@@ -70,10 +71,11 @@ functions = {
     26: portofolio_VLT_B_L,
     27: portofolio_VLT_S_H,
     28: portofolio_VLT_B_H,
-    29: csi_index_zzqz
+    29: csi_index_zzqz,
+    30: portofolio_fund
 }
 
-start_date = "2024-12-31"
+start_date = "2017-06-29"
 end_date = "2025-03-31"
 
 def list_functions():
@@ -98,5 +100,6 @@ if __name__ == '__main__':
         try:
             choice = int(input("请输入要执行的函数序号: "))
             execute_function(choice)
-        except ValueError:
+        except ValueError as e:
             print("输入无效，请输入一个数字。")
+            print(e)

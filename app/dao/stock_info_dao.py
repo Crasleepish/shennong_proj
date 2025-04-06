@@ -524,10 +524,7 @@ class StockHistAdjDao:
         
     def select_dataframe_all(self):
         """
-        查询指定股票的所有无复权历史数据，并返回为 Pandas DataFrame。
-        
-        :param stock_code: 股票代码，例如 "600012"
-        :return: 包含查询结果的 DataFrame，如果没有数据则返回空 DataFrame。
+        查询所有股票的所有无复权历史数据，并返回为 Pandas DataFrame。
         """
         with get_db() as db:
             query = db.query(StockHistAdj)
@@ -560,6 +557,34 @@ class StockHistAdjDao:
             # 使用 pd.read_sql 将 SQLAlchemy 查询转换为 DataFrame
             df = pd.read_sql(query.statement, db.bind)
         return df
+    
+    def select_dataframe_by_date_range(self, start_date: str, end_date: str):
+        """
+        查询所有股票在指定日期范围内的的所有无复权历史数据（含start_date，不含end_date），并返回为 Pandas DataFrame。
+        
+        :param start_date: 开始日期，例如 "2020-01-01"
+        :param end_date: 结束日期，例如 "2020-01-01"
+        :return: 包含查询结果的 DataFrame，如果没有数据则返回空 DataFrame。
+        """
+        start_date = datetime.datetime.strptime(start_date, '%Y-%m-%d').date()
+        end_date = datetime.datetime.strptime(end_date, '%Y-%m-%d').date()
+        with get_db() as db:
+            query = db.query(StockHistAdj).filter(StockHistAdj.date >= start_date, StockHistAdj.date < end_date)
+            # 设置每次读取10000条记录
+            chunksize = 10000
+            logger.info("开始分块读取数据，每次读取 %d 条记录", chunksize)
+            chunks = pd.read_sql(query.statement, db.bind, chunksize=chunksize)
+            
+            df_list = []
+            chunk_index = 0
+            for chunk in chunks:
+                chunk_index += 1
+                logger.info("已读取第 %d 块数据，大小：%d", chunk_index, len(chunk))
+                df_list.append(chunk)
+                
+            df = pd.concat(df_list, ignore_index=True) if df_list else pd.DataFrame()
+            logger.info("数据读取完毕，总记录数：%d", len(df))
+            return df
 
     def delete_by_stock_code(self, stock_code: str):
         try:

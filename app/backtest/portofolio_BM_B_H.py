@@ -29,6 +29,7 @@ import pandas as pd
 import numpy as np
 import vectorbt as vbt
 import logging
+from datetime import datetime, timedelta
 from numba import njit
 from vectorbt.portfolio.enums import Direction, OrderStatus, NoOrder, CallSeqType, SizeType
 from vectorbt.portfolio import nb
@@ -108,9 +109,13 @@ def backtest_strategy(start_date: str, end_date: str):
     logger.info("Starting backtest strategy from %s to %s", start_date, end_date)
     
     # 加载数据
-    prices = get_prices_df().loc[start_date:end_date]
-    volumes = get_volume_df().loc[start_date:end_date]
-    mkt_cap = get_mkt_cap_df().loc[start_date:end_date]
+    refresh_holders()
+    # 为保证数据的完整性，加载180天前的数据
+    data_start_date = datetime.strptime(start_date, "%Y-%m-%d").date() - timedelta(days=180)
+    data_start_date = data_start_date.strftime("%Y-%m-%d")
+    prices = get_prices_df(data_start_date, end_date)
+    volumes = get_volume_df(data_start_date, end_date)
+    mkt_cap = get_mkt_cap_df(data_start_date, end_date)
     stock_info = get_stock_info_df()
     fundamental_df = get_fundamental_df()
     suspend_df = get_suspend_df()
@@ -203,6 +208,8 @@ def backtest_strategy(start_date: str, end_date: str):
 
 
     # 输出当日持仓详情到 CSV
+    if not os.path.exists(os.path.join(output_dir, format_date(end_date))):
+        os.makedirs(os.path.join(output_dir, format_date(end_date)))
     target_weights.loc[rb_dates].to_csv(os.path.join(output_dir, format_date(end_date), output_prefix + "_portfolio.csv"))
 
     # -------------------------------
@@ -284,8 +291,8 @@ def backtest_strategy(start_date: str, end_date: str):
     # 输出结果（与原始代码相同）
     logger.info("Order detail:")
     logger.info(pf.orders.records_readable)
-    total_value = pf.value()
-    daily_returns = pf.returns()
+    total_value = pf.value().loc[start_date:end_date]
+    daily_returns = pf.returns().loc[start_date:end_date]
     # logger.info(pf.stats())
     total_value.to_csv(os.path.join(output_dir, format_date(end_date), output_prefix + "_total_value.csv"))
     daily_returns.to_csv(os.path.join(output_dir, format_date(end_date), output_prefix + "_daily_returns.csv"))

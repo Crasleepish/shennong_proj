@@ -10,10 +10,10 @@ class StockHistAdjHolder:
     def __init__(self):
         pass
 
-    def get_stock_hist_adj_all(self):
+    def get_stock_hist_adj(self, start_date, end_date):
         if self.stock_hist_adj_all is None:
             stock_hist_adj_dao = StockHistAdjDao._instance
-            self.stock_hist_adj_all = stock_hist_adj_dao.select_dataframe_all()
+            self.stock_hist_adj_all = stock_hist_adj_dao.select_dataframe_by_date_range(start_date, end_date)
             self.stock_hist_adj_all["date"] = pd.to_datetime(self.stock_hist_adj_all["date"], errors="coerce")
         return self.stock_hist_adj_all
 
@@ -106,8 +106,16 @@ class FundHistHolder:
 
 fund_hist_holder = FundHistHolder()
 
+def refresh_holders():
+    global stock_hist_adj_holder, stock_info_holder, fundamental_data_holder, suspend_data_holder, index_hist_holder, fund_hist_holder
+    stock_hist_adj_holder = StockHistAdjHolder()
+    stock_info_holder = StockInfoHolder()
+    fundamental_data_holder = FundamentalDataHolder()
+    suspend_data_holder = SuspendDataHolder()
+    index_hist_holder = IndexHistHolder()
+    fund_hist_holder = FundHistHolder()
 
-def get_prices_df() -> pd.DataFrame:
+def get_prices_df(start_date: str, end_date: str) -> pd.DataFrame:
     """
     返回股票历史价格数据。
     
@@ -124,12 +132,12 @@ def get_prices_df() -> pd.DataFrame:
     2021-01-06   10.35    15.40    8.55
     ...
     """
-    df_all = stock_hist_adj_holder.get_stock_hist_adj_all()
+    df_all = stock_hist_adj_holder.get_stock_hist_adj(start_date, end_date)
     pivot_df = df_all.pivot(index="date", columns="stock_code", values="close")
     pivot_df = pivot_df.ffill()
     return pivot_df
 
-def get_volume_df() -> pd.DataFrame:
+def get_volume_df(start_date: str, end_date: str) -> pd.DataFrame:
     """
     返回成交量数据。
     
@@ -146,12 +154,12 @@ def get_volume_df() -> pd.DataFrame:
     2021-01-06   1050000   2050000    1550000
     ...
     """
-    df_all = stock_hist_adj_holder.get_stock_hist_adj_all()
+    df_all = stock_hist_adj_holder.get_stock_hist_adj(start_date, end_date)
     pivot_df = df_all.pivot(index="date", columns="stock_code", values="volume")
     pivot_df = pivot_df.fillna(0)
     return pivot_df
 
-def get_mkt_cap_df() -> pd.DataFrame:
+def get_mkt_cap_df(start_date: str, end_date: str) -> pd.DataFrame:
     """
     返回股票市值数据。
     
@@ -168,7 +176,7 @@ def get_mkt_cap_df() -> pd.DataFrame:
     2021-01-06   102000000  153000000   122000000
     ...
     """
-    df_all = stock_hist_adj_holder.get_stock_hist_adj_all()
+    df_all = stock_hist_adj_holder.get_stock_hist_adj(start_date, end_date)
     pivot_df = df_all.pivot(index="date", columns="stock_code", values="mkt_cap")
     pivot_df = pivot_df.ffill()
     return pivot_df
@@ -250,4 +258,57 @@ def get_fund_daily_return(fund_code: str) -> pd.DataFrame:
     """
     df = fund_hist_holder.get_fund_hist_by_code(fund_code)
     df['date'] = pd.to_datetime(df['date'], errors="coerce")
+    df = df.sort_values('date')
+    df = df.set_index('date', drop=False)
     return df
+
+def get_fund_prices_by_code_list(code_list: list, start_date: str, end_date: str) -> pd.DataFrame:
+    """
+    返回基金的历史净值数据。
+    
+    DataFrame 格式要求：
+      - 索引为交易日期（datetime64[ns]）
+      - 列为基金代码
+      - 值为基金净值（或其它价格，根据需求）
+      
+    样例输出：
+                600012   600016   600018
+    Date                                
+    2021-01-04   10.20    15.30    8.45
+    2021-01-05   10.40    15.50    8.50
+    2021-01-06   10.35    15.40    8.55
+    ...
+    """
+    fund_hist_dao = FundHistDao._instance
+    df_list = []
+    for fund_code in code_list:
+        df = fund_hist_dao.select_dataframe_by_code(fund_code)
+        df['date'] = pd.to_datetime(df['date'], errors="coerce")
+        df = df.sort_values('date')
+        df = df[(df['date'] >= start_date) & (df['date'] < end_date) ]
+        df = df.reset_index(drop=True)
+        df_list.append(df)
+    
+    df_all = pd.concat(df_list, axis=0)
+    df_all = df_all.reset_index(drop=True)
+    pivot_df = df_all.pivot(index="date", columns="fund_code", values="net_value")
+    pivot_df = pivot_df.ffill()
+    pivot_df = pivot_df.dropna()
+    return pivot_df
+
+def get_fund_fees_by_code_list(code_list: list):
+    """
+    返回基金的费用数据dict。
+    dict 格式要求：
+      - key 为基金代码
+      - value 为基金费用数据
+    """
+    fees_dict = {}
+    fund_info_dao = FundInfoDao._instance
+    for fund_code in code_list:
+        fund_info_df = fund_info_dao.select_dataframe_by_code(fund_code)
+        fund_info_dict = fund_info_df.iloc[0].to_dict()
+        fees_dict[fund_code] = fund_info_dict['fee_rete'] / 100.0
+    return fees_dict
+    
+    
