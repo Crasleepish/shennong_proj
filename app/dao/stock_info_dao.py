@@ -1,7 +1,7 @@
 from typing import List, Union
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, tuple_
-from app.models.stock_models import StockInfo, StockHistUnadj, UpdateFlag, FutureTask, CompanyAction, StockHistAdj, FundamentalData, SuspendData, StockShareChangeCNInfo
+from app.models.stock_models import StockInfo, StockHistUnadj, UpdateFlag, FutureTask, CompanyAction, StockHistAdj, FundamentalData, SuspendData, StockShareChangeCNInfo, MarketFactors
 from app.database import get_db
 from app.utils.data_utils import process_in_batches
 import logging
@@ -861,7 +861,75 @@ class StockShareChangeCNInfoDao:
                 return df
         except Exception as e:
             return pd.DataFrame()
+        
+class MarketFactorsDao:
+    _instance = None
 
+    def __new__(cls, *args, **kwargs):
+        # 始终返回已经创建好的 _instance
+        return cls._instance
+
+    def __init__(self):
+        # __init__ 可能会被多次调用，因此通过 _initialized 标识确保只初始化一次
+        if not hasattr(self, '_initialized'):
+            self._initialized = True
+
+    def insert(self, record: MarketFactors):
+        try:
+            with get_db() as db:
+                db.add(record)
+                db.commit()
+            return record
+        except Exception as e:
+            logger.error("Error insert market factors: %s", e)
+            db.rollback()
+            raise e
+
+    def upsert_one(self, record: MarketFactors):
+        try:
+            with get_db() as db:
+                existing = db.query(MarketFactors).filter(MarketFactors.date == record.date).first()
+                if existing:
+                    existing.MKT = record.MKT
+                    existing.SMB = record.SMB
+                    existing.HML = record.HML
+                    existing.QMJ = record.QMJ
+                    existing.VOL = record.VOL
+                    db.commit()
+                    db.refresh(existing)
+                    logger.info("Market factors updated successfully.")
+                else:
+                    db.add(record)
+                    db.commit()
+                    db.refresh(record)
+                    logger.info("Market factors inserted successfully.")
+        except Exception as e:
+            logger.error("Error upsert market factors: %s", e)
+            db.rollback()
+            raise e
+        
+    def delete_all(self):
+        try:
+            with get_db() as db:
+                db.query(MarketFactors).delete()
+                db.commit()
+        except Exception as e:
+            logger.error("Error delete all market factors records: %s", e)
+            db.rollback()
+            raise e
+        
+    def select_dataframe_by_date(self, start_date: str, end_date: str):
+        start_date_dt = datetime.datetime.strptime(start_date, '%Y-%m-%d').date()
+        end_date_dt = datetime.datetime.strptime(end_date, '%Y-%m-%d').date()
+        try:
+            with get_db() as db:
+                query = db.query(MarketFactors).filter(MarketFactors.date >= start_date_dt, MarketFactors.date < end_date_dt)
+                df = pd.read_sql(query.statement, db.bind)
+                return df
+        except Exception as e:
+            return pd.DataFrame()
+        
+        
 
 StockInfoDao._instance = object.__new__(StockInfoDao)
 StockInfoDao._instance.__init__()
@@ -881,3 +949,5 @@ SuspendDataDao._instance = object.__new__(SuspendDataDao)
 SuspendDataDao._instance.__init__()
 StockShareChangeCNInfoDao._instance = object.__new__(StockShareChangeCNInfoDao)
 StockShareChangeCNInfoDao._instance.__init__()
+MarketFactorsDao._instance = object.__new__(MarketFactorsDao)
+MarketFactorsDao._instance.__init__()

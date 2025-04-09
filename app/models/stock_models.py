@@ -194,3 +194,16 @@ class StockShareChangeCNInfo(Base):
     F049N = Column(Numeric(12, 4), comment='其他 (单位：万股，仅适用于北交所上市公司)')
     F050N = Column(Numeric(12, 4), comment='控股股东、实际控制人 (单位：万股，仅适用于北交所上市公司)')
     
+class MarketFactors(Base):
+    __tablename__ = 'market_factors'
+    # 主键：日期
+    date = Column(Date, primary_key=True)
+
+    MKT = Column(Numeric(10, 6), comment='市场因子')
+    SMB = Column(Numeric(10, 6), comment='市值因子')
+    HML = Column(Numeric(10, 6), comment='价值因子')
+    QMJ = Column(Numeric(10, 6), comment='质量因子')
+    VOL = Column(Numeric(10, 6), comment='波动率因子')
+
+    def __repr__(self):
+        return f"<MarketFactors(date='{self.date}'>"

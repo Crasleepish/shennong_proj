@@ -4,10 +4,10 @@ import os
 
 # 1. 定义文件路径和组合名称（按市值 + 动量分组）
 file_map = {
-    "MOM_S_L": r"result/portofolio_MOM_S_L_daily_returns.csv",
-    "MOM_B_L": r"result/portofolio_MOM_B_L_daily_returns.csv",
-    "MOM_S_H": r"result/portofolio_MOM_S_H_daily_returns.csv",
-    "MOM_B_H": r"result/portofolio_MOM_B_H_daily_returns.csv"
+    "MOM_S_L": r"result/portfolio_MOM_S_L_daily_returns.csv",
+    "MOM_B_L": r"result/portfolio_MOM_B_L_daily_returns.csv",
+    "MOM_S_H": r"result/portfolio_MOM_S_H_daily_returns.csv",
+    "MOM_B_H": r"result/portfolio_MOM_B_H_daily_returns.csv"
 }
 
 # 2. 读取所有CSV文件并合并

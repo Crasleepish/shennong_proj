@@ -16,16 +16,17 @@ app = create_app()
 # df_rf: DataFrame, 包含两列 ['date', 'daily_return']（无风险利率）
 # df_list: 包含N个DataFrame的列表，每个DataFrame两列 ['date', 'daily_return']（资产收益率）
 
-def max_sharpe_portfolio(df_list, df_rf):
+def max_sharpe_portfolio_with_return_constraint(df_list, df_rf, min_annual_return=0.08):
     """
-    构建不允许做空条件下夏普比率最大的投资组合
+    不允许做空且年化收益率≥min_annual_return的条件下，最大化夏普比率
     
     参数:
         df_list: 包含N个资产历史收益率的DataFrame列表
         df_rf: 无风险利率的DataFrame
+        min_annual_return: 最低要求的年化收益率（默认8%）
     
     返回:
-        dict: 包含最优权重、预期收益率、波动率和夏普比率
+        dict: 最优权重、年化收益率、年化波动率、夏普比率
     """
     # 检查输入
     if len(df_list) < 2:
@@ -55,9 +56,10 @@ def max_sharpe_portfolio(df_list, df_rf):
         return -(port_return - rf_daily) / port_vol  # 负号因为最小化
     
     n_assets = len(mu)
-    constraints = (
+    constraints = [
         {'type': 'eq', 'fun': lambda w: np.sum(w) - 1},  # 权重和为1
-    )
+        {'type': 'ineq', 'fun': lambda w: 252 * np.dot(w, mu) - min_annual_return}  # 年化收益率≥8%
+    ]
     bounds = tuple((0, 1) for _ in range(n_assets))  # 不允许做空
     
     # 初始猜测（等权重）
@@ -70,6 +72,7 @@ def max_sharpe_portfolio(df_list, df_rf):
         method='SLSQP',
         bounds=bounds,
         constraints=constraints,
+        options={'maxiter': 1000, 'ftol': 1e-8}
     )
     
     if not result.success:
@@ -77,15 +80,15 @@ def max_sharpe_portfolio(df_list, df_rf):
     
     optimal_weights = result.x
     
-    # 计算组合性能
-    port_return = np.dot(optimal_weights, mu)
-    port_vol = np.sqrt(np.dot(optimal_weights.T, np.dot(cov, optimal_weights)))
-    sharpe = (port_return - rf_daily) / port_vol
+    # 计算组合性能（年化）
+    annual_return = 252 * np.dot(optimal_weights, mu)
+    annual_vol = np.sqrt(252) * np.sqrt(np.dot(optimal_weights.T, np.dot(cov, optimal_weights)))
+    sharpe = (annual_return - 252 * rf_daily) / annual_vol
     
     return {
         'weights': optimal_weights,
-        'expected_return': port_return,
-        'volatility': port_vol,
+        'annual_return': annual_return,
+        'annual_volatility': annual_vol,
         'sharpe_ratio': sharpe
     }
 
@@ -123,17 +126,17 @@ def prepare_index_date(index_list: list, end_date: str):
 # ============= 示例调用 =============
 if __name__ == '__main__':
     with app.app_context():
-        code_list = ["003376", "004253", "100032"]
+        code_list = ["003376", "004253", "100032", "240016"]
         df_list, df_rf = prepare_date(code_list, end_date="2023-04-01")
-        index_list = ["932000", "H30269"] #"000919", "399631"
+        index_list = [] #"000919", "399631"
         index_df_list = prepare_index_date(index_list, end_date="2023-04-01")
         df_list = df_list + index_df_list
         
         # 调用函数
-        result = max_sharpe_portfolio(df_list=df_list, df_rf=df_rf)
+        result = max_sharpe_portfolio_with_return_constraint(df_list=df_list, df_rf=df_rf, min_annual_return=0.06)
         
         # 打印结果
         print("最优权重:", result['weights'])
-        print("预期收益率:", result['expected_return'])
-        print("波动率:", result['volatility'])
+        print("年化收益率:", result['annual_return'])
+        print("年化波动率:", result['annual_volatility'])
         print("夏普比率:", result['sharpe_ratio'])

@@ -7,9 +7,11 @@ from app.data.fetcher import stock_info_synchronizer, stock_hist_synchronizer, s
 from app.data.index_fetcher import index_info_synchronizer, index_hist_synchronizer
 from app.data.fund_fetcher import fund_info_synchronizer, fund_hist_synchronizer
 from app.data.cninfo_fetcher import cninfo_stock_share_change_fetcher
+from app.data.factor_fetcher import factor_fetcher
 from app.dao.task_record_dao import task_record_dao
 from app.utils.async_task import launch_background_task
 from app.models.task_record import TaskRecord
+from datetime import datetime, timedelta
 
 
 logger = logging.getLogger(__name__)
@@ -526,4 +528,66 @@ def sync_fund_hist():
         return jsonify({"status": "success", "task_id": task_id, "message": "Task started"}), 200
     except Exception as e:
         logger.exception("Error creating fund hist sync task.")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    
+@fin_data_bp.route("/factors/sync_all", methods=["POST"])
+def sync_factors_all():
+    try:
+        # 创建任务记录（初始状态为 RUNNING，进度为 0）
+        new_task = TaskRecord(
+            task_type="FACTORS_SYNC",
+            task_status="RUNNING",
+            progress_current=0,
+            progress_total=0,
+            message="Task started."
+        )
+        new_task = task_dao.insert(new_task)
+        task_id = new_task.id
+        logger.info("Created task id %d for factors data sync.", task_id)
+
+        # 定义进度回调函数
+        progress_cb = make_progress_callback(task_id)
+
+        def task_func():
+            factor_fetcher.fetch_all(start_date="2004-12-01", end_date=datetime.now().strftime("%Y-%m-%d"))
+
+        # 启动后台任务
+        launch_background_task(task_id, task_func)
+
+        return jsonify({"status": "success", "task_id": task_id, "message": "Task started"}), 200
+    except Exception as e:
+        logger.exception("Error creating factors sync task.")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    
+@fin_data_bp.route("/factors/sync_recent", methods=["POST"])
+def sync_factors_all():
+    try:
+        # 创建任务记录（初始状态为 RUNNING，进度为 0）
+        new_task = TaskRecord(
+            task_type="FACTORS_SYNC",
+            task_status="RUNNING",
+            progress_current=0,
+            progress_total=0,
+            message="Task started."
+        )
+        new_task = task_dao.insert(new_task)
+        task_id = new_task.id
+        logger.info("Created task id %d for recent factors data sync.", task_id)
+
+        # 定义进度回调函数
+        progress_cb = make_progress_callback(task_id)
+
+        end_date=datetime.now().strftime("%Y-%m-%d")
+        #开始时间为183天前
+        start_date=(datetime.now()-timedelta(days=183)).strftime("%Y-%m-%d")
+
+        def task_func():
+            factor_fetcher.fetch_all(start_date=start_date, end_date=end_date)
+
+        # 启动后台任务
+        launch_background_task(task_id, task_func)
+
+        return jsonify({"status": "success", "task_id": task_id, "message": "Task started"}), 200
+    except Exception as e:
+        logger.exception("Error creating factors sync task.")
         return jsonify({"status": "error", "message": str(e)}), 500

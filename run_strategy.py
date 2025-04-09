@@ -1,36 +1,36 @@
 from app import create_app
 from app.backtest.value_strategy import backtest_strategy as strategy_1
-from app.backtest.portofolio_BM_S_L import backtest_strategy as portofolio_BM_S_L
-from app.backtest.portofolio_BM_B_L import backtest_strategy as portofolio_BM_B_L
-from app.backtest.portofolio_BM_S_M import backtest_strategy as portofolio_BM_S_M
-from app.backtest.portofolio_BM_B_M import backtest_strategy as portofolio_BM_B_M
-from app.backtest.portofolio_BM_S_H import backtest_strategy as portofolio_BM_S_H
-from app.backtest.portofolio_BM_B_H import backtest_strategy as portofolio_BM_B_H
-from app.backtest.portofolio_ALL import backtest_strategy as portofolio_ALL
-from app.backtest.portofolio_OP_S_L import backtest_strategy as portofolio_OP_S_L
-from app.backtest.portofolio_OP_B_L import backtest_strategy as portofolio_OP_B_L
-from app.backtest.portofolio_OP_S_M import backtest_strategy as portofolio_OP_S_M
-from app.backtest.portofolio_OP_B_M import backtest_strategy as portofolio_OP_B_M
-from app.backtest.portofolio_OP_S_H import backtest_strategy as portofolio_OP_S_H
-from app.backtest.portofolio_OP_B_H import backtest_strategy as portofolio_OP_B_H
-from app.backtest.portofolio_INV_S_L import backtest_strategy as portofolio_INV_S_L
-from app.backtest.portofolio_INV_B_L import backtest_strategy as portofolio_INV_B_L
-from app.backtest.portofolio_INV_S_M import backtest_strategy as portofolio_INV_S_M
-from app.backtest.portofolio_INV_B_M import backtest_strategy as portofolio_INV_B_M
-from app.backtest.portofolio_INV_S_H import backtest_strategy as portofolio_INV_S_H
-from app.backtest.portofolio_INV_B_H import backtest_strategy as portofolio_INV_B_H
-from app.backtest.portofolio_MOM_S_H import backtest_strategy as portofolio_MOM_S_H
-from app.backtest.portofolio_MOM_B_H import backtest_strategy as portofolio_MOM_B_H
-from app.backtest.portofolio_MOM_S_L import backtest_strategy as portofolio_MOM_S_L
-from app.backtest.portofolio_MOM_B_L import backtest_strategy as portofolio_MOM_B_L
-from app.backtest.portofolio_MOM6_S_H import backtest_strategy as portofolio_MOM6_S_H
-from app.backtest.portofolio_MOM6_S_L import backtest_strategy as portofolio_MOM6_S_L
-from app.backtest.portofolio_VLT_S_L import backtest_strategy as portofolio_VLT_S_L
-from app.backtest.portofolio_VLT_B_L import backtest_strategy as portofolio_VLT_B_L
-from app.backtest.portofolio_VLT_S_H import backtest_strategy as portofolio_VLT_S_H
-from app.backtest.portofolio_VLT_B_H import backtest_strategy as portofolio_VLT_B_H
+from app.backtest.portfolio_BM_S_L import backtest_strategy as portfolio_BM_S_L
+from app.backtest.portfolio_BM_B_L import backtest_strategy as portfolio_BM_B_L
+from app.backtest.portfolio_BM_S_M import backtest_strategy as portfolio_BM_S_M
+from app.backtest.portfolio_BM_B_M import backtest_strategy as portfolio_BM_B_M
+from app.backtest.portfolio_BM_S_H import backtest_strategy as portfolio_BM_S_H
+from app.backtest.portfolio_BM_B_H import backtest_strategy as portfolio_BM_B_H
+from app.backtest.portfolio_ALL import backtest_strategy as portfolio_ALL
+from app.backtest.portfolio_OP_S_L import backtest_strategy as portfolio_OP_S_L
+from app.backtest.portfolio_OP_B_L import backtest_strategy as portfolio_OP_B_L
+from app.backtest.portfolio_OP_S_M import backtest_strategy as portfolio_OP_S_M
+from app.backtest.portfolio_OP_B_M import backtest_strategy as portfolio_OP_B_M
+from app.backtest.portfolio_OP_S_H import backtest_strategy as portfolio_OP_S_H
+from app.backtest.portfolio_OP_B_H import backtest_strategy as portfolio_OP_B_H
+from app.backtest.portfolio_INV_S_L import backtest_strategy as portfolio_INV_S_L
+from app.backtest.portfolio_INV_B_L import backtest_strategy as portfolio_INV_B_L
+from app.backtest.portfolio_INV_S_M import backtest_strategy as portfolio_INV_S_M
+from app.backtest.portfolio_INV_B_M import backtest_strategy as portfolio_INV_B_M
+from app.backtest.portfolio_INV_S_H import backtest_strategy as portfolio_INV_S_H
+from app.backtest.portfolio_INV_B_H import backtest_strategy as portfolio_INV_B_H
+from app.backtest.portfolio_MOM_S_H import backtest_strategy as portfolio_MOM_S_H
+from app.backtest.portfolio_MOM_B_H import backtest_strategy as portfolio_MOM_B_H
+from app.backtest.portfolio_MOM_S_L import backtest_strategy as portfolio_MOM_S_L
+from app.backtest.portfolio_MOM_B_L import backtest_strategy as portfolio_MOM_B_L
+from app.backtest.portfolio_MOM6_S_H import backtest_strategy as portfolio_MOM6_S_H
+from app.backtest.portfolio_MOM6_S_L import backtest_strategy as portfolio_MOM6_S_L
+from app.backtest.portfolio_VLT_S_L import backtest_strategy as portfolio_VLT_S_L
+from app.backtest.portfolio_VLT_B_L import backtest_strategy as portfolio_VLT_B_L
+from app.backtest.portfolio_VLT_S_H import backtest_strategy as portfolio_VLT_S_H
+from app.backtest.portfolio_VLT_B_H import backtest_strategy as portfolio_VLT_B_H
 from app.data.helper import get_index_daily_return
-from app.backtest.portofolio_fund import backtest_strategy as portofolio_fund
+from app.backtest.portfolio_fund import backtest_strategy as portfolio_fund
 
 app = create_app()
 
@@ -42,37 +42,37 @@ def csi_index_zzqz(start_date: str, end_date: str):
     return df
 
 functions = {
-    0: portofolio_ALL,
-    1: portofolio_BM_S_L,
-    2: portofolio_BM_B_L,
-    3: portofolio_BM_S_M,
-    4: portofolio_BM_B_M,
-    5: portofolio_BM_S_H,
-    6: portofolio_BM_B_H,
-    7: portofolio_OP_S_L, 
-    8: portofolio_OP_B_L,
-    9: portofolio_OP_S_M,
-    10: portofolio_OP_B_M, 
-    11: portofolio_OP_S_H,
-    12: portofolio_OP_B_H,
-    13: portofolio_INV_S_L,
-    14: portofolio_INV_B_L,
-    15: portofolio_INV_S_M,
-    16: portofolio_INV_B_M,
-    17: portofolio_INV_S_H,
-    18: portofolio_INV_B_H,
-    19: portofolio_MOM_S_H,
-    20: portofolio_MOM_B_H,
-    21: portofolio_MOM_S_L,
-    22: portofolio_MOM_B_L,
-    23: portofolio_MOM6_S_H,
-    24: portofolio_MOM6_S_L,
-    25: portofolio_VLT_S_L,
-    26: portofolio_VLT_B_L,
-    27: portofolio_VLT_S_H,
-    28: portofolio_VLT_B_H,
+    0: portfolio_ALL,
+    1: portfolio_BM_S_L,
+    2: portfolio_BM_B_L,
+    3: portfolio_BM_S_M,
+    4: portfolio_BM_B_M,
+    5: portfolio_BM_S_H,
+    6: portfolio_BM_B_H,
+    7: portfolio_OP_S_L, 
+    8: portfolio_OP_B_L,
+    9: portfolio_OP_S_M,
+    10: portfolio_OP_B_M, 
+    11: portfolio_OP_S_H,
+    12: portfolio_OP_B_H,
+    13: portfolio_INV_S_L,
+    14: portfolio_INV_B_L,
+    15: portfolio_INV_S_M,
+    16: portfolio_INV_B_M,
+    17: portfolio_INV_S_H,
+    18: portfolio_INV_B_H,
+    19: portfolio_MOM_S_H,
+    20: portfolio_MOM_B_H,
+    21: portfolio_MOM_S_L,
+    22: portfolio_MOM_B_L,
+    23: portfolio_MOM6_S_H,
+    24: portfolio_MOM6_S_L,
+    25: portfolio_VLT_S_L,
+    26: portfolio_VLT_B_L,
+    27: portfolio_VLT_S_H,
+    28: portfolio_VLT_B_H,
     29: csi_index_zzqz,
-    30: portofolio_fund
+    30: portfolio_fund
 }
 
 start_date = "2017-06-29"

@@ -6,3 +6,4 @@ result/*.*
 .cache
 result
 output
+bt_result

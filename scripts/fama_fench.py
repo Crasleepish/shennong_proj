@@ -3,12 +3,12 @@ import numpy as np
 
 # 1. 定义文件路径和组合名称
 file_map = {
-    "BM_S_L": r"../result/portofolio_BM_S_L_daily_returns.csv",
-    "BM_B_L": r"../result/portofolio_BM_B_L_daily_returns.csv",
-    "BM_S_M": r"../result/portofolio_BM_S_M_daily_returns.csv",
-    "BM_B_M": r"../result/portofolio_BM_B_M_daily_returns.csv",
-    "BM_S_H": r"../result/portofolio_BM_S_H_daily_returns.csv",
-    "BM_B_H": r"../result/portofolio_BM_B_H_daily_returns.csv",
+    "BM_S_L": r"../result/portfolio_BM_S_L_daily_returns.csv",
+    "BM_B_L": r"../result/portfolio_BM_B_L_daily_returns.csv",
+    "BM_S_M": r"../result/portfolio_BM_S_M_daily_returns.csv",
+    "BM_B_M": r"../result/portfolio_BM_B_M_daily_returns.csv",
+    "BM_S_H": r"../result/portfolio_BM_S_H_daily_returns.csv",
+    "BM_B_H": r"../result/portfolio_BM_B_H_daily_returns.csv",
 }
 
 # 2. 读取所有CSV文件并合并

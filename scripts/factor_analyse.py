@@ -122,22 +122,22 @@ def main(portfolio_folder: str, index_file: str, output_path: str):
     print(f"因子数据已保存至：{output_path}")
 
 if __name__ == "__main__":
-    file_list = ["portofolio_BM_B_H_daily_returns.csv",
-        "portofolio_BM_S_H_daily_returns.csv",
-        "portofolio_BM_S_M_daily_returns.csv",
-        "portofolio_BM_B_M_daily_returns.csv",
-        "portofolio_BM_B_L_daily_returns.csv",
-        "portofolio_BM_S_L_daily_returns.csv",
-        "portofolio_OP_B_H_daily_returns.csv",
-        "portofolio_OP_B_M_daily_returns.csv",
-        "portofolio_OP_S_M_daily_returns.csv",
-        "portofolio_OP_B_L_daily_returns.csv",
-        "portofolio_OP_S_L_daily_returns.csv",
-        "portofolio_OP_S_H_daily_returns.csv",
-        "portofolio_VLT_B_H_daily_returns.csv",
-        "portofolio_VLT_S_H_daily_returns.csv",
-        "portofolio_VLT_B_L_daily_returns.csv",
-        "portofolio_VLT_S_L_daily_returns.csv"]
+    file_list = ["portfolio_BM_B_H_daily_returns.csv",
+        "portfolio_BM_S_H_daily_returns.csv",
+        "portfolio_BM_S_M_daily_returns.csv",
+        "portfolio_BM_B_M_daily_returns.csv",
+        "portfolio_BM_B_L_daily_returns.csv",
+        "portfolio_BM_S_L_daily_returns.csv",
+        "portfolio_OP_B_H_daily_returns.csv",
+        "portfolio_OP_B_M_daily_returns.csv",
+        "portfolio_OP_S_M_daily_returns.csv",
+        "portfolio_OP_B_L_daily_returns.csv",
+        "portfolio_OP_S_L_daily_returns.csv",
+        "portfolio_OP_S_H_daily_returns.csv",
+        "portfolio_VLT_B_H_daily_returns.csv",
+        "portfolio_VLT_S_H_daily_returns.csv",
+        "portfolio_VLT_B_L_daily_returns.csv",
+        "portfolio_VLT_S_L_daily_returns.csv"]
     main(
         portfolio_folder="./result", 
         index_file="./result/csi_index_zzqz.csv", 

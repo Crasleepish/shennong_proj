@@ -9,7 +9,7 @@ import vectorbt as vbt
 # Use the TestConfig from our config module
 from app.config import TestConfig
 
-from app.backtest.portofolio_OP_S_L import backtest_strategy
+from app.backtest.portfolio_OP_S_L import backtest_strategy
 # Create the Flask app using TestConfig
 @pytest.fixture
 def app():
@@ -107,12 +107,12 @@ def mock_compute_profit_stock_info_df():
     return mock_stock_info()
 
 # 单元测试
-@patch("app.backtest.portofolio_OP_S_L.get_suspend_df", side_effect=mock_get_suspend_df)
-@patch("app.backtest.portofolio_OP_S_L.get_fundamental_df", side_effect=mock_get_fundamental_df)
-@patch("app.backtest.portofolio_OP_S_L.get_stock_info_df", side_effect=mock_get_stock_info_df)
-@patch("app.backtest.portofolio_OP_S_L.get_mkt_cap_df", side_effect=mock_get_mkt_cap_df)
-@patch("app.backtest.portofolio_OP_S_L.get_volume_df", side_effect=mock_get_volume_df)
-@patch("app.backtest.portofolio_OP_S_L.get_prices_df", side_effect=mock_get_prices_df)
+@patch("app.backtest.portfolio_OP_S_L.get_suspend_df", side_effect=mock_get_suspend_df)
+@patch("app.backtest.portfolio_OP_S_L.get_fundamental_df", side_effect=mock_get_fundamental_df)
+@patch("app.backtest.portfolio_OP_S_L.get_stock_info_df", side_effect=mock_get_stock_info_df)
+@patch("app.backtest.portfolio_OP_S_L.get_mkt_cap_df", side_effect=mock_get_mkt_cap_df)
+@patch("app.backtest.portfolio_OP_S_L.get_volume_df", side_effect=mock_get_volume_df)
+@patch("app.backtest.portfolio_OP_S_L.get_prices_df", side_effect=mock_get_prices_df)
 @patch("app.backtest.compute_profit.get_stock_info_df", side_effect=mock_compute_profit_stock_info_df)
 def test_backtest_strategy(
     mock_compute_profit_stock_info_df,
