@@ -560,7 +560,7 @@ def sync_factors_all():
         return jsonify({"status": "error", "message": str(e)}), 500
     
 @fin_data_bp.route("/factors/sync_recent", methods=["POST"])
-def sync_factors_all():
+def sync_factors_recent():
     try:
         # 创建任务记录（初始状态为 RUNNING，进度为 0）
         new_task = TaskRecord(
