@@ -92,7 +92,7 @@ def max_sharpe_portfolio_with_return_constraint(df_list, df_rf, min_annual_retur
         'sharpe_ratio': sharpe
     }
 
-def prepare_date(code_list: list, end_date: str):
+def prepare_date(code_list: list, start_date: str, end_date: str):
     shibor_data = ak.rate_interbank(market="上海银行同业拆借市场", symbol="Shibor人民币", indicator="1月")
     rf_daily = (
         shibor_data[["报告日", "利率"]]
@@ -107,18 +107,18 @@ def prepare_date(code_list: list, end_date: str):
         fund = get_fund_daily_return(fund_code)
         if not fund.empty:
             fund['daily_return'] = fund['change_percent']
-            fund = fund.loc[:end_date]
+            fund = fund.loc[start_date:end_date]
             fund = fund[["date", "daily_return"]]
             fund = fund.reset_index(drop=True)
             df_list.append(fund)
     return df_list, rf_daily
 
-def prepare_index_date(index_list: list, end_date: str):
+def prepare_index_date(index_list: list, start_date: str, end_date: str):
     index_df_list = []
     for index_code in index_list:
         index_daily_return = get_index_daily_return(index_code)
         if not index_daily_return.empty:
-            index_daily_return = index_daily_return.loc[:end_date]
+            index_daily_return = index_daily_return.loc[start_date:end_date]
             index_df_list.append(index_daily_return)
     return index_df_list
 
@@ -126,14 +126,15 @@ def prepare_index_date(index_list: list, end_date: str):
 # ============= 示例调用 =============
 if __name__ == '__main__':
     with app.app_context():
-        code_list = ["003376", "004253", "100032", "240016"]
-        df_list, df_rf = prepare_date(code_list, end_date="2023-04-01")
+        # code_list = ["000218", "003376", "005561", "240016"]
+        code_list = ["000218", "017838", "012708", "019408", "019918", "019162", "240016", "007937"]
+        df_list, df_rf = prepare_date(code_list, start_date="2022-06-01", end_date="2024-12-31")
         index_list = [] #"000919", "399631"
-        index_df_list = prepare_index_date(index_list, end_date="2023-04-01")
+        index_df_list = prepare_index_date(index_list, start_date="2019-06-01", end_date="2023-06-01")
         df_list = df_list + index_df_list
         
         # 调用函数
-        result = max_sharpe_portfolio_with_return_constraint(df_list=df_list, df_rf=df_rf, min_annual_return=0.06)
+        result = max_sharpe_portfolio_with_return_constraint(df_list=df_list, df_rf=df_rf, min_annual_return=0.08)
         
         # 打印结果
         print("最优权重:", result['weights'])

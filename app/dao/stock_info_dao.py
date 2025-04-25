@@ -54,33 +54,26 @@ class StockInfoDao:
         except Exception as e:
             return pd.DataFrame()
         
-    def update_all_industry(self):
-        logger.info("update all industry ...")
-        def safe_value(val):
-            if pd.isna(val) or val.strip() == '-':
-                return None 
-            else:
-                return val
+    def update_industry_by_mapping(self, stock_codes: List[str], industry_name: str):
+        """
+        将指定的一组股票代码的行业字段统一更新为 industry_name
+        """
+        updated = 0
+        if not stock_codes:
+            logger.warning("传入的股票代码列表为空，跳过行业更新")
+            return
         try:
             with get_db() as db:
-                # 构造查询条件
-                stock_info_lst = db.query(StockInfo).all()
-                for stock_info in stock_info_lst:
-                    stock_code = stock_info.stock_code
-                    try:
-                        info_df = ak.stock_individual_info_em(symbol=stock_code)
-                    except Exception as e:
-                        logger.error("更新行业信息失败，股票代码：%s，错误信息：%s", stock_code, e)
-                        continue
-                    industry = info_df[info_df["item"] == "行业"].iloc[0]['value']
-                    stock_info.industry = safe_value(industry)
-                    logger.info(f"更新行业信息成功，股票代码：{stock_code}，行业：{industry}")
+                stock_info_list = db.query(StockInfo).filter(StockInfo.stock_code.in_(stock_codes)).all()
+                for stock in stock_info_list:
+                    stock.industry = industry_name
+                    updated += 1
                 db.commit()
+            logger.info(f"成功将 {updated} 支股票的行业更新为：{industry_name}")
         except Exception as e:
-            logger.error("更新行业信息失败，错误信息：%s", e)
-            db.rollback()
+            logger.error("更新行业信息失败: %s", e)
             raise e
-        
+
     def delete_all(self):
         try:
             with get_db() as db:
@@ -895,6 +888,7 @@ class MarketFactorsDao:
                     existing.HML = record.HML
                     existing.QMJ = record.QMJ
                     existing.VOL = record.VOL
+                    existing.LIQ = record.LIQ
                     db.commit()
                     db.refresh(existing)
                     logger.info("Market factors updated successfully.")

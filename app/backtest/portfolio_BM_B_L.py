@@ -180,7 +180,9 @@ def backtest_strategy(start_date: str, end_date: str):
             # 确保调仓日的价格无缺失或异常
             if prices.loc[rb_date, selected_stocks].isnull().any():
                 logger.warning("Missing price data for selected stocks on %s; skipping.", rb_date.strftime("%Y-%m-%d"))
-                return
+                invalid_stocks = selected_stocks[prices.loc[rb_date, selected_stocks].isnull()]
+                # 从selected_stocks中删除invalid_stocks
+                selected_stocks = selected_stocks.drop(invalid_stocks)
             logger.info("Selected stocks count on %s: %d", rb_date.strftime("%Y-%m-%d"), len(selected_stocks))
             # 填充目标持仓（示例：市值加权）
             target_weights.loc[rb_date, selected_stocks] = mkt_cap.loc[rb_date, selected_stocks] / mkt_cap.loc[rb_date, selected_stocks].sum()

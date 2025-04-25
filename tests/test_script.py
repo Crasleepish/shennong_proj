@@ -5,7 +5,7 @@ from app import create_app
 from app.config import Config
 
 # 假设 get_ttm_value 函数已经定义
-from scripts.fund_regression import calculate_factor_exposure, regress_one_fund
+from scripts.fund_regression import calculate_factor_exposure_daily, regress_one_fund
 
 @pytest.fixture
 def app():
@@ -41,7 +41,7 @@ def test_fund_regression(app):
     
     # 计算曝险系数
     try:
-        exposures = calculate_factor_exposure(fund_data, factor_data, shibor_data)
+        exposures = calculate_factor_exposure_daily(fund_data, factor_data, shibor_data)
         print("基金因子曝险系数（含无风险利率调整及节假日处理）：")
         print(exposures.to_markdown())
         

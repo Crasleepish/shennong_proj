@@ -92,6 +92,25 @@ def calculate_column_volatility(prices_series):
         return pd.NaT
     
 
+def calculate_column_illiquidity(returns_series: pd.Series, amount_series: pd.Series) -> float:
+    """
+    计算Amihud illiquidity指标：日度 |收益率| / 成交额 的均值。
+    输入为日度数据，建议使用过去1个月或12个月作为窗口。
+
+    参数:
+        returns_series: 日收益率序列（pd.Series）
+        amount_series: 成交额序列（pd.Series）
+    
+    返回:
+        float: 平均 illiquidity（越低越流动）
+    """
+    try:
+        illiq = returns_series.abs() / amount_series.shift(1)
+        return illiq.dropna().mean()
+    except:
+        return np.nan
+
+
 def get_nearest_data_front(prices: pd.DataFrame, refer_date: str):
     """
     prices 是一个索引为日期（Timestamp）的 DataFrame，

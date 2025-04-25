@@ -18,7 +18,7 @@ from app.data.helper import get_prices_df, get_fund_prices_by_code_list, get_fun
 # Create the Flask app using TestConfig
 @pytest.fixture
 def app():
-    app = create_app(config_class=Config)
+    app = create_app(config_class=TestConfig)
     # Note: since our app's init_db() was already called, we assume the tables are created.
     # If necessary, you could call init_db() again here.
     yield app

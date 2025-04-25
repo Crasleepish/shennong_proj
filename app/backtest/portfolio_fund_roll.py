@@ -1,6 +1,8 @@
 '''
 
-### 本组合为A股全市场组合
+### 本组合为场外基金轮动组合
+基金池
+"000218", "003376", "005561", "240016"
 '''
 from app.data.helper import *
 import os
@@ -8,67 +10,33 @@ import pandas as pd
 import numpy as np
 import vectorbt as vbt
 import logging
-from datetime import datetime, timedelta
 from numba import njit
 from vectorbt.portfolio.enums import Direction, OrderStatus, NoOrder, CallSeqType, SizeType
 from vectorbt.portfolio import nb
-from app.utils.data_utils import format_date
+from scripts.fund_regression import annualized_return, max_drawdown, sharpe_ratio
 
 logger = logging.getLogger(__name__)
 logging.getLogger('numba').setLevel(logging.INFO)
 
-fee_rate = 0.0003
-slippage_rate = 0.0001
-output_dir = r"./bt_result"
-output_prefix = "portfolio_ALL"
+slippage_rate = 0.0
+output_dir = r"./result"
+output_prefix = "portfolio_fund"
+selected_funds = ["100032", "004253", "003376"]
+weights_of_assets = {"100032": 0.40, "004253": 0.12, "003376": 0.48}
 
 def get_rebalance_dates(prices: pd.DataFrame, start_date: str, end_date: str) -> pd.DatetimeIndex:
     """
-    根据价格数据的交易日期，返回每年6月和12月最后一个交易日作为再平衡日，
+    根据价格数据的交易日期，返回每年3月6月9月和12月最后一个交易日作为再平衡日，
     仅在指定日期区间内。
     """
     dates = prices.loc[start_date:end_date].index
     rebalance_dates = []
     for year in sorted(dates.year.unique()):
-        for month in [6, 12]:
+        for month in [3, 6, 9, 12]:
             month_dates = dates[(dates.year == year) & (dates.month == month)]
             if not month_dates.empty:
                 rebalance_dates.append(month_dates[-1])
     return pd.DatetimeIndex(sorted(rebalance_dates))
-
-def filter_universe(prices: pd.DataFrame, volumes: pd.DataFrame, mkt_cap: pd.DataFrame,
-                    stock_info: pd.DataFrame, suspend_df: pd.DataFrame, rb_date: pd.Timestamp) -> list:
-    """
-    在给定再平衡日 rb_date 下，过滤股票：
-      1. 剔除上市未满 3个月 的股票；
-      2. 剔除停牌或过去 6 个月内发生过停牌的股票；
-    返回符合条件的股票代码列表。
-    """
-    # b. 上市时间过滤：上市时间至少在 rb_date 前 3个月
-    valid_listing = set(stock_info.index[stock_info["listing_date"] <= (rb_date - pd.DateOffset(months=3))])
-    
-    # c. 停牌过滤：假设 suspend_df 包含所有停牌记录，排除过去 3 个月内（包括当日）停牌且未复牌的股票
-    six_months_ago = rb_date - pd.DateOffset(months=3)
-    recent_suspend = suspend_df[(suspend_df["suspend_date"] >= six_months_ago) & (suspend_df["suspend_date"] <= rb_date)]
-    suspended_stocks = recent_suspend[
-        (recent_suspend["resume_date"].isnull()) | (recent_suspend["resume_date"] > rb_date)
-    ]["stock_code"].unique()
-    valid_suspension = set(prices.columns) - set(suspended_stocks)
-    
-    valid = valid_listing & valid_suspension
-    return list(valid)
-
-def get_latest_fundamental(stock_code: str, rb_date: pd.Timestamp, fundamental_df: pd.DataFrame) -> pd.Series:
-    """
-    对于给定股票和再平衡日期，从 fundamental_df 中选取报告期不超过 rb_date 的90天前的最新记录，
-    返回一行 Series，包含 total_equity 等基本面数据；若不存在则返回 None。
-    """
-    latest_report_date = rb_date - pd.Timedelta(days=90)
-    df = fundamental_df[fundamental_df["stock_code"] == stock_code]
-    df = df[df["report_date"] <= latest_report_date]
-    if df.empty:
-        return None
-    return df.sort_values("report_date").iloc[-1]
 
 def safe_value(val):
     """将 NaN 转换为 None"""
@@ -82,16 +50,8 @@ def backtest_strategy(start_date: str, end_date: str):
     logger.info("Starting backtest strategy from %s to %s", start_date, end_date)
     
     # 加载数据
-    refresh_holders()
-    # 为保证数据的完整性，加载180天前的数据
-    data_start_date = datetime.strptime(start_date, "%Y-%m-%d").date() - timedelta(days=180)
-    data_start_date = data_start_date.strftime("%Y-%m-%d")
-    prices = get_prices_df(data_start_date, end_date)
-    volumes = get_volume_df(data_start_date, end_date)
-    mkt_cap = get_mkt_cap_df(data_start_date, end_date)
-    stock_info = get_stock_info_df()
-    fundamental_df = get_fundamental_df()
-    suspend_df = get_suspend_df()
+    prices = get_fund_prices_by_code_list(selected_funds, start_date, end_date).loc[start_date:end_date]
+    fees_rate_dict = get_fund_fees_by_code_list(selected_funds)
 
     # 获取再平衡日期
     rb_dates = get_rebalance_dates(prices, start_date, end_date)
@@ -99,8 +59,11 @@ def backtest_strategy(start_date: str, end_date: str):
     logger.info("Identified %d rebalance dates.", len(rb_dates))
     
     # 初始化订单矩阵
-    init_cash = 1000000
+    init_cash = 100000
     order_sizes = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
+
+    # 初始化动态费率矩阵
+    fee_rate_df = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
     
     # 维护动态持仓状态（用于计算订单）
     current_positions = pd.Series(0.0, index=prices.columns)  # 当前持仓数量
@@ -114,58 +77,42 @@ def backtest_strategy(start_date: str, end_date: str):
             segment_mask[i, 0] = True
             logger.info("Processing rebalance date: %s", rb_date.strftime("%Y-%m-%d"))
         
-            # ---------------------------
-            # 筛选逻辑
-            # ---------------------------
-
-            valid_stocks = filter_universe(prices, volumes, mkt_cap, stock_info, suspend_df, rb_date)
-            logger.info("Valid stocks count on %s: %d", rb_date.strftime("%Y-%m-%d"), len(valid_stocks))
-            if not valid_stocks:
-                continue
-        
-            try:
-                mkt_cap_on_date = mkt_cap.loc[rb_date, valid_stocks]
-            except Exception as e:
-                logger.warning("No market cap data on %s; skipping.", rb_date.strftime("%Y-%m-%d"))
-                continue
-        
-            selected_stocks = valid_stocks
             # 确保调仓日的价格无缺失或异常
-            if prices.loc[rb_date, selected_stocks].isnull().any():
-                logger.warning("Missing price data for selected stocks on %s; skipping.", rb_date.strftime("%Y-%m-%d"))
-                invalid_stocks = selected_stocks[prices.loc[rb_date, selected_stocks].isnull()]
-                # 从selected_stocks中删除invalid_stocks
-                selected_stocks = selected_stocks.drop(invalid_stocks)
-            logger.info("Selected stocks count on %s: %d", rb_date.strftime("%Y-%m-%d"), len(selected_stocks))
+            if prices.loc[rb_date, selected_funds].isnull().any():
+                logger.warning("Missing price data for selected assets on %s; skipping.", rb_date.strftime("%Y-%m-%d"))
+                return
+            logger.info("Selected assets count on %s: %d", rb_date.strftime("%Y-%m-%d"), len(selected_funds))
             # 填充目标持仓（示例：市值加权）
-            target_weights.loc[rb_date, selected_stocks] = mkt_cap.loc[rb_date, selected_stocks] / mkt_cap.loc[rb_date, selected_stocks].sum()
+            target_weights.loc[rb_date, selected_funds] = weights_of_assets
+
+            # 填充动态费率
+            fee_rate_df.loc[rb_date, selected_funds] = fees_rate_dict
 
             current_prices = prices.loc[rb_date]
             holdings_value = (current_positions * current_prices).sum()
             total_asset = holdings_value + current_cash
+
             # 计算目标持仓
             target_positions = np.floor((target_weights.loc[rb_date] * total_asset) / current_prices)
             target_positions = target_positions.fillna(0)
             diff_positions = target_positions - current_positions
             diff_value = diff_positions * current_prices
-            assumpt_left_balance = -1 * diff_value[diff_value < 0].sum() * (1 - fee_rate - slippage_rate) + current_cash
-            assumpt_need_amount = diff_value[diff_value > 0].sum() * (1 + fee_rate + slippage_rate)
+            assumpt_left_balance = -1 * (diff_value[diff_value < 0] * (1 - fee_rate_df.loc[rb_date] - slippage_rate)).sum() + current_cash
+            assumpt_need_amount = (diff_value[diff_value > 0] * (1 + fee_rate_df.loc[rb_date] + slippage_rate)).sum()
             while assumpt_left_balance < assumpt_need_amount:
                 scale_factor = assumpt_left_balance / assumpt_need_amount
                 target_positions = np.floor(target_positions * scale_factor)
                 diff_positions = target_positions - current_positions
                 diff_value = diff_positions * current_prices
-                assumpt_left_balance = -1 * diff_value[diff_value < 0].sum() * (1 - fee_rate - slippage_rate) + current_cash
-                assumpt_need_amount = diff_value[diff_value > 0].sum() * (1 + fee_rate + slippage_rate)
+                assumpt_left_balance = -1 * (diff_value[diff_value < 0] * (1 - fee_rate_df.loc[rb_date] - slippage_rate)).sum() + current_cash
+                assumpt_need_amount = (diff_value[diff_value > 0] * (1 + fee_rate_df.loc[rb_date] + slippage_rate)).sum()
             order_sizes.loc[rb_date] = diff_positions
             current_positions = target_positions
             current_cash = assumpt_left_balance - assumpt_need_amount
 
 
     # 输出当日持仓详情到 CSV
-    if not os.path.exists(os.path.join(output_dir, format_date(end_date))):
-        os.makedirs(os.path.join(output_dir, format_date(end_date)))
-    target_weights.loc[rb_dates].to_csv(os.path.join(output_dir, format_date(end_date), output_prefix + "_portfolio.csv"))
+    target_weights.loc[rb_dates].to_csv(os.path.join(output_dir, output_prefix + "_portfolio.csv"))
 
     # -------------------------------
     # 定义回测所需的回调函数
@@ -235,7 +182,8 @@ def backtest_strategy(start_date: str, end_date: str):
             size=order_sizes,         # 目标权重矩阵作为订单 size（用百分比表示）
             size_type=SizeType.Amount,   # 订单类型： 按数量
             direction=Direction.Both, # 订单方向：双向
-            fees=fee_rate,                  # 交易费用（动态费用也可以传入Series或DataFrame）
+            fees=fee_rate_df,                  # 交易费用（动态费用也可以传入Series或DataFrame）
+            freq='B',
             slippage=slippage_rate               # 滑点
         ),
         cash_sharing=True,  # 同一组内共享现金
@@ -246,14 +194,18 @@ def backtest_strategy(start_date: str, end_date: str):
     # 输出结果（与原始代码相同）
     logger.info("Order detail:")
     logger.info(pf.orders.records_readable)
-    total_value = pf.value().loc[rb_dates[0]:end_date]
-    daily_returns = pf.returns().loc[rb_dates[0]:end_date]
+    total_value = pf.value()
+    daily_returns = pf.returns()
+    value_df = total_value.to_frame("value").reset_index(drop=False)
     # logger.info(pf.stats())
-    total_value.to_csv(os.path.join(output_dir, format_date(end_date), output_prefix + "_total_value.csv"))
-    daily_returns.to_csv(os.path.join(output_dir, format_date(end_date), output_prefix + "_daily_returns.csv"))
+    total_value.to_csv(os.path.join(output_dir, output_prefix + "_total_value.csv"))
+    daily_returns.to_csv(os.path.join(output_dir, output_prefix + "_daily_returns.csv"))
     logger.info("Latest Value: %s", pf.final_value())
     logger.info("Total Return: %s", pf.total_return())
+    logger.info("annualized return: %s", annualized_return(value_df, value_col='value'))
+    logger.info("max_drawdown: %s", max_drawdown(value_df, value_col='value'))
+    logger.info("sharpe ratio: %s", sharpe_ratio(value_df, value_col='value', risk_free_rate=0))
     # 可视化（可选）
     fig = pf.value(group_by=True).vbt.plot(title="Portfolio Value Curve")
-    fig.write_html(os.path.join(output_dir, format_date(end_date), output_prefix + "_value_plot.html"))
+    fig.write_html(os.path.join(output_dir, output_prefix + "_value_plot.html"))
     return pf

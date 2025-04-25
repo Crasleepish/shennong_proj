@@ -1,27 +1,5 @@
 '''
----
-
-### **1. 分组步骤**
-1. **按市值分组**：
-   - 使用全市场股票市值的中位数作为分界点，将所有股票分为**小市值（S）**和**大市值（B）**两组。
-2. **按VLT分组**：
-   - 在**小市值（S）**组内，按VLT的30%和70%分位数将股票分为**低VLT（L）**、**中VLT（M）**和**高VLT（H）**三组。
-   - 在**大市值（B）**组内，同样按VLT的30%和70%分位数将股票分为**低VLT（L）**、**中VLT（M）**和**高VLT（H）**三组。
-
----
-
-### **2. 构建组合**
-- 经过上述分组后，会形成 **2（市值） × 3（VLT） = 6个组合**：
-  - 小市值 + 低VLT（S/L）
-  - 小市值 + 中VLT（S/M）
-  - 小市值 + 高VLT（S/H）
-  - 大市值 + 低VLT（B/L）
-  - 大市值 + 中VLT（B/M）
-  - 大市值 + 高VLT（B/H）
-
----
-
-### 本组合为大市值 + 高VLT（B/H）
+### 本组合为全市场高换手率组合
 '''
 from app.data.helper import *
 import os
@@ -33,8 +11,7 @@ from datetime import datetime, timedelta
 from numba import njit
 from vectorbt.portfolio.enums import Direction, OrderStatus, NoOrder, CallSeqType, SizeType
 from vectorbt.portfolio import nb
-from .compute_asset_growth import compute_and_cache_asset_growth, compute_and_cache_industry_avg_asset_growth
-from app.utils.data_utils import calculate_column_volatility
+from app.utils.data_utils import calculate_column_illiquidity
 from app.utils.data_utils import format_date
 
 logger = logging.getLogger(__name__)
@@ -43,11 +20,11 @@ logging.getLogger('numba').setLevel(logging.INFO)
 fee_rate = 0.0003
 slippage_rate = 0.0001
 output_dir = r"./bt_result"
-output_prefix = "portfolio_VLT_B_H"
+output_prefix = "portfolio_LIQ_X_L"
 
 def get_rebalance_dates(prices: pd.DataFrame, start_date: str, end_date: str) -> pd.DatetimeIndex:
     """
-    根据价格数据的交易日期，返回每年6月和12月最后一个交易日作为再平衡日，
+    根据价格数据的交易日期，返回每月最后一个交易日作为再平衡日，
     仅在指定日期区间内。
     """
     dates = prices.loc[start_date:end_date].index
@@ -117,9 +94,10 @@ def backtest_strategy(start_date: str, end_date: str):
     data_start_date = data_start_date.strftime("%Y-%m-%d")
     prices = get_prices_df(data_start_date, end_date)
     volumes = get_volume_df(data_start_date, end_date)
+    amounts = get_amount_df(data_start_date, end_date)
+    returns = get_return_df(start_date, end_date)
     mkt_cap = get_mkt_cap_df(data_start_date, end_date)
     stock_info = get_stock_info_df()
-    fundamental_df = get_fundamental_df()
     suspend_df = get_suspend_df()
 
     # 获取再平衡日期
@@ -152,32 +130,28 @@ def backtest_strategy(start_date: str, end_date: str):
             if not valid_stocks:
                 continue
         
-            try:
-                mkt_cap_on_date = mkt_cap.loc[rb_date, valid_stocks]
-            except Exception as e:
-                logger.warning("No market cap data on %s; skipping.", rb_date.strftime("%Y-%m-%d"))
+            # LIQ筛选
+            # 使用最近1个月数据来计算 Amihud illiquidity
+            one_month_ago = rb_date - pd.DateOffset(months=1)
+            returns_window = returns.loc[one_month_ago:rb_date, valid_stocks]
+            amounts_window = amounts.loc[one_month_ago:rb_date, valid_stocks]
+
+            illiq_series = pd.Series(index=valid_stocks, dtype=float)
+            for stock in valid_stocks:
+                illiq_series[stock] = calculate_column_illiquidity(
+                    returns_window[stock],
+                    amounts_window[stock]
+                )
+            illiq_series = illiq_series.dropna()
+            if illiq_series.empty:
+                logger.info("No illiquidity data on %s.", rb_date.strftime("%Y-%m-%d"))
                 continue
-        
-            # 市值组筛选
-            mkt_cap_sorted = mkt_cap_on_date.sort_values(ascending=True)
-            num_threslold = int(len(mkt_cap_sorted) * 0.5)
-            cap_selected_stocks = mkt_cap_sorted.index[num_threslold:]
-            logger.info("Big cap group count on %s: %d", rb_date.strftime("%Y-%m-%d"), len(cap_selected_stocks))
-        
-            # VLT筛选
-            # 先做行业中性化处理
-            # 计算中性化后的盈利能力
-            # calculate_volatility(prices, code, start_date, end_date)
-            one_year_ago = rb_date - pd.DateOffset(years=1)
-            price_series = prices.loc[one_year_ago:rb_date, cap_selected_stocks]
-            volatility_series = price_series.apply(lambda col: calculate_column_volatility(col))
-            volatility_series = volatility_series.dropna()
-            if volatility_series.empty:
-                logger.info("No volatility_dict on %s.", rb_date.strftime("%Y-%m-%d"))
-                continue
-            vlt_sorted = volatility_series.sort_values(ascending=True)
-            num_selected = int(len(vlt_sorted) * 0.8)
-            selected_stocks = vlt_sorted.index[num_selected:]
+
+            # 选出“流动性高”的股票：illiquidity 值越低越好
+            illiq_sorted = illiq_series.sort_values(ascending=True)
+            num_selected = int(len(illiq_sorted) * 0.3)
+            selected_stocks = illiq_sorted.index[:num_selected]
+
             # 确保调仓日的价格无缺失或异常
             if prices.loc[rb_date, selected_stocks].isnull().any():
                 logger.warning("Missing price data for selected stocks on %s; skipping.", rb_date.strftime("%Y-%m-%d"))

@@ -1,6 +1,6 @@
 from typing import List
 from bisect import bisect_left
-import akshare as ak
+import tushare as ts
 import pandas as pd
 import datetime
 import math
@@ -16,6 +16,8 @@ import re
 import logging
 
 logger = logging.getLogger(__name__)
+
+tspro = ts.pro_api()
 
 def safe_value(val):
     return None if pd.isna(val) else val
@@ -47,47 +49,49 @@ class StockInfoSynchronizer:
             df = ak.stock_info_sh_name_code(symbol="主板A股")
         """
         logger.info("Fetching data from akshare ...")
-        sh_a_list = ak.stock_info_sh_name_code(symbol="主板A股")[['证券代码', '证券简称', '上市日期']]
-        sh_a_list = sh_a_list.rename(columns={'证券代码': 'code', '证券简称': 'name', '上市日期': 'ipo_date'})
-        sh_a_list['market'] = 'SH'
+        stock_list = tspro.stock_basic(exchange='', list_status='L', fields='ts_code,symbol,name,market,exchange,list_date')
+        stock_list = stock_list.rename(columns={'ts_code': 'stock_code', 'name': 'stock_name', 'market': 'market', 'exchange': 'exchange', 'list_date': 'listing_date'})
         # 将上市日期转换为日期类型（若转换失败则置为 NaT）
-        if 'ipo_date' in sh_a_list.columns:
-            sh_a_list['ipo_date'] = pd.to_datetime(sh_a_list['ipo_date'], errors='coerce').dt.date
+        stock_list['listing_date'] = pd.to_datetime(stock_list['listing_date'], errors='coerce').dt.date
 
-        sh_kc_list = ak.stock_info_sh_name_code(symbol="科创板")[['证券代码', '证券简称', '上市日期']]
-        sh_kc_list = sh_kc_list.rename(columns={'证券代码': 'code', '证券简称': 'name', '上市日期': 'ipo_date'})
-        sh_kc_list['market'] = 'SH'
-        if 'ipo_date' in sh_kc_list.columns:
-            sh_kc_list['ipo_date'] = pd.to_datetime(sh_kc_list['ipo_date'], errors='coerce').dt.date
+        # 退市股票列表
+        stock_ts_list = tspro.stock_basic(exchange='', list_status='D', fields='ts_code,symbol,name,market,exchange,list_date')
+        stock_ts_list = stock_ts_list.rename(columns={'ts_code': 'stock_code', 'name': 'stock_name', 'market': 'market', 'exchange': 'exchange', 'list_date': 'listing_date'})
+        stock_ts_list['listing_date'] = pd.to_datetime(stock_ts_list['listing_date'], errors='coerce').dt.date
 
-        sz_a_list = ak.stock_info_sz_name_code(symbol="A股列表")[['A股代码', 'A股简称', 'A股上市日期']]
-        sz_a_list = sz_a_list.rename(columns={'A股代码': 'code', 'A股简称': 'name', 'A股上市日期': 'ipo_date'})
-        sz_a_list['market'] = 'SZ'
-        if 'ipo_date' in sz_a_list.columns:
-            sz_a_list['ipo_date'] = pd.to_datetime(sz_a_list['ipo_date'], errors='coerce').dt.date
-
-        sh_ts_list = ak.stock_info_sh_delist(symbol="全部")[['公司代码', '公司简称', '上市日期']]
-        sh_ts_list = sh_ts_list.rename(columns={'公司代码': 'code', '公司简称': 'name', '上市日期': 'ipo_date'})
-        sh_ts_list['market'] = 'SH'
-        if 'ipo_date' in sh_ts_list.columns:
-            sh_ts_list['ipo_date'] = pd.to_datetime(sh_ts_list['ipo_date'], errors='coerce').dt.date
-
-        sz_ts_list = ak.stock_info_sz_delist(symbol="终止上市公司")[['证券代码', '证券简称', '上市日期']]
-        sz_ts_list = sz_ts_list.rename(columns={'证券代码': 'code', '证券简称': 'name', '上市日期': 'ipo_date'})
-        sz_ts_list['market'] = 'SZ'
-        if 'ipo_date' in sz_ts_list.columns:
-            sz_ts_list['ipo_date'] = pd.to_datetime(sz_ts_list['ipo_date'], errors='coerce').dt.date
-
-        df = pd.concat([sh_a_list, sh_kc_list, sz_a_list, sh_ts_list, sz_ts_list], ignore_index=True).sort_values('ipo_date').reset_index(drop=True)
-        df.drop_duplicates(subset=['code'], keep='last', inplace=True)
+        df = pd.concat([stock_list, stock_ts_list], ignore_index=True).sort_values('listing_date').reset_index(drop=True)
+        df.drop_duplicates(subset=['stock_code'], keep='last', inplace=True)
         return df
+    
+    def update_industry(self):
+        """
+        基于申万行业分类，将行业信息写入 stock_info 表
+        """
+        logger.info("开始更新行业信息（申万2021）")
+        try:
+            industry_df = tspro.index_classify(level='L1', src='SW2021')
+            logger.info(f"获取到 {len(industry_df)} 个一级行业")
+
+            for _, row in industry_df.iterrows():
+                index_code = row['index_code']
+                industry_name = row['industry_name']
+                try:
+                    members_df = tspro.index_member_all(l1_code=index_code, fields='ts_code')
+                    stock_codes = members_df['ts_code'].dropna().tolist()
+                    self.stock_info_dao.update_industry_by_mapping(stock_codes, industry_name)
+                except Exception as e:
+                    logger.warning(f"[跳过] 获取行业 {industry_name} 成分股失败: {e}")
+            
+            logger.info("行业更新完成")
+        except Exception as e:
+            logger.error("行业信息更新失败: %s", e)
+            raise e
 
     def sync(self, progress_callback=None):
         """
         同步数据：将接口返回的新增记录插入到数据库中
         """
         logger.info("Starting synchronization for stock info.")
-        # self.stock_info_dao.update_all_industry()
         df = self.fetch_data()
         if df.empty:
             logger.warning("Fetched data is empty.")
@@ -100,7 +104,7 @@ class StockInfoSynchronizer:
             logger.debug("Existing stock codes in DB: %s", existing_codes)
             
             # 筛选出新增数据（证券代码不在 existing_codes 中）
-            new_data = df[~df['code'].isin(existing_codes)]
+            new_data = df[~df['stock_code'].isin(existing_codes)]
             logger.info("Found %d new records to insert.", len(new_data))
             
             if new_data.empty:
@@ -110,20 +114,13 @@ class StockInfoSynchronizer:
             # 将 DataFrame 中每一行转换为 StockInfo 对象
             new_records = []
             for idx, row in new_data.iterrows():
-                try:
-                    info_df = ak.stock_individual_info_em(symbol=row['code'])
-                except Exception as e:
-                    logger.error("获取行业信息失败，股票代码：%s，错误信息：%s", row['code'], e)
-                    continue
-                industry = safe_value(info_df[info_df["item"] == "行业"].iloc[0]['value'])
-                if industry is not None and industry.strip() == "-":
-                    industry = None
                 record = StockInfo(
-                    stock_code=row['code'],
-                    stock_name=safe_value(row['name']),
-                    listing_date=safe_value(row['ipo_date']),
+                    stock_code=safe_value(row['stock_code']),
+                    stock_name=safe_value(row['stock_name']),
                     market=safe_value(row['market']),
-                    industry=industry
+                    exchange=safe_value(row['exchange']),
+                    listing_date=safe_value(row['listing_date']),
+                    industry=None
                 )
                 new_records.append(record)
                 if progress_callback:
@@ -132,6 +129,9 @@ class StockInfoSynchronizer:
             
             # 批量插入新增记录
             self.stock_info_dao.batch_insert(new_records)
+
+            # 更新行业信息
+            self.update_industry()
 
             # 将新数据插入到update_flag表中
             for idx, record in enumerate(new_records, start=1):

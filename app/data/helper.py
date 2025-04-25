@@ -159,6 +159,50 @@ def get_volume_df(start_date: str, end_date: str) -> pd.DataFrame:
     pivot_df = pivot_df.fillna(0)
     return pivot_df
 
+def get_amount_df(start_date: str, end_date: str) -> pd.DataFrame:
+    """
+    返回成交额数据。
+    
+    DataFrame 格式要求：
+      - 索引为交易日期（datetime64[ns]）
+      - 列为股票代码
+      - 值为股票的成交额（单位：元）
+     
+    样例输出：
+                 600012      600016       600018
+    Date                                
+    2021-01-04   305350549   425133654    386441924
+    2021-01-05   152483088   144274065    216927102
+    2021-01-06   170145432   128599108    180497477
+    ...
+    """
+    df_all = stock_hist_adj_holder.get_stock_hist_adj(start_date, end_date)
+    pivot_df = df_all.pivot(index="date", columns="stock_code", values="amount")
+    pivot_df = pivot_df.fillna(0)
+    return pivot_df
+
+def get_return_df(start_date: str, end_date: str) -> pd.DataFrame:
+    """
+    返回每日收益率数据。
+    
+    DataFrame 格式要求：
+      - 索引为交易日期（datetime64[ns]）
+      - 列为股票代码
+      - 值为股票的收益率
+     
+    样例输出：
+                 600012      600016       600018
+    Date                                
+    2021-01-04   0.01        0.01         0.01
+    2021-01-05   0.02        0.02         0.02
+    2021-01-06   0.12        0.12         0.12
+    ...
+    """
+    df_all = stock_hist_adj_holder.get_stock_hist_adj(start_date, end_date)
+    pivot_df = df_all.pivot(index="date", columns="stock_code", values="change_percent")
+    pivot_df = pivot_df.fillna(0.0)
+    return pivot_df
+
 def get_mkt_cap_df(start_date: str, end_date: str) -> pd.DataFrame:
     """
     返回股票市值数据。

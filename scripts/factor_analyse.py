@@ -3,6 +3,8 @@ import numpy as np
 import os
 from typing import Dict
 
+## DEPRECATED
+
 #ME / W-FRI
 sample_rate = "W-FRI"
 

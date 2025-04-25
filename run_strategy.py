@@ -29,6 +29,7 @@ from app.backtest.portfolio_VLT_S_L import backtest_strategy as portfolio_VLT_S_
 from app.backtest.portfolio_VLT_B_L import backtest_strategy as portfolio_VLT_B_L
 from app.backtest.portfolio_VLT_S_H import backtest_strategy as portfolio_VLT_S_H
 from app.backtest.portfolio_VLT_B_H import backtest_strategy as portfolio_VLT_B_H
+from app.backtest.portfolio_LIQ_X_H import backtest_strategy as portfolio_LIQ_X_H
 from app.data.helper import get_index_daily_return
 from app.backtest.portfolio_fund import backtest_strategy as portfolio_fund
 
@@ -72,10 +73,11 @@ functions = {
     27: portfolio_VLT_S_H,
     28: portfolio_VLT_B_H,
     29: csi_index_zzqz,
-    30: portfolio_fund
+    30: portfolio_fund,
+    31: portfolio_LIQ_X_H
 }
 
-start_date = "2017-06-29"
+start_date = "2024-06-29"
 end_date = "2025-03-31"
 
 def list_functions():
