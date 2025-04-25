@@ -3,7 +3,7 @@ from flask import Blueprint, request, jsonify
 import logging
 
 # 导入各同步器（注意根据实际项目的模块路径调整）
-from app.data.fetcher import stock_info_synchronizer, stock_hist_synchronizer, stock_adj_hist_synchronizer, company_action_synchronizer, fundamental_data_synchronizer, suspend_data_synchronizer
+from app.data.fetcher import stock_info_synchronizer, stock_hist_synchronizer, adj_factor_synchronizer, stock_adj_hist_synchronizer, company_action_synchronizer, fundamental_data_synchronizer, suspend_data_synchronizer
 from app.data.index_fetcher import index_info_synchronizer, index_hist_synchronizer
 from app.data.fund_fetcher import fund_info_synchronizer, fund_hist_synchronizer
 from app.data.cninfo_fetcher import cninfo_stock_share_change_fetcher
@@ -98,6 +98,41 @@ def sync_stock_hist():
     except Exception as e:
         logger.exception("Error creating stock hist sync task.")
         return jsonify({"status": "error", "message": str(e)}), 500
+    
+@fin_data_bp.route("/adj_factor/sync", methods=["POST"])
+def sync_adj_factor():
+    """
+    创建一个同步复权因子数据的任务，并启动同步。
+    请求参数（JSON）中可包含 task_type（例如 "ADJ_FACTOR_SYNC"），
+    此处示例中直接固定为同步复权因子数据。
+    """
+    try:
+        # 创建任务记录（初始状态为 RUNNING，进度为 0）
+        new_task = TaskRecord(
+            task_type="ADJ_FACTOR_SYNC",
+            task_status="RUNNING",
+            progress_current=0,
+            progress_total=0,
+            message="Task started."
+        )
+        new_task = task_dao.insert(new_task)
+        task_id = new_task.id
+        logger.info("Created task id %d for adj factor data sync.", task_id)
+
+        # 定义进度回调函数
+        progress_cb = make_progress_callback(task_id)
+
+        def task_func():
+            adj_factor_synchronizer.sync(progress_callback=progress_cb)
+
+        # 启动后台任务
+        launch_background_task(task_id, task_func)
+
+        return jsonify({"status": "success", "task_id": task_id, "message": "Adj factor sync task started"}), 200
+    except Exception as e:
+        logger.exception("Error creating adj factor sync task.")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 
 @fin_data_bp.route("/stock_adj_hist/sync", methods=["POST"])
 def sync_stock_hist_adj():

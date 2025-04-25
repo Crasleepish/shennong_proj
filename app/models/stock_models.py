@@ -94,6 +94,17 @@ class CompanyAction(Base):
         return f"<CompanyAction(stock_code='{self.stock_code}', ex_dividend_date='{self.ex_dividend_date}')>"
     
 
+class AdjFactor(Base):
+    __tablename__ = 'adj_factor'
+    # 联合主键(stock_code, date)
+    stock_code = Column("stock_code", String(10), primary_key=True)
+    date = Column("date", Date, primary_key=True)
+    adj_factor = Column("adj_factor", Float)
+
+    def __repr__(self):
+        return f"<AdjFactor(stock_code='{self.stock_code}', date='{self.date}')>"
+
+
 class StockHistAdj(Base):
     __tablename__ = 'stock_hist_adj'
     # 联合主键 (stock_code, date)

@@ -6,8 +6,8 @@ import datetime
 import math
 import asyncio
 from sqlalchemy.orm import Session
-from app.models.stock_models import StockInfo, StockHistUnadj, UpdateFlag, CompanyAction, FutureTask, StockHistAdj, FundamentalData, SuspendData
-from app.dao.stock_info_dao import StockInfoDao, StockHistUnadjDao, UpdateFlagDao, CompanyActionDao, FutureTaskDao, StockHistAdjDao, FundamentalDataDao, SuspendDataDao, StockShareChangeCNInfoDao
+from app.models.stock_models import StockInfo, StockHistUnadj, UpdateFlag, CompanyAction, AdjFactor, FutureTask, StockHistAdj, FundamentalData, SuspendData
+from app.dao.stock_info_dao import StockInfoDao, StockHistUnadjDao, UpdateFlagDao, CompanyActionDao, AdjFactorDao, FutureTaskDao, StockHistAdjDao, FundamentalDataDao, SuspendDataDao, StockShareChangeCNInfoDao
 from app.constants.enums import TaskType, TaskStatus
 from typing import Union
 from .custom_api import fetch_stock_equity_changes
@@ -732,6 +732,166 @@ class StockAdjHistSynchronizer:
             self.terminate()
 
 
+class AdjFactorSynchronizer:
+    """
+    同步复权因子到数据库。
+
+    主要流程：
+      1. 获取当前数据库中的股票列表
+      2. 遍历股票列表，依次同步每只股票的复权因子数据
+      3. 对于某一支股票，查看其最新数据的日期
+      4. 如果最新日期小于等于当前日期，则同步该支股票的复权因子数据，调用 tushare 接口(tspro.adj_factor)
+      5. 如果时间跨度大于20年，则结束日期截取至开始日期+20年
+      6. 将新增的数据插入数据库
+      7. 限制接口调用次数每分钟不超过400次
+    """
+
+    def __init__(self):
+        self.tspro = tspro
+        self.stock_info_dao = StockInfoDao._instance
+        self.adj_factor_dao = AdjFactorDao._instance
+        self.loop = asyncio.get_event_loop()
+        self.semaphore = asyncio.Semaphore(6)  # 限制同时6个任务
+        self.api_call_counter = 0
+        self.api_call_reset_time = time.time() + 60
+        self.stock_list_size = 0
+        self.completed_num = 0
+        self.lock = asyncio.Lock()
+
+    def initialize(self):
+        self.stock_list_size = 0
+        self.completed_num = 0
+        self.api_call_counter = 0
+        self.api_call_reset_time = time.time() + 60
+
+    def terminate(self):
+        self.stock_list_size = 0
+        self.completed_num = 0
+
+    async def _check_api_rate_limit(self):
+        current_time = time.time()
+        if current_time > self.api_call_reset_time:
+            self.api_call_counter = 0
+            self.api_call_reset_time = current_time + 60
+        if self.api_call_counter >= 400:
+            wait_time = self.api_call_reset_time - current_time
+            if wait_time > 0:
+                logger.info(f"Rate limit reached, waiting for {wait_time:.2f} seconds")
+                await asyncio.sleep(wait_time)
+            self.api_call_counter = 0
+            self.api_call_reset_time = time.time() + 60
+        self.api_call_counter += 1
+
+    async def fetch_adj_factor(self, stock_code, start_date, end_date):
+        try:
+            async with self.semaphore:
+                await self._check_api_rate_limit()
+
+                ts_code = stock_code
+                df = await asyncio.to_thread(
+                    self.tspro.adj_factor,
+                    ts_code=ts_code,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+
+                if not df.empty:
+                    df['trade_date'] = pd.to_datetime(df['trade_date'], format='%Y%m%d')
+                return df
+
+        except Exception as e:
+            logger.error(f"Error fetching adj factor for {stock_code}: {e}")
+            return pd.DataFrame()
+
+    async def batch_insert_adj_factors(self, stock_code, df):
+        """批量插入 adj_factor 表"""
+        def _syn_batch_insert(records):
+            if records:
+                try:
+                    self.adj_factor_dao.batch_insert(records)
+                    logger.info(f"Inserted {len(records)} adj_factor records for stock {stock_code}")
+                except Exception as e:
+                    logger.error(f"Error inserting adj_factors for {stock_code}: {e}")
+
+        records = []
+        for _, row in df.iterrows():
+            record = AdjFactor(
+                stock_code=stock_code,
+                date=row["trade_date"].date(),
+                adj_factor=safe_value(row["adj_factor"])
+            )
+            records.append(record)
+
+        if records:
+            await asyncio.to_thread(_syn_batch_insert, records)
+
+    async def process_stock(self, stock_code, market, start_date, end_date, progress_callback=None):
+        try:
+            logger.info(f"Fetching adj factor for stock {stock_code} from {start_date} to {end_date}")
+
+            df = await self.fetch_adj_factor(stock_code, start_date, end_date)
+            if df.empty:
+                logger.info(f"No new adj factor data for stock {stock_code}.")
+                return
+
+            await self.batch_insert_adj_factors(stock_code, df)
+
+        except Exception as e:
+            logger.error(f"Error processing stock {stock_code}: {e}")
+        finally:
+            async with self.lock:
+                self.completed_num += 1
+                if progress_callback:
+                    progress_callback(self.completed_num, self.stock_list_size)
+
+    def sync(self, progress_callback=None):
+        self.initialize()
+        try:
+            logger.info("Starting adj factor synchronization.")
+            stock_list = self.stock_info_dao.load_stock_info()
+            self.stock_list_size = len(stock_list)
+            logger.info(f"Found {len(stock_list)} stocks to synchronize.")
+
+            batch_size = 20
+            for i in range(0, len(stock_list), batch_size):
+                batch = stock_list[i:i+batch_size]
+                tasks = []
+
+                for stock in batch:
+                    stock_code = stock.stock_code
+                    market = stock.market
+
+                    latest_date = self.adj_factor_dao.get_latest_date(stock_code)
+                    if latest_date is None:
+                        start_date = "19901126"
+                    else:
+                        next_date = latest_date + datetime.timedelta(days=1)
+                        start_date = next_date.strftime("%Y%m%d")
+
+                    current_date = datetime.datetime.now().strftime("%Y%m%d")
+
+                    if start_date > current_date:
+                        logger.info(f"Stock {stock_code} is up to date.")
+                        continue
+
+                    start_dt = datetime.datetime.strptime(start_date, "%Y%m%d")
+                    current_dt = datetime.datetime.strptime(current_date, "%Y%m%d")
+                    if (current_dt - start_dt).days > 365 * 20:
+                        end_date = (start_dt + datetime.timedelta(days=365 * 20)).strftime("%Y%m%d")
+                        logger.info(f"Limiting end date to {end_date} for stock {stock_code} (time span > 20 years)")
+                    else:
+                        end_date = current_date
+
+                    tasks.append(self.loop.create_task(
+                        self.process_stock(stock_code, market, start_date, end_date, progress_callback)
+                    ))
+
+                if tasks:
+                    self.loop.run_until_complete(asyncio.gather(*tasks))
+        finally:
+            self.terminate()
+
+
 class CompanyActionSynchronizer:
     '''
     同步公司行动数据到数据库。
@@ -1258,6 +1418,7 @@ def parse_amount(s: Union[str, float, None]) -> Union[float, None]:
     
 stock_info_synchronizer = StockInfoSynchronizer()
 stock_hist_synchronizer = StockHistSynchronizer()
+adj_factor_synchronizer = AdjFactorSynchronizer()
 stock_adj_hist_synchronizer = StockAdjHistSynchronizer()
 company_action_synchronizer = CompanyActionSynchronizer()
 fundamental_data_synchronizer = FundamentalDataSynchronizer()

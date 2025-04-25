@@ -4,7 +4,7 @@ from app import create_app
 from app.database import Base, engine
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
-from app.data.fetcher import StockInfoSynchronizer, StockHistSynchronizer, CompanyActionSynchronizer, FundamentalDataSynchronizer, SuspendDataSynchronizer
+from app.data.fetcher import StockInfoSynchronizer, StockHistSynchronizer, AdjFactorSynchronizer, CompanyActionSynchronizer, FundamentalDataSynchronizer, SuspendDataSynchronizer
 from app.data.fetcher import stock_adj_hist_synchronizer
 from app.data.cninfo_fetcher import cninfo_stock_share_change_fetcher
 from types import SimpleNamespace
@@ -12,7 +12,7 @@ from app.database import get_db
 
 # Use the TestConfig from our config module
 from app.config import TestConfig, Config
-from app.dao.stock_info_dao import StockInfoDao, StockHistUnadjDao, StockHistAdjDao, FundamentalDataDao, SuspendDataDao, StockShareChangeCNInfoDao, CompanyActionDao, FutureTaskDao
+from app.dao.stock_info_dao import StockInfoDao, StockHistUnadjDao, StockHistAdjDao, AdjFactorDao, FundamentalDataDao, SuspendDataDao, StockShareChangeCNInfoDao, CompanyActionDao, FutureTaskDao
 from app.data.helper import get_prices_df, get_fund_prices_by_code_list, get_fund_fees_by_code_list
 
 # Create the Flask app using TestConfig
@@ -99,6 +99,19 @@ def test_CompanyActionSynchronizer(app, init_update_flag_data, monkeypatch, dumm
         company_action_dao.delete_all()
         stock_hist_unadj_dao = StockHistUnadjDao._instance
         stock_hist_unadj_dao.delete_all()
+        
+def test_AdjFactorSynchronizer(app, monkeypatch, dummy_stock_list):
+    def fake_load_stock_info(self):
+        return dummy_stock_list
+    
+    try:
+        monkeypatch.setattr(StockInfoDao, "load_stock_info", fake_load_stock_info)
+
+        adj_factor_synchronizer = AdjFactorSynchronizer()
+        adj_factor_synchronizer.sync()
+    finally:
+        adj_factor_dao = AdjFactorDao._instance
+        adj_factor_dao.delete_all()
 
 def test_AdjSynchronizer(app, init_update_flag_data, monkeypatch, dummy_stock_list):
     def fake_load_stock_info(self):

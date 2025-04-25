@@ -1,7 +1,7 @@
 from typing import List, Union
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, tuple_
-from app.models.stock_models import StockInfo, StockHistUnadj, UpdateFlag, FutureTask, CompanyAction, StockHistAdj, FundamentalData, SuspendData, StockShareChangeCNInfo, MarketFactors
+from app.models.stock_models import StockInfo, StockHistUnadj, UpdateFlag, FutureTask, CompanyAction, StockHistAdj, AdjFactor, FundamentalData, SuspendData, StockShareChangeCNInfo, MarketFactors
 from app.database import get_db
 from app.utils.data_utils import process_in_batches
 import logging
@@ -359,6 +359,124 @@ class StockHistUnadjDao:
             db.rollback()
             raise e
 
+class AdjFactorDao:
+
+    _instance = None  # 用于保存单例对象
+
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super(AdjFactorDao, cls).__new__(cls)
+        # 始终返回已经创建好的 _instance
+        return cls._instance
+    
+    def __init__(self):
+        # __init__ 可能会被多次调用，因此通过 _initialized 标识确保只初始化一次
+        if not hasattr(self, '_initialized'):
+            self._initialized = True
+
+    def get_latest_date(self, stock_code: str):
+        """
+        查询指定股票在复权因子表中的最新日期，如果没有数据则返回 None。
+        """
+        try:
+            with get_db() as db:
+                logger.info(f"Using database bind: {db.bind}")
+                result = db.query(AdjFactor.date).filter(AdjFactor.stock_code == stock_code).order_by(AdjFactor.date.desc()).first()
+                if result:
+                    return result[0]
+                else:
+                    return None
+        except Exception as e:
+            logger.error("Error querying latest adj_factor date for %s: %s", stock_code, e)
+            return None
+
+    def batch_insert(self, records: List[AdjFactor]):
+        """
+        批量插入复权因子记录到数据库。
+        """
+        try:
+            with get_db() as db:
+                logger.info(f"Using database bind: {db.bind}")
+                def insert_one_batch(batch: List[AdjFactor]):
+                    db.add_all(batch)
+                    db.commit()
+                    return batch
+                process_in_batches(records, insert_one_batch)
+                return records
+        except Exception as e:
+            logger.error("Error during adj_factor batch insert: %s", e)
+            db.rollback()
+            raise e
+    
+    def get_adj_factors(self, stock_code: str, start_date=None, end_date=None):
+        """
+        获取指定股票在指定日期范围内的复权因子。
+        如果不指定日期范围，则返回所有记录。
+        """
+        try:
+            with get_db() as db:
+                query = db.query(AdjFactor).filter(AdjFactor.stock_code == stock_code)
+                
+                if start_date:
+                    query = query.filter(AdjFactor.date >= start_date)
+                if end_date:
+                    query = query.filter(AdjFactor.date <= end_date)
+                
+                return query.order_by(AdjFactor.date).all()
+        except Exception as e:
+            logger.error("Error querying adj_factors for %s: %s", stock_code, e)
+            return []
+    
+    def delete_stock_data(self, stock_code: str):
+        """
+        删除指定股票的复权因子记录。
+        """
+        try:
+            with get_db() as db:
+                db.query(AdjFactor).filter(AdjFactor.stock_code == stock_code).delete()
+                db.commit()
+                logger.info(f"Deleted all adj_factor records for stock {stock_code}")
+        except Exception as e:
+            logger.error("Error deleting adj_factor records for %s: %s", stock_code, e)
+            db.rollback()
+            raise e
+    
+    def delete_all(self):
+        """
+        删除复权因子表中的所有记录。
+        """
+        try:
+            with get_db() as db:
+                db.query(AdjFactor).delete()
+                db.commit()
+                logger.info("Deleted all adj_factor records")
+        except Exception as e:
+            logger.error("Error deleting all adj_factor records: %s", e)
+            db.rollback()
+            raise e
+    
+    def get_adj_factor_dataframe(self, stock_code: str, start_date=None, end_date=None):
+        """
+        以DataFrame形式返回指定股票的复权因子数据。
+        """
+        try:
+            adj_factors = self.get_adj_factors(stock_code, start_date, end_date)
+            if not adj_factors:
+                return pd.DataFrame()
+            
+            data = []
+            for factor in adj_factors:
+                data.append({
+                    'stock_code': factor.stock_code,
+                    'date': factor.date,
+                    'adj_factor': factor.adj_factor
+                })
+            
+            df = pd.DataFrame(data)
+            return df
+        except Exception as e:
+            logger.error("Error getting adj_factor dataframe for %s: %s", stock_code, e)
+            return pd.DataFrame()
 
 class CompanyActionDao:
 
@@ -933,6 +1051,8 @@ FutureTaskDao._instance = object.__new__(FutureTaskDao)
 FutureTaskDao._instance.__init__()
 StockHistUnadjDao._instance = object.__new__(StockHistUnadjDao)
 StockHistUnadjDao._instance.__init__()
+AdjFactorDao._instance = object.__new__(AdjFactorDao)
+AdjFactorDao._instance.__init__()
 CompanyActionDao._instance = object.__new__(CompanyActionDao)
 CompanyActionDao._instance.__init__()
 StockHistAdjDao._instance = object.__new__(StockHistAdjDao)
