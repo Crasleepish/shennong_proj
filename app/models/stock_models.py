@@ -31,13 +31,25 @@ class StockHistUnadj(Base):
     low = Column("low", Float)
     volume = Column("volume", BigInteger)      # 注意：原数据成交量单位为“手”，入库单位为“股”
     amount = Column("amount", Float)          # 单位：元
-    amplitude = Column("amplitude", Float)           # 单位：%
+    pre_close = Column("pre_close", Float)
     change_percent = Column("change_percent", Float)      # 单位：%
     change = Column("change", Float)             # 单位：元
     turnover_rate = Column("turnover_rate", Float)      # 单位：%
+    turnover_rate_f = Column("turnover_rate_f", Float)  # 单位：%
+    volume_ratio = Column("volume_ratio", Float)
+    pe = Column("pe", Float)
+    pe_ttm = Column("pe_ttm", Float)
+    pb = Column("pb", Float)
+    ps = Column("ps", Float)
+    ps_ttm = Column("ps_ttm", Float)
+    dv_ratio = Column("dv_ratio", Float)
+    dv_ttm = Column("dv_ttm", Float)
+    total_shares = Column("total_share", BigInteger)
+    float_shares = Column("float_share", BigInteger)
+    free_shares = Column("free_share", BigInteger)
     mkt_cap = Column("mkt_cap", BigInteger)  # 单位：元
-    total_shares = Column("total_shares", BigInteger)  # 单位：股
-    
+    circ_mv = Column("circ_mv", BigInteger)
+
     def __repr__(self):
         return f"<StockHistUnadj(stock_code='{self.stock_code}', date='{self.date}')>"
 

@@ -12,6 +12,7 @@ from app.constants.enums import TaskType, TaskStatus
 from typing import Union
 from .custom_api import fetch_stock_equity_changes
 import re
+import time
 
 import logging
 
@@ -152,100 +153,187 @@ class StockHistSynchronizer:
       1. 查看当前数据库中的股票列表
       2. 遍历股票列表，依次同步每只股票的历史行情数据
       3. 对于某一支股票，查看其最新数据的日期
-      4. 如果最新日期小于等于当前日期，则同步该支股票的历史行情数据（不复权），调用akshare接口（ak.stock_zh_a_hist）获取最新数据次日到当前日期的历史行情数据
-      5. 将新增的数据插入数据库
+      4. 如果最新日期小于等于当前日期，则同步该支股票的历史行情数据（不复权），调用tushare接口（tspro.daily）获取最新数据次日到当前日期的历史行情数据
+      5. 如果时间跨度大于20年，则结束日期截取至开始日期+20年
+      6. 将新增的数据插入数据库
+      7. 限制接口调用次数每分钟不超过400次
     """
     def __init__(self):
+        self.tspro = tspro  # Tushare API client
         self.stock_info_dao = StockInfoDao._instance
         self.stock_hist_unadj_dao = StockHistUnadjDao._instance
         self.update_flag_dao = UpdateFlagDao._instance
-        self.company_action_dao = CompanyActionDao._instance
-        self.stock_hist_adj_dao = StockHistAdjDao()
-        self.future_task_dao = FutureTaskDao._instance
-        self.stock_share_change_dao = StockShareChangeCNInfoDao._instance
         self.loop = asyncio.get_event_loop()
         self.stock_list_size = 0
         self.completed_num = 0
         self.is_running = False
         self.lock = asyncio.Lock()
         self.semaphore = asyncio.Semaphore(6)
+        # Track API calls to comply with Tushare's rate limiting (400 calls per minute)
+        self.api_call_counter = 0
+        self.api_call_reset_time = time.time() + 60
 
     def initialize(self):
         self.stock_list_size = 0
         self.completed_num = 0
         self.is_running = True
+        self.api_call_counter = 0
+        self.api_call_reset_time = time.time() + 60
 
     def terminate(self):
         self.stock_list_size = 0
         self.completed_num = 0
         self.is_running = False
 
-    async def fetch_stock_data(self, stock_code, start_date, current_date):
+    async def _check_api_rate_limit(self):
+        """检查并控制API调用频率，确保每分钟不超过400次"""
+        current_time = time.time()
+        
+        if current_time > self.api_call_reset_time:
+            # Reset counter if a minute has passed
+            self.api_call_counter = 0
+            self.api_call_reset_time = current_time + 60
+            
+        if self.api_call_counter >= 400:
+            # Wait until the next minute if we've reached the limit
+            wait_time = self.api_call_reset_time - current_time
+            if wait_time > 0:
+                logger.info(f"Rate limit reached, waiting for {wait_time:.2f} seconds")
+                await asyncio.sleep(wait_time)
+                self.api_call_counter = 0
+                self.api_call_reset_time = time.time() + 60
+        
+        self.api_call_counter += 1
+
+    async def fetch_stock_data(self, stock_code, market, start_date, end_date):
         """异步获取股票历史行情数据"""
         try:
             async with self.semaphore:
-                df = await asyncio.to_thread(ak.stock_zh_a_hist, 
-                                            symbol=stock_code, 
-                                            period="daily", 
-                                            start_date=start_date, 
-                                            end_date=current_date, 
-                                            adjust="")
+                # Check API rate limit before making the call
+                await self._check_api_rate_limit()
+                
+                # Convert stock_code to ts_code format (code.MARKET)
+                ts_code = stock_code
+                
+                # Call tushare daily API
+                df = await asyncio.to_thread(
+                    self.tspro.daily,
+                    ts_code=ts_code,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+                
+                # Transform tushare data format to match the expected format
+                if not df.empty:
+                    # Rename columns to match the original format
+                    df = df.rename(columns={
+                        'ts_code': 'ts_code',
+                        'trade_date': '日期',
+                        'open': '开盘',
+                        'high': '最高',
+                        'low': '最低',
+                        'close': '收盘',
+                        'pre_close': '前收盘',
+                        'vol': '成交量',
+                        'amount': '成交额',
+                        'pct_chg': '涨跌幅',
+                        'change': '涨跌额'
+                    })
+                    
+                    # Convert trade_date from string to datetime
+                    df['日期'] = pd.to_datetime(df['日期'], format='%Y%m%d')
+                    
+                    # Add stock code column
+                    df['股票代码'] = stock_code
+                    
                 return df
         except Exception as e:
             logger.error("Error fetching stock data for %s: %s", stock_code, e)
             return pd.DataFrame()
         
-    async def fetch_share_value_data(self, stock_code, market):
-        """异步获取股票股本数据"""
+    async def fetch_daily_basic_data(self, stock_code, market, start_date, end_date):
+        """异步获取股票每日基本面数据"""
         try:
             async with self.semaphore:
-                # 尝试获取本地cninfo里的数据
-                source_df = await asyncio.to_thread(self.stock_share_change_dao.select_dataframe_by_stock_code, stock_code)
-                if not source_df.empty:
-                    df = source_df[["VARYDATE", "F003N"]]
-                    df.rename(columns={"VARYDATE": "日期", "F003N": "总股本"}, inplace=True)
-                    df["总股本"] = df["总股本"] * 1e4
-                    return df
+                # Check API rate limit before making the call
+                await self._check_api_rate_limit()
                 
-                source_df = await asyncio.to_thread(fetch_stock_equity_changes, stock_code + '.' + market)
-                if not source_df.empty:
-                    df = source_df[["数据日期", "总股本"]]
-                    df["数据日期"] = pd.to_datetime(df["数据日期"], errors="coerce")
-                    df.rename(columns={"数据日期": "日期"}, inplace=True)
-                    return df
+                # Convert stock_code to ts_code format (code.MARKET)
+                ts_code = f"{stock_code}"
                 
-                source_df = await asyncio.to_thread(ak.stock_value_em, symbol=stock_code)
-                df = source_df[["数据日期", "总股本"]]
-                df.rename(columns={"数据日期": "日期"}, inplace=True)
+                # Define fields to fetch
+                fields = 'ts_code,trade_date,turnover_rate,turnover_rate_f,volume_ratio,pe,pe_ttm,pb,ps,ps_ttm,dv_ratio,dv_ttm,total_share,float_share,free_share,total_mv,circ_mv'
+                
+                # Call tushare daily_basic API
+                df = await asyncio.to_thread(
+                    self.tspro.daily_basic,
+                    ts_code=ts_code,
+                    start_date=start_date,
+                    end_date=end_date,
+                    fields=fields
+                )
+                
+                if not df.empty:
+                    # Convert trade_date from string to datetime
+                    df['trade_date'] = pd.to_datetime(df['trade_date'], format='%Y%m%d')
+                    
                 return df
         except Exception as e:
-            logger.error("Error fetching share value data for %s: %s", stock_code, e)
+            logger.error("Error fetching daily basic data for %s: %s", stock_code, e)
             return pd.DataFrame()
         
-    def merge_data(self, df, share_list_df):
-        """合并股票行情和估值数据"""
-        # 如果接口返回不为空，预处理数据
-        if not share_list_df.empty:
-            # 转换为日期对象
-            share_list_df["日期"] = pd.to_datetime(share_list_df["日期"], errors="coerce")
-            # 升序排序
-            share_list_df = share_list_df.sort_values(by="日期")
-            # 合并两个 DataFrame
-            df = pd.merge_asof(
-                    df.sort_values(by="日期"),
-                    share_list_df.sort_values(by="日期"),
-                    left_on="日期",
-                    right_on="日期",
-                    direction="backward"
-                )
-            # 合并结果中，字段“总股本”即为每个交易日对应的总股本，重命名为 total_shares
-            df.rename(columns={"总股本": "total_shares"}, inplace=True)
-            df["mkt_cap"] = df["收盘"] * df["total_shares"]
+    def merge_data(self, daily_df, daily_basic_df):
+        """合并股票日线行情和基本面数据"""
+        if daily_df.empty:
+            return pd.DataFrame()
+            
+        if not daily_basic_df.empty:
+            # Rename columns for merging
+            daily_basic_df = daily_basic_df.rename(columns={'trade_date': '日期'})
+            
+            # Merge dataframes on date and ts_code
+            merged_df = pd.merge(
+                daily_df,
+                daily_basic_df,
+                how='left',
+                left_on=['日期', 'ts_code'],
+                right_on=['日期', 'ts_code']
+            )
+            
+            # Add market cap calculation if not available from daily_basic
+            if 'total_mv' in merged_df.columns:
+                merged_df['mkt_cap'] = merged_df['total_mv'] * 10000  # Convert from 万元 to 元
+            elif 'total_share' in merged_df.columns and '收盘' in merged_df.columns:
+                merged_df['mkt_cap'] = merged_df['收盘'] * merged_df['total_share'] * 10000  # Convert from 万股 to 股
+                
+            # Convert share values from 万股 to 股
+            if 'total_share' in merged_df.columns:
+                merged_df['total_shares'] = merged_df['total_share'] * 10000
+            if 'float_share' in merged_df.columns:
+                merged_df['float_shares'] = merged_df['float_share'] * 10000
+            if 'free_share' in merged_df.columns:
+                merged_df['free_shares'] = merged_df['free_share'] * 10000
+                
+            return merged_df
         else:
-            # 如果接口无数据，则填充为空值
-            df["mkt_cap"] = None
-            df["total_shares"] = None
-        return df
+            # If no daily_basic data available, just add empty columns
+            daily_df['turnover_rate'] = None
+            daily_df['turnover_rate_f'] = None
+            daily_df['volume_ratio'] = None
+            daily_df['pe'] = None
+            daily_df['pe_ttm'] = None
+            daily_df['pb'] = None
+            daily_df['ps'] = None
+            daily_df['ps_ttm'] = None
+            daily_df['dv_ratio'] = None
+            daily_df['dv_ttm'] = None
+            daily_df['total_shares'] = None
+            daily_df['float_shares'] = None
+            daily_df['free_shares'] = None
+            daily_df['mkt_cap'] = None
+            daily_df['circ_mv'] = None
+            
+            return daily_df
         
     async def batch_insert_unadj(self, stock_code, new_records):
         def _syn_batch_insert_unadj(stock_code, new_records):
@@ -262,27 +350,21 @@ class StockHistSynchronizer:
                 logger.info("No new records to insert for stock %s.", stock_code)
         async with self.semaphore:
             return await asyncio.to_thread(_syn_batch_insert_unadj, stock_code, new_records)
-    
+        
     async def process_data_unadj(self, stock_code, market, start_date, current_date, progress_callback=None):
         try:
-            # 3. 调用 akshare 接口获取该股票从 start_date 到 current_date 的历史行情数据（不复权）
+            # 3. 调用 tushare 接口获取该股票从 start_date 到 current_date 的历史行情数据（不复权）和基本面数据
             logger.info("Fetching historical data for stock %s from %s to %s", stock_code, start_date, current_date)
-            df_task = self.loop.create_task(self.fetch_stock_data(stock_code, start_date, current_date))
-            share_list_df_task = self.loop.create_task(self.fetch_share_value_data(stock_code, market))
-            df, share_list_df = await asyncio.gather(df_task, share_list_df_task)
+            daily_task = self.loop.create_task(self.fetch_stock_data(stock_code, market, start_date, current_date))
+            daily_basic_task = self.loop.create_task(self.fetch_daily_basic_data(stock_code, market, start_date, current_date))
+            daily_df, daily_basic_df = await asyncio.gather(daily_task, daily_basic_task)
 
-            if df.empty:
+            if daily_df.empty:
                 logger.info("No new historical data for stock %s.", stock_code)
                 return
 
-            # 将日期列转换为日期类型
-            if '日期' in df.columns:
-                df['日期'] = pd.to_datetime(df['日期'], errors='coerce')
-
-            share_list_df = share_list_df[["日期", "总股本"]]
-
-            # 预处理数据
-            df = self.merge_data(df, share_list_df)
+            # 合并日线数据和基本面数据
+            df = self.merge_data(daily_df, daily_basic_df)
 
             # 4. 处理 DataFrame 数据，构造 StockHist 对象列表
             new_records = []
@@ -294,14 +376,28 @@ class StockHistSynchronizer:
                     close=safe_value(row["收盘"]),
                     high=safe_value(row["最高"]),
                     low=safe_value(row["最低"]),
-                    volume=safe_value(row["成交量"]) * 100,
+                    volume=safe_value(row["成交量"]) * 100,  # Tushare volume is in 100s of shares
                     amount=safe_value(row["成交额"]),
-                    amplitude=safe_value(row["振幅"]),
                     change_percent=safe_value(row["涨跌幅"]),
                     change=safe_value(row["涨跌额"]),
-                    turnover_rate=safe_value(row["换手率"]),
-                    mkt_cap = safe_value(row.get("mkt_cap")),
-                    total_shares = safe_value(row.get("total_shares"))
+                    turnover_rate=safe_value(row.get("turnover_rate")),
+                    # Add additional fields from daily_basic
+                    turnover_rate_f=safe_value(row.get("turnover_rate_f")),
+                    volume_ratio=safe_value(row.get("volume_ratio")),
+                    pe=safe_value(row.get("pe")),
+                    pe_ttm=safe_value(row.get("pe_ttm")),
+                    pb=safe_value(row.get("pb")),
+                    ps=safe_value(row.get("ps")),
+                    ps_ttm=safe_value(row.get("ps_ttm")),
+                    dv_ratio=safe_value(row.get("dv_ratio")),
+                    dv_ttm=safe_value(row.get("dv_ttm")),
+                    total_shares=safe_value(row.get("total_shares")),
+                    float_shares=safe_value(row.get("float_shares")),
+                    free_shares=safe_value(row.get("free_shares")),
+                    mkt_cap=safe_value(row.get("mkt_cap")),
+                    circ_mv=safe_value(row.get("circ_mv")) * 10000 if row.get("circ_mv") is not None else None,  # Convert from 万元 to 元
+                    # Include pre_close if available
+                    pre_close=safe_value(row.get("前收盘"))
                 )
                 new_records.append(record)
 
@@ -349,8 +445,18 @@ class StockHistSynchronizer:
                     if start_date > current_date:
                         logger.info("Stock %s is up to date. (start_date: %s, current_date: %s)", stock_code, start_date, current_date)
                         continue
+                    
+                    # 检查时间跨度是否大于20年
+                    start_date_dt = datetime.datetime.strptime(start_date, "%Y%m%d")
+                    current_date_dt = datetime.datetime.strptime(current_date, "%Y%m%d")
+                    if (current_date_dt - start_date_dt).days > 365 * 20:
+                        # 如果时间跨度大于20年，则结束日期截取至开始日期+20年
+                        end_date = (start_date_dt + datetime.timedelta(days=365 * 20)).strftime("%Y%m%d")
+                        logger.info("Time span exceeds 20 years. Limiting end date to %s for stock %s", end_date, stock_code)
+                    else:
+                        end_date = current_date
 
-                    tasks.append(self.loop.create_task(self.process_data_unadj(stock_code, market, start_date, current_date, progress_callback)))
+                    tasks.append(self.loop.create_task(self.process_data_unadj(stock_code, market, start_date, end_date, progress_callback)))
                 if tasks:
                     self.loop.run_until_complete(asyncio.gather(*tasks))
         finally:

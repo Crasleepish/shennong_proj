@@ -42,9 +42,9 @@ def dummy_stock_list():
     使用 SimpleNamespace 模拟股票对象，要求至少有 stock_code 属性。
     """
     return [
-        SimpleNamespace(stock_code="000004", market="SZ"),
-        SimpleNamespace(stock_code="600655", market="SH"),
-        SimpleNamespace(stock_code="301600", market="SZ"),
+        SimpleNamespace(stock_code="000004.SZ", market="主板"),
+        SimpleNamespace(stock_code="600655.SH", market="主板"),
+        SimpleNamespace(stock_code="301600.SZ", market="主板"),
     ]
 
 @pytest.fixture
