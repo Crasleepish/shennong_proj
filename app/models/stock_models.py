@@ -132,6 +132,9 @@ class FundamentalData(Base):
     # 主键：股票代码和报告日期
     stock_code = Column(String(10), primary_key=True)
     report_date = Column(Date, primary_key=True)
+
+    # 实际公告日期
+    announcement_date = Column(Date, nullable=True)
     
     # 基本面数据字段
     total_equity = Column(Float, nullable=True)                # 归属于母公司所有者权益合计

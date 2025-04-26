@@ -1137,142 +1137,161 @@ class CompanyActionSynchronizer:
 
 class FundamentalDataSynchronizer:
     def __init__(self):
-        self.stock_info_dao = StockInfoDao._instance  # 单例
         self.fundamental_dao = FundamentalDataDao._instance
-        self.update_flag_dao = UpdateFlagDao._instance
-        self.loop = asyncio.get_event_loop()
-        self.stock_list_size = 0
-        self.completed_num = 0
         self.is_running = False
-        self.lock = asyncio.Lock()
-        self.semaphore = asyncio.Semaphore(6)
+        self.loop = asyncio.get_event_loop()
 
     def initialize(self):
-        self.stock_list_size = 0
-        self.completed_num = 0
         self.is_running = True
 
     def terminate(self):
-        self.stock_list_size = 0
-        self.completed_num = 0
         self.is_running = False
 
-    async def process_data(self, stock_code: str, progress_callback=None):
-        # 3. 调用 akshare 接口获取三个数据源，indicator 均采用 "按报告期"
+    async def fetch_all_data(self, period: str):
+        logger.info(f"Fetching full market data for period {period} asynchronously...")
+        df_income = await asyncio.to_thread(
+            tspro.income_vip, period=period,
+            fields="ts_code,f_ann_date,end_date,n_income_attr_p,operate_profit,total_revenue,total_cogs"
+        )
+        df_balance = await asyncio.to_thread(
+            tspro.balancesheet_vip, period=period,
+            fields="ts_code,f_ann_date,end_date,total_hldr_eqy_exc_min_int,total_assets,total_cur_liab,total_ncl"
+        )
+        df_cashflow = await asyncio.to_thread(
+            tspro.cashflow_vip, period=period,
+            fields="ts_code,f_ann_date,end_date,n_cashflow_act,c_pay_acq_const_fiolta"
+        )
+        return df_income, df_balance, df_cashflow
+
+    async def process_and_insert(self, period: str):
         try:
-            df_debt = await asyncio.to_thread(ak.stock_financial_debt_ths, symbol=stock_code, indicator="按报告期")
-            df_benefit = await asyncio.to_thread(ak.stock_financial_benefit_ths, symbol=stock_code, indicator="按报告期")
-            df_cash = await asyncio.to_thread(ak.stock_financial_cash_ths, symbol=stock_code, indicator="按报告期")
+            df_income, df_balance, df_cashflow = await self.fetch_all_data(period)
 
-            # 4. 将“报告期”转换为 Pandas Timestamp 类型
-            for df in [df_debt, df_benefit, df_cash]:
-                if "报告期" in df.columns:
-                    df["报告期"] = pd.to_datetime(df["报告期"], errors="coerce")
-                else:
-                    logger.error("DataFrame missing '报告期' column for stock %s", stock_code)
-                    return
-
-            if df_debt.empty or df_benefit.empty or df_cash.empty:
-                logger.info("No fundamental data for stock %s.", stock_code)
+            if df_income.empty and df_balance.empty and df_cashflow.empty:
+                logger.warning(f"All dataframes empty for period {period}, skipping.")
                 return
 
-            # 5. 合并三个 DataFrame，按 "报告期" 列内连接（假设各报表数据报告期一致）
-            df_merge = pd.merge(df_debt, df_benefit, on="报告期", suffixes=("_debt", "_benefit"))
-            df_merge = pd.merge(df_merge, df_cash, on="报告期")
-            # 此时 df_merge 包含 "报告期" 以及各表中关键字段
+            # 🛠️ 改为外连接 outer join，保证只要有一张表有数据就保留
+            df_merge = df_income.merge(df_balance, on=['ts_code', 'end_date'], how='outer', suffixes=('_income', '_balance'))
+            df_merge = df_merge.merge(df_cashflow, on=['ts_code', 'end_date'], how='outer', suffixes=('', '_cashflow'))
 
-            # 6. 根据合并结果构造 FundamentalData 对象列表
+            logger.info(f"Merged {len(df_merge)} records for period {period}.")
+
+            def safe_max_f_ann_date(row):
+                dates = []
+                for col in ['f_ann_date_income', 'f_ann_date_balance', 'f_ann_date']:
+                    try:
+                        dt = row[col]
+                        if not pd.isna(dt) and pd.notnull(dt):
+                            dates.append(dt)
+                    except Exception:
+                        pass
+                if dates:
+                    return max(dates)
+                else:
+                    return pd.NA  # 三个都是空，就返回NaT
+
+            df_merge['f_ann_date_final'] = df_merge[[
+                'f_ann_date_income', 'f_ann_date_balance', 'f_ann_date'
+            ]].apply(safe_max_f_ann_date, axis=1)
+
             fundamental_records = []
             for _, row in df_merge.iterrows():
                 try:
-                    report_ts = row["报告期"]
-                    if pd.isnull(report_ts):
+                    report_date = pd.to_datetime(row['end_date'], errors="coerce").date()
+                    announcement_date = pd.to_datetime(row['f_ann_date_final'], errors="coerce").date()
+                    if pd.isnull(report_date):
                         continue
-                    report_date = report_ts.date()
                 except Exception as e:
-                    logger.error("Error parsing report_date for stock %s: %s", stock_code, e)
+                    logger.error(f"Error parsing report_date for period {period}: {e}")
                     continue
 
-                total_equity = parse_amount(row.get("*归属于母公司所有者权益合计"))
-                total_assets = parse_amount(row.get("*资产合计"))
-                current_liabilities = parse_amount(row.get("流动负债合计"))
-                noncurrent_liabilities = parse_amount(row.get("非流动负债合计"))
-                if current_liabilities is None and noncurrent_liabilities is None:
-                    current_liabilities = parse_amount(row.get("*负债合计"))
-                net_profit = parse_amount(row.get("*归属于母公司所有者的净利润"))
-                if net_profit is None:
-                    net_profit = parse_amount(row.get("*净利润"))
-                operating_profit = parse_amount(row.get("三、营业利润"))
-                total_revenue = parse_amount(row.get("*营业总收入"))
-                total_cost = parse_amount(row.get("*营业总成本"))
-                if total_cost is None:
-                    total_cost = parse_amount(row.get("*营业支出"))
-                net_cash_from_operating = parse_amount(row.get("*经营活动产生的现金流量净额"))
-                cash_for_fixed_assets = parse_amount(row.get("购建固定资产、无形资产和其他长期资产支付的现金"))
-                
                 record = FundamentalData(
-                    stock_code = stock_code,
-                    report_date = report_date,
-                    total_equity = total_equity,
-                    total_assets = total_assets,
-                    current_liabilities = current_liabilities,
-                    noncurrent_liabilities = noncurrent_liabilities,
-                    net_profit = net_profit,
-                    operating_profit = operating_profit,
-                    total_revenue = total_revenue,
-                    total_cost = total_cost,
-                    net_cash_from_operating = net_cash_from_operating,
-                    cash_for_fixed_assets = cash_for_fixed_assets
+                    stock_code=row['ts_code'],
+                    report_date=report_date,
+                    announcement_date=announcement_date,
+                    total_equity=parse_amount(row.get('total_hldr_eqy_exc_min_int')),
+                    total_assets=parse_amount(row.get('total_assets')),
+                    current_liabilities=parse_amount(row.get('total_cur_liab')),
+                    noncurrent_liabilities=parse_amount(row.get('total_ncl')),
+                    net_profit=parse_amount(row.get('n_income_attr_p')),
+                    operating_profit=parse_amount(row.get('operate_profit')),
+                    total_revenue=parse_amount(row.get('total_revenue')),
+                    total_cost=parse_amount(row.get('total_cogs')),
+                    net_cash_from_operating=parse_amount(row.get('n_cashflow_act')),
+                    cash_for_fixed_assets=parse_amount(row.get('c_pay_acq_const_fiolta'))
                 )
                 fundamental_records.append(record)
-            
-            # 7. 批量插入 fundamental_records 到数据库
-            if fundamental_records:
-                try:
-                    await asyncio.to_thread(self.fundamental_dao.batch_upsert, fundamental_records)
-                    logger.info("Inserted %d new fundamental records for stock %s.", len(fundamental_records), stock_code)
-                except Exception as e:
-                    logger.error("Error inserting fundamental records for stock %s: %s", stock_code, e)
-                    raise e
-            else:
-                logger.info("No new fundamental records to insert for stock %s.", stock_code)
-        except Exception as e:
-            logger.error("Error processing fundamental data for stock %s: %s", stock_code, e)
-        finally:
-            async with self.lock:
-                self.completed_num = self.completed_num + 1
-                if progress_callback:
-                    progress_callback(self.completed_num, self.stock_list_size)
 
+            if fundamental_records:
+                logger.info(f"Batch upserting {len(fundamental_records)} fundamental records for period {period}...")
+                await asyncio.to_thread(self.fundamental_dao.batch_upsert, fundamental_records)
+                logger.info(f"Batch upsert successful for period {period}.")
+            else:
+                logger.warning(f"No fundamental records to insert for period {period}.")
+
+        except Exception as e:
+            logger.error(f"Error processing fundamental data for period {period}: {e}")
+            
     def sync(self, progress_callback=None):
+        """
+        逐季度同步，从19961231开始到今天
+        """
         self.initialize()
         try:
-            logger.info("Starting fundamental data synchronization.")
-            # 1. 获取股票列表
-            stock_list = self.stock_info_dao.load_stock_info()
-            self.stock_list_size = len(stock_list)
-            logger.info("Found %d stocks to process.", len(stock_list))
+            logger.info("Starting full fundamental data synchronization...")
 
-            batch_size = 20
-            for i in range(0, len(stock_list), batch_size):
-                batch = stock_list[i : i + batch_size]
-                tasks = []
-                for stock in batch:
-                    stock_code = stock.stock_code
-                    logger.info("Processing fundamental data for stock %s", stock_code)
+            # 准备所有需要同步的period列表
+            periods = []
+            start_date = datetime.datetime(1996, 12, 31)
+            today = datetime.datetime.today()
 
-                    # 2. 查询 update_flag表中，当前股票代码是否允许更新基本面数据
-                    update_flags = self.update_flag_dao.select_one_by_code(stock_code)
-                    if update_flags["fundamental_update_flag"] == "0":
-                        logger.info("Fundamental data update for stock %s is disabled.", stock_code)
-                        self.completed_num = self.completed_num + 1
-                        if progress_callback:
-                            progress_callback(self.completed_num, self.stock_list_size)
-                        continue
+            while start_date <= today:
+                periods.append(start_date.strftime('%Y%m%d'))
+                # 移动到下一个季度末
+                if start_date.month == 3:
+                    next_month = 6
+                elif start_date.month == 6:
+                    next_month = 9
+                elif start_date.month == 9:
+                    next_month = 12
+                else:  # 12月，跳到下一年3月
+                    start_date = start_date.replace(year=start_date.year + 1)
+                    next_month = 3
 
-                    tasks.append(self.loop.create_task(self.process_data(stock_code, progress_callback)))
-                if tasks:
-                    self.loop.run_until_complete(asyncio.gather(*tasks))
+                if next_month == 3:
+                    start_date = start_date.replace(month=3, day=31)
+                elif next_month == 6:
+                    start_date = start_date.replace(month=6, day=30)
+                elif next_month == 9:
+                    start_date = start_date.replace(month=9, day=30)
+                elif next_month == 12:
+                    start_date = start_date.replace(month=12, day=31)
+
+            total = len(periods)
+            logger.info(f"Total {total} periods to sync.")
+
+            # 顺序同步每个period
+            for idx, period in enumerate(periods):
+                logger.info(f"Syncing period {period} ({idx+1}/{total})...")
+                self.loop.run_until_complete(self.process_and_insert(period))
+                if progress_callback:
+                    progress_callback(idx + 1, total)
+        except Exception as e:
+            logger.error(f"Error during full fundamental data synchronization: {e}")
+        finally:
+            self.terminate()
+
+    def sync_by_period(self, period: str):
+        """
+        同步指定单一季度
+        """
+        self.initialize()
+        try:
+            logger.info(f"Syncing specified period {period}...")
+            self.loop.run_until_complete(self.process_and_insert(period))
+        except Exception as e:
+            logger.error(f"Error during specified period {period} synchronization: {e}")
         finally:
             self.terminate()
 

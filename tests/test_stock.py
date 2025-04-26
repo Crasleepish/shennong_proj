@@ -9,6 +9,7 @@ from app.data.fetcher import stock_adj_hist_synchronizer
 from app.data.cninfo_fetcher import cninfo_stock_share_change_fetcher
 from types import SimpleNamespace
 from app.database import get_db
+from freezegun import freeze_time
 
 # Use the TestConfig from our config module
 from app.config import TestConfig, Config
@@ -153,20 +154,17 @@ def test_AdjSynchronizer(app, init_update_flag_data, monkeypatch, dummy_stock_li
 
 
 def test_FundamentalDataSynchronizer(app, init_update_flag_data, monkeypatch, dummy_stock_list):
-    def fake_load_stock_info(self):
-        return dummy_stock_list
-    
-    monkeypatch.setattr(StockInfoDao, "load_stock_info", fake_load_stock_info)
-    try:
-        fundatmental_data_synchronizer = FundamentalDataSynchronizer()
-        fundatmental_data_synchronizer.sync()
-        fundatmental_data_synchronizer.sync()
-
-        fundamental_data_dao = FundamentalDataDao._instance
-        df = fundamental_data_dao.select_dataframe_by_code("600655")
-        print(df)
-    finally:
-        fundamental_data_dao.delete_all()
+    with freeze_time("2004-05-15 10:30:00"):
+        try:
+            fundatmental_data_synchronizer = FundamentalDataSynchronizer()
+            fundatmental_data_synchronizer.sync()
+            
+            fundamental_data_dao = FundamentalDataDao._instance
+            df = fundamental_data_dao.select_dataframe_by_code("600655")
+            print(df)
+        finally:
+            fundamental_data_dao = FundamentalDataDao._instance
+            fundamental_data_dao.delete_all()
 
 def test_SuspendDataSynchronizer(app):
     suspend_data_synchronizer = SuspendDataSynchronizer()
