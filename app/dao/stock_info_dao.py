@@ -329,20 +329,30 @@ class StockHistUnadjDao:
         except Exception as e:
             return pd.DataFrame()
     
-    def select_after_date_as_dataframe(self, stock_code: str, date: Union[str, datetime.date]):
+    def select_dataframe_by_date_range(self, stock_code: str, start_date: Union[str, datetime.date], end_date: Union[str, datetime.date]):
         """
-        查询指定股票代码在当前日期之后的公司行动数据，并返回一个包含查询结果的 DataFrame。
+        查询指定股票代码在指定日期范围的数据，并返回一个包含查询结果的 DataFrame。
         :param stock_code: 股票代码
+        :param start_date: 开始日期，可以是字符串或 datetime.date 对象
+        :param end_date: 结束日期，可以是字符串或 datetime.date 对象
         :return: 包含查询结果的 DataFrame，如果没有数据则返回空 DataFrame。
         """
         try:
             with get_db() as db:
-                # 构造查询条件，查找 stock_code 相等且 date 大于指定日期的记录
-                query = db.query(StockHistUnadj).filter(
-                    StockHistUnadj.stock_code == stock_code,
-                    StockHistUnadj.date >= date
-                )
-                # 使用 pd.read_sql 将查询结果转换为 DataFrame，
+                query = db.query(StockHistUnadj)
+                if stock_code is not None:
+                    query = query.filter(
+                        StockHistUnadj.stock_code == stock_code
+                    )
+                
+                # 根据 start_date 和 end_date 的情况添加日期条件
+                if start_date is not None:
+                    query = query.filter(StockHistUnadj.date >= start_date)
+
+                if end_date is not None:
+                    query = query.filter(StockHistUnadj.date <= end_date)
+                
+                # 使用 pd.read_sql 将查询结果转换为 DataFrame
                 df = pd.read_sql(query.statement, db.bind)
             return df
         except Exception as e:
@@ -415,7 +425,10 @@ class AdjFactorDao:
         """
         try:
             with get_db() as db:
-                query = db.query(AdjFactor).filter(AdjFactor.stock_code == stock_code)
+                query = db.query(AdjFactor)
+
+                if stock_code is not None:
+                    query = query.filter(AdjFactor.stock_code == stock_code)
                 
                 if start_date:
                     query = query.filter(AdjFactor.date >= start_date)

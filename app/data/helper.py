@@ -1,23 +1,41 @@
-from app.dao.stock_info_dao import StockHistAdjDao, StockInfoDao, FundamentalDataDao, SuspendDataDao
+from app.dao.stock_info_dao import StockHistUnadjDao, AdjFactorDao, StockInfoDao, FundamentalDataDao, SuspendDataDao
 from app.dao.index_info_dao import IndexInfoDao, IndexHistDao
 from app.dao.fund_info_dao import FundInfoDao, FundHistDao
 import pandas as pd
+from typing import List
+from app.utils.data_utils import change_date
 
-class StockHistAdjHolder:
+class StockHistHolder:
 
-    stock_hist_adj_all = None
+    stock_hist_all = None
 
     def __init__(self):
         pass
 
-    def get_stock_hist_adj(self, start_date, end_date):
-        if self.stock_hist_adj_all is None:
-            stock_hist_adj_dao = StockHistAdjDao._instance
-            self.stock_hist_adj_all = stock_hist_adj_dao.select_dataframe_by_date_range(start_date, end_date)
-            self.stock_hist_adj_all["date"] = pd.to_datetime(self.stock_hist_adj_all["date"], errors="coerce")
-        return self.stock_hist_adj_all
+    def get_stock_hist(self, start_date, end_date):
+        if self.stock_hist_all is None:
+            stock_hist_dao = StockHistUnadjDao._instance
+            self.stock_hist_all = stock_hist_dao.select_dataframe_by_date_range(stock_code=None, start_date=start_date, end_date=end_date)
+            self.stock_hist_all["date"] = pd.to_datetime(self.stock_hist_all["date"], errors="coerce")
+        return self.stock_hist_all
+    
+stock_hist_holder = StockHistHolder()
 
-stock_hist_adj_holder = StockHistAdjHolder()
+class AdjFactorHolder:
+
+    adj_factor_all = None
+
+    def __init__(self):
+        pass
+
+    def get_adj_factor(self, start_date, end_date):
+        if self.adj_factor_all is None:
+            adj_factor_dao = AdjFactorDao._instance
+            self.adj_factor_all = adj_factor_dao.get_adj_factor_dataframe(stock_code=None, start_date=start_date, end_date=end_date)
+            self.adj_factor_all["date"] = pd.to_datetime(self.adj_factor_all["date"], errors="coerce")
+        return self.adj_factor_all
+    
+adj_factor_holder = AdjFactorHolder()
 
 class StockInfoHolder:
 
@@ -107,17 +125,66 @@ class FundHistHolder:
 fund_hist_holder = FundHistHolder()
 
 def refresh_holders():
-    global stock_hist_adj_holder, stock_info_holder, fundamental_data_holder, suspend_data_holder, index_hist_holder, fund_hist_holder
-    stock_hist_adj_holder = StockHistAdjHolder()
+    global stock_hist_holder, adj_factor_holder, stock_info_holder, fundamental_data_holder, suspend_data_holder, index_hist_holder, fund_hist_holder
+    stock_hist_holder = StockHistHolder()
+    adj_factor_holder = AdjFactorHolder()
     stock_info_holder = StockInfoHolder()
     fundamental_data_holder = FundamentalDataHolder()
     suspend_data_holder = SuspendDataHolder()
     index_hist_holder = IndexHistHolder()
     fund_hist_holder = FundHistHolder()
 
+def to_adjusted_hist(unadj_df: pd.DataFrame, adj_factor_df: pd.DataFrame, hist_columns: List[str], adj_factor_column: str, date_column: str):
+    """
+    将未复权的历史数据转换为复权后的历史数据。
+    
+    :param unadj_df: 未复权的历史数据
+    :param adj_factor_df: 复权因子数据
+    :param hist_columns: 历史数据的列名，如 ["open", "close", "high", "low", "volume", "amount"]
+    :param adj_factor_column: 复权因子数据的列名，如 "adj_factor"
+    :param date_column: 日期数据的列名，如 "trade_date"
+    :return: 复权后的历史数据
+    """
+    # 复制原始数据，避免修改原始数据
+    result_df = unadj_df.copy()
+    
+    # 确定基准复权因子（最新日期的复权因子）
+    latest_date = adj_factor_df[date_column].max()
+    base_adj_factor = adj_factor_df.loc[adj_factor_df[date_column] == latest_date, adj_factor_column].iloc[0]
+    
+    # 将复权因子数据合并到历史数据中
+    merged_df = result_df.merge(adj_factor_df[[date_column, adj_factor_column]], 
+                               on=date_column, how='left')
+    
+    # 计算调整比率
+    merged_df['adj_ratio'] = merged_df[adj_factor_column] / base_adj_factor
+    
+    # 调整价格列
+    for column in hist_columns:
+        if column in merged_df.columns:
+            merged_df[column] = merged_df[column] * merged_df['adj_ratio']
+    
+    # 删除合并后添加的列
+    result_df = merged_df.drop([adj_factor_column, 'adj_ratio'], axis=1)
+    
+    return result_df
+
+def get_qfq_price_by_code(stock_code: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """
+    返回指定股票的每日价格数据(前复权)。
+    """
+    stock_hist_dao = StockHistUnadjDao._instance
+    adj_factor_dao = AdjFactorDao._instance
+    hist = stock_hist_dao.select_dataframe_by_date_range(stock_code, start_date, end_date)
+    adjf = adj_factor_dao.get_adj_factors(stock_code, start_date, end_date)
+    adj_hist = to_adjusted_hist(hist, adjf, ["open", "high", "low", "close", "pre_close"], "adj_factor", "date")
+    adj_hist["change"] = adj_hist["close"] - adj_hist["pre_close"]
+    adj_hist["pct_chg"] = (adj_hist["close"] - adj_hist["pre_close"]) / adj_hist["pre_close"] * 100
+    return adj_hist
+
 def get_prices_df(start_date: str, end_date: str) -> pd.DataFrame:
     """
-    返回股票历史价格数据。
+    返回股票历史价格数据，使用向量化操作实现前复权。
     
     DataFrame 格式要求：
       - 索引为交易日期（datetime64[ns]）
@@ -132,10 +199,39 @@ def get_prices_df(start_date: str, end_date: str) -> pd.DataFrame:
     2021-01-06   10.35    15.40    8.55
     ...
     """
-    df_all = stock_hist_adj_holder.get_stock_hist_adj(start_date, end_date)
-    pivot_df = df_all.pivot(index="date", columns="stock_code", values="close")
-    pivot_df = pivot_df.ffill()
-    return pivot_df
+    # 获取原始数据并转换为数据透视表
+    df_hist = stock_hist_holder.get_stock_hist(start_date, end_date)
+    pivot_df_hist = df_hist.pivot(index="date", columns="stock_code", values="close")
+    pivot_df_hist = pivot_df_hist.ffill()
+    pivot_df_hist = pivot_df_hist.sort_index(ascending=True)
+    
+    df_adjf = adj_factor_holder.get_adj_factor(start_date, end_date)
+    pivot_adjf = df_adjf.pivot(index="date", columns="stock_code", values="adj_factor")
+    pivot_adjf = pivot_adjf.ffill()
+    pivot_adjf = pivot_adjf.sort_index(ascending=True)
+    
+    # 确保两个数据框的列(股票代码)一致
+    common_stocks = pivot_df_hist.columns.intersection(pivot_adjf.columns)
+    pivot_df_hist = pivot_df_hist[common_stocks]
+    pivot_adjf = pivot_adjf[common_stocks]
+    
+    # 确保索引对齐
+    pivot_df_hist = pivot_df_hist.reindex(pivot_adjf.index)
+    
+    # 获取每只股票的最新复权因子(最后一行)
+    latest_adj_factors = pivot_adjf.iloc[-1]
+    
+    # 广播操作：将最新复权因子转换为与复权因子数据框相同形状的矩阵
+    # 使用 outer division 计算调整比率
+    adj_ratios = pivot_adjf.div(latest_adj_factors, axis='columns')
+    
+    # 一次性计算所有股票的前复权价格
+    adjusted_prices = pivot_df_hist * adj_ratios
+    
+    # 确保日期索引是datetime64[ns]类型
+    adjusted_prices.index = pd.to_datetime(adjusted_prices.index)
+    
+    return adjusted_prices
 
 def get_volume_df(start_date: str, end_date: str) -> pd.DataFrame:
     """
@@ -154,9 +250,10 @@ def get_volume_df(start_date: str, end_date: str) -> pd.DataFrame:
     2021-01-06   1050000   2050000    1550000
     ...
     """
-    df_all = stock_hist_adj_holder.get_stock_hist_adj(start_date, end_date)
+    df_all = stock_hist_holder.get_stock_hist(start_date, end_date)
     pivot_df = df_all.pivot(index="date", columns="stock_code", values="volume")
     pivot_df = pivot_df.fillna(0)
+    pivot_df = pivot_df.sort_index(ascending=True)
     return pivot_df
 
 def get_amount_df(start_date: str, end_date: str) -> pd.DataFrame:
@@ -176,9 +273,10 @@ def get_amount_df(start_date: str, end_date: str) -> pd.DataFrame:
     2021-01-06   170145432   128599108    180497477
     ...
     """
-    df_all = stock_hist_adj_holder.get_stock_hist_adj(start_date, end_date)
+    df_all = stock_hist_holder.get_stock_hist(start_date, end_date)
     pivot_df = df_all.pivot(index="date", columns="stock_code", values="amount")
     pivot_df = pivot_df.fillna(0)
+    pivot_df = pivot_df.sort_index(ascending=True)
     return pivot_df
 
 def get_return_df(start_date: str, end_date: str) -> pd.DataFrame:
@@ -198,10 +296,10 @@ def get_return_df(start_date: str, end_date: str) -> pd.DataFrame:
     2021-01-06   0.12        0.12         0.12
     ...
     """
-    df_all = stock_hist_adj_holder.get_stock_hist_adj(start_date, end_date)
-    pivot_df = df_all.pivot(index="date", columns="stock_code", values="change_percent")
-    pivot_df = pivot_df.fillna(0.0)
-    return pivot_df
+    df_prices = get_prices_df(change_date(start_date, -1), end_date)
+    df_return = df_prices.pct_change()
+    df_return = df_return.iloc[1:]
+    return df_return
 
 def get_mkt_cap_df(start_date: str, end_date: str) -> pd.DataFrame:
     """
@@ -220,9 +318,10 @@ def get_mkt_cap_df(start_date: str, end_date: str) -> pd.DataFrame:
     2021-01-06   102000000  153000000   122000000
     ...
     """
-    df_all = stock_hist_adj_holder.get_stock_hist_adj(start_date, end_date)
+    df_all = stock_hist_holder.get_stock_hist(start_date, end_date)
     pivot_df = df_all.pivot(index="date", columns="stock_code", values="mkt_cap")
     pivot_df = pivot_df.ffill()
+    pivot_df = pivot_df.sort_index(ascending=True)
     return pivot_df
 
 def get_stock_info_df() -> pd.DataFrame:

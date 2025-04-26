@@ -1,7 +1,7 @@
 from typing import List, Callable, Any
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 
 def process_in_batches(data_list: List[Any], 
                        func: Callable[[List[Any]], Any], 
@@ -127,6 +127,26 @@ def get_nearest_data_front(prices: pd.DataFrame, refer_date: str):
         return None
     # 返回最后一行，即最大索引对应的那一行数据
     return subset.iloc[-1]
+
+def change_date(date_str: str, days):
+    """
+    计算字符串日期的前x天或后x天
+    
+    参数:
+        date_str: 格式为'%Y-%m-%d'的日期字符串
+        days: 天数变化，正数表示后x天，负数表示前x天
+    
+    返回:
+        格式为'%Y-%m-%d'的新日期字符串
+    """
+    # 将字符串转换为datetime对象
+    date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+    
+    # 计算新的日期
+    new_date = date_obj + timedelta(days=days)
+    
+    # 将新日期转换回字符串格式
+    return new_date.strftime('%Y-%m-%d')
 
 def format_date(date_str):
     """
