@@ -177,9 +177,14 @@ def get_qfq_price_by_code(stock_code: str, start_date: str, end_date: str) -> pd
     adj_factor_dao = AdjFactorDao._instance
     hist = stock_hist_dao.select_dataframe_by_date_range(stock_code, start_date, end_date)
     adjf = adj_factor_dao.get_adj_factors(stock_code, start_date, end_date)
-    adj_hist = to_adjusted_hist(hist, adjf, ["open", "high", "low", "close", "pre_close"], "adj_factor", "date")
+    adj_hist = to_adjusted_hist(hist, adjf, ["open", "high", "low", "close"], "adj_factor", "date")
+    adjf["pre_adj_factor"] = adjf["adj_factor"].shift(1)
+    adjf["pre_adj_factor"] = adjf["pre_adj_factor"].bfill()
+    adjf = pd.concat([adjf, pd.DataFrame([{"date": change_date(end_date, 1), "pre_adj_factor": adjf.iloc[-1]["adj_factor"]}])], ignore_index=True)
+    adj_hist["pre_close"] = to_adjusted_hist(hist, adjf, ["pre_close"], "pre_adj_factor", "date")["pre_close"]
     adj_hist["change"] = adj_hist["close"] - adj_hist["pre_close"]
     adj_hist["pct_chg"] = (adj_hist["close"] - adj_hist["pre_close"]) / adj_hist["pre_close"] * 100
+    adj_hist = adj_hist[adj_hist["date"] >= start_date]
     return adj_hist
 
 def get_prices_df(start_date: str, end_date: str) -> pd.DataFrame:
@@ -296,9 +301,10 @@ def get_return_df(start_date: str, end_date: str) -> pd.DataFrame:
     2021-01-06   0.12        0.12         0.12
     ...
     """
-    df_prices = get_prices_df(change_date(start_date, -1), end_date)
+    df_prices = get_prices_df(change_date(start_date, -10), end_date)
     df_return = df_prices.pct_change()
-    df_return = df_return.iloc[1:]
+    df_return = df_return.ffill()
+    df_return = df_return[df_return.index >= start_date]
     return df_return
 
 def get_mkt_cap_df(start_date: str, end_date: str) -> pd.DataFrame:

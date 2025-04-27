@@ -98,6 +98,44 @@ def sync_stock_hist():
     except Exception as e:
         logger.exception("Error creating stock hist sync task.")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@fin_data_bp.route("/stock_hist/sync_by_date", methods=["POST"])
+def sync_stock_hist_by_date():
+    """
+    同步指定交易日的所有股票历史数据（无复权）。
+    请求JSON参数：
+    {
+        "trade_date": "20240726"  # 格式YYYYMMDD
+    }
+    """
+    try:
+        data = request.get_json()
+        trade_date = data.get("trade_date")
+        if not trade_date:
+            return jsonify({"status": "error", "message": "Missing trade_date"}), 400
+
+        # 创建任务
+        new_task = TaskRecord(
+            task_type="STOCK_HIST_SYNC_BY_DATE",
+            task_status="RUNNING",
+            progress_current=0,
+            progress_total=0,
+            message="Task started for trade_date " + trade_date
+        )
+        new_task = task_dao.insert(new_task)
+        task_id = new_task.id
+        logger.info("Created task id %d for stock_hist sync by date %s.", task_id, trade_date)
+
+        def task_func():
+            stock_hist_synchronizer.sync_by_trade_date(trade_date)
+
+        launch_background_task(task_id, task_func)
+
+        return jsonify({"status": "success", "task_id": task_id, "message": f"Stock hist sync started for {trade_date}"}), 200
+
+    except Exception as e:
+        logger.exception("Error creating stock_hist sync_by_date task.")
+        return jsonify({"status": "error", "message": str(e)}), 500
     
 @fin_data_bp.route("/adj_factor/sync", methods=["POST"])
 def sync_adj_factor():
@@ -133,6 +171,43 @@ def sync_adj_factor():
         logger.exception("Error creating adj factor sync task.")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@fin_data_bp.route("/adj_factor/sync_by_date", methods=["POST"])
+def sync_adj_factor_by_date():
+    """
+    同步指定交易日的所有股票复权因子数据。
+    请求JSON参数：
+    {
+        "trade_date": "20240726"  # 格式YYYYMMDD
+    }
+    """
+    try:
+        data = request.get_json()
+        trade_date = data.get("trade_date")
+        if not trade_date:
+            return jsonify({"status": "error", "message": "Missing trade_date"}), 400
+
+        # 创建任务
+        new_task = TaskRecord(
+            task_type="ADJ_FACTOR_SYNC_BY_DATE",
+            task_status="RUNNING",
+            progress_current=0,
+            progress_total=0,
+            message="Task started for trade_date " + trade_date
+        )
+        new_task = task_dao.insert(new_task)
+        task_id = new_task.id
+        logger.info("Created task id %d for adj_factor sync by date %s.", task_id, trade_date)
+
+        def task_func():
+            adj_factor_synchronizer.sync_by_trade_date(trade_date)
+
+        launch_background_task(task_id, task_func)
+
+        return jsonify({"status": "success", "task_id": task_id, "message": f"Adj factor sync started for {trade_date}"}), 200
+
+    except Exception as e:
+        logger.exception("Error creating adj_factor sync_by_date task.")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @fin_data_bp.route("/stock_adj_hist/sync", methods=["POST"])
 def sync_stock_hist_adj():
@@ -222,6 +297,37 @@ def sync_fundamental():
 
         def task_func():
             fundamental_data_synchronizer.sync(progress_callback=progress_cb)
+
+        # 启动后台任务
+        launch_background_task(task_id, task_func)
+
+        return jsonify({"status": "success", "task_id": task_id, "message": "Task started"}), 200
+    except Exception as e:
+        logger.exception("Error creating fundamental data sync task.")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@fin_data_bp.route("/fundamental/sync_one_period", methods=["POST"])
+def sync_fundamental():
+    """
+    同步公司基本面数据
+    """
+    data = request.get_json()
+    period = data.get("period")
+    try:
+        # 创建任务记录（初始状态为 RUNNING，进度为 0）
+        new_task = TaskRecord(
+            task_type="FUNDAMENTAL_DATA_SYNC_ONE_PERIOD",
+            task_status="RUNNING",
+            progress_current=0,
+            progress_total=0,
+            message="Task started."
+        )
+        new_task = task_dao.insert(new_task)
+        task_id = new_task.id
+        logger.info("Created task id %d for one period fundamental data sync.", task_id)
+
+        def task_func():
+            fundamental_data_synchronizer.sync_by_period(period)
 
         # 启动后台任务
         launch_background_task(task_id, task_func)
