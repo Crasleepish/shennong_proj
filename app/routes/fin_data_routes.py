@@ -307,7 +307,7 @@ def sync_fundamental():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @fin_data_bp.route("/fundamental/sync_one_period", methods=["POST"])
-def sync_fundamental():
+def sync_fundamental_by_period():
     """
     同步公司基本面数据
     """
