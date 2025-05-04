@@ -7,7 +7,7 @@ class FundInfo(Base):
     # 使用证券代码作为主键
     fund_code = Column('fund_code', String(10), primary_key=True)
     fund_name = Column('fund_name', String(50), nullable=False)
-    fee_rete = Column('fee_rete', Float)
+    fee_rate = Column('fee_rate', Float)
 
     def __repr__(self):
         return f"<FundInfo(fund_code='{self.fund_code}', fund_name='{self.fund_name}')>"
@@ -18,12 +18,9 @@ class FundHist(Base):
     # 联合主键 (fund_code, date)
     fund_code = Column("fund_code", String(10), primary_key=True)
     date = Column("date", Date, primary_key=True)
-    value = Column("value", Float)
-    #复权因子
-    adjust_factor = Column("adjust_factor", Float)
-    #复权净值
-    net_value = Column("net_value", Float)
-    change_percent = Column("change_percent", Float)      # 单位：%
-    
+    value = Column("value", Float)  # 单位净值
+    net_value = Column("net_value", Float)  # 复权单位净值
+    change_percent = Column("change_percent", Float)  # 相对上一交易日的净值变化率，单位：%
+
     def __repr__(self):
         return f"<FundHist(fund_code='{self.fund_code}', date='{self.date}')>"

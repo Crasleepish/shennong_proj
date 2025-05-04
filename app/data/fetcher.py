@@ -155,7 +155,7 @@ class StockHistSynchronizer:
       2. 遍历股票列表，依次同步每只股票的历史行情数据
       3. 对于某一支股票，查看其最新数据的日期
       4. 如果最新日期小于等于当前日期，则同步该支股票的历史行情数据（不复权），调用tushare接口（tspro.daily）获取最新数据次日到当前日期的历史行情数据
-      5. 如果时间跨度大于20年，则结束日期截取至开始日期+20年
+      5. 如果时间跨度大于20年，则分割为多个请求，每次请求20年数据
       6. 将新增的数据插入数据库
       7. 限制接口调用次数每分钟不超过400次
     """
@@ -416,7 +416,6 @@ class StockHistSynchronizer:
         self.initialize()
         try:
             logger.info("Starting stock historical data synchronization.")
-            # 1. 获取当前数据库中的股票列表
             stock_list = self.stock_info_dao.load_stock_info()
             self.stock_list_size = len(stock_list)
             logger.info("Found %d stocks to synchronize.", len(stock_list))
@@ -429,35 +428,35 @@ class StockHistSynchronizer:
                     stock_code = stock.stock_code
                     market = stock.market
                     logger.info("Synchronizing stock %s", stock_code)
-                    # 2. 查询该股票在历史行情数据表中的最新日期
+
                     latest_date = self.stock_hist_unadj_dao.get_latest_date(stock_code)
                     if latest_date is None:
-                        # 如果没有数据，则从一个默认的开始日期开始，例如 19901126
-                        start_date = "19901126"
+                        start_date_dt = datetime.date(1990, 1, 1)
                     else:
-                        # 否则从最新日期的下一天开始同步
-                        next_date = latest_date + datetime.timedelta(days=1)
-                        start_date = next_date.strftime("%Y%m%d")
-                    
-                    # 当前日期，格式化为 YYYYMMDD
-                    current_date = datetime.datetime.now().strftime("%Y%m%d")
-                    
-                    # 如果开始日期大于当前日期，说明数据已更新完毕
-                    if start_date > current_date:
-                        logger.info("Stock %s is up to date. (start_date: %s, current_date: %s)", stock_code, start_date, current_date)
-                        continue
-                    
-                    # 检查时间跨度是否大于20年
-                    start_date_dt = datetime.datetime.strptime(start_date, "%Y%m%d")
-                    current_date_dt = datetime.datetime.strptime(current_date, "%Y%m%d")
-                    if (current_date_dt - start_date_dt).days > 365 * 20:
-                        # 如果时间跨度大于20年，则结束日期截取至开始日期+20年
-                        end_date = (start_date_dt + datetime.timedelta(days=365 * 20)).strftime("%Y%m%d")
-                        logger.info("Time span exceeds 20 years. Limiting end date to %s for stock %s", end_date, stock_code)
-                    else:
-                        end_date = current_date
+                        start_date_dt = latest_date + datetime.timedelta(days=1)
 
-                    tasks.append(self.loop.create_task(self.process_data_unadj(stock_code, market, start_date, end_date, progress_callback)))
+                    current_date_dt = datetime.date.today()
+                    if start_date_dt > current_date_dt:
+                        logger.info("Stock %s is up to date. (start_date: %s, current_date: %s)", stock_code, start_date_dt, current_date_dt)
+                        continue
+
+                    # 每段最多20年（约7300天）
+                    segment_days = 365 * 20
+                    segment_start = start_date_dt
+                    while segment_start < current_date_dt:
+                        segment_end = min(segment_start + datetime.timedelta(days=segment_days), current_date_dt)
+                        tasks.append(
+                            self.loop.create_task(
+                                self.process_data_unadj(
+                                    stock_code, market,
+                                    segment_start.strftime("%Y%m%d"),
+                                    segment_end.strftime("%Y%m%d"),
+                                    progress_callback
+                                )
+                            )
+                        )
+                        segment_start = segment_end + datetime.timedelta(days=1)
+
                 if tasks:
                     self.loop.run_until_complete(asyncio.gather(*tasks))
         finally:
@@ -531,10 +530,10 @@ class StockHistSynchronizer:
                     logger.error(f"Error processing row {row.to_dict()}: {e}")
 
             if new_records:
-                self.stock_hist_unadj_dao.batch_insert(new_records)
-                logger.info(f"Inserted {len(new_records)} records for trade_date {trade_date}")
+                self.stock_hist_unadj_dao.batch_upsert(new_records)
+                logger.info(f"Upserted {len(new_records)} records for trade_date {trade_date}")
             else:
-                logger.info(f"No valid records to insert for trade_date {trade_date}")
+                logger.info(f"No valid records to upsert for trade_date {trade_date}")
 
         except Exception as e:
             logger.error(f"Error syncing daily + daily_basic data for {trade_date}: {e}")
@@ -939,28 +938,29 @@ class AdjFactorSynchronizer:
 
                     latest_date = self.adj_factor_dao.get_latest_date(stock_code)
                     if latest_date is None:
-                        start_date = "19901126"
+                        start_date_dt = datetime.date(1990, 1, 1)
                     else:
-                        next_date = latest_date + datetime.timedelta(days=1)
-                        start_date = next_date.strftime("%Y%m%d")
+                        start_date_dt = latest_date + datetime.timedelta(days=1)
 
-                    current_date = datetime.datetime.now().strftime("%Y%m%d")
-
-                    if start_date > current_date:
+                    current_date_dt = datetime.date.today()
+                    if start_date_dt > current_date_dt:
                         logger.info(f"Stock {stock_code} is up to date.")
                         continue
 
-                    start_dt = datetime.datetime.strptime(start_date, "%Y%m%d")
-                    current_dt = datetime.datetime.strptime(current_date, "%Y%m%d")
-                    if (current_dt - start_dt).days > 365 * 20:
-                        end_date = (start_dt + datetime.timedelta(days=365 * 20)).strftime("%Y%m%d")
-                        logger.info(f"Limiting end date to {end_date} for stock {stock_code} (time span > 20 years)")
-                    else:
-                        end_date = current_date
-
-                    tasks.append(self.loop.create_task(
-                        self.process_stock(stock_code, market, start_date, end_date, progress_callback)
-                    ))
+                    segment_days = 365 * 20
+                    segment_start = start_date_dt
+                    while segment_start <= current_date_dt:
+                        segment_end = min(segment_start + datetime.timedelta(days=segment_days), current_date_dt)
+                        tasks.append(self.loop.create_task(
+                            self.process_stock(
+                                stock_code,
+                                market,
+                                segment_start.strftime("%Y%m%d"),
+                                segment_end.strftime("%Y%m%d"),
+                                progress_callback
+                            )
+                        ))
+                        segment_start = segment_end + datetime.timedelta(days=1)
 
                 if tasks:
                     self.loop.run_until_complete(asyncio.gather(*tasks))
@@ -996,7 +996,7 @@ class AdjFactorSynchronizer:
                     logger.error(f"Error processing adj_factor row {row.to_dict()}: {e}")
 
             if new_records:
-                self.adj_factor_dao.batch_insert(new_records)
+                self.adj_factor_dao.batch_upsert(new_records)
                 logger.info(f"Inserted {len(new_records)} adj_factor records for {trade_date}")
             else:
                 logger.info(f"No valid adj_factor records to insert for {trade_date}")

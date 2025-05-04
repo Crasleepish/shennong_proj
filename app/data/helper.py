@@ -457,7 +457,7 @@ def get_fund_fees_by_code_list(code_list: list):
     for fund_code in code_list:
         fund_info_df = fund_info_dao.select_dataframe_by_code(fund_code)
         fund_info_dict = fund_info_df.iloc[0].to_dict()
-        fees_dict[fund_code] = fund_info_dict['fee_rete'] / 100.0
+        fees_dict[fund_code] = fund_info_dict['fee_rate'] / 100.0
     return fees_dict
     
     

@@ -301,6 +301,77 @@ class StockHistUnadjDao:
             db.rollback()
             raise e
         
+    def batch_upsert(self, records: List[StockHistUnadj]):
+        if not records:
+            return []
+
+        try:
+            with get_db() as db:
+                logger.info(f"Using database bind: {db.bind}")
+
+                def upsert_one_batch(batch: List[StockHistUnadj]):
+                    # 先查出现有记录
+                    stock_code_list = [rec.stock_code for rec in batch]
+                    date_list = [rec.date for rec in batch]
+
+                    # 查询数据库已有记录
+                    existing_records = db.query(StockHistUnadj).filter(
+                        StockHistUnadj.stock_code.in_(stock_code_list),
+                        StockHistUnadj.date.in_(date_list)
+                    ).all()
+
+                    # 建立快速索引
+                    existing_dict = {
+                        (rec.stock_code, rec.date): rec for rec in existing_records
+                    }
+
+                    # 遍历每条新记录，判断是update还是insert
+                    for rec in batch:
+                        key = (rec.stock_code, rec.date)
+                        if key in existing_dict:
+                            # 已存在，更新字段
+                            existing = existing_dict[key]
+                            existing.open = rec.open
+                            existing.close = rec.close
+                            existing.high = rec.high
+                            existing.low = rec.low
+                            existing.volume = rec.volume
+                            existing.amount = rec.amount
+                            existing.pre_close = rec.pre_close
+                            existing.change_percent = rec.change_percent
+                            existing.change = rec.change
+                            existing.turnover_rate = rec.turnover_rate
+                            existing.turnover_rate_f = rec.turnover_rate_f
+                            existing.volume_ratio = rec.volume_ratio
+                            existing.pe = rec.pe
+                            existing.pe_ttm = rec.pe_ttm
+                            existing.pb = rec.pb
+                            existing.ps = rec.ps
+                            existing.ps_ttm = rec.ps_ttm
+                            existing.dv_ratio = rec.dv_ratio
+                            existing.dv_ttm = rec.dv_ttm
+                            existing.total_shares = rec.total_shares
+                            existing.float_shares = rec.float_shares
+                            existing.free_shares = rec.free_shares
+                            existing.mkt_cap = rec.mkt_cap
+                            existing.circ_mv = rec.circ_mv
+                        else:
+                            # 不存在，新增
+                            db.add(rec)
+
+                    db.commit()
+                    return batch
+
+                # 批量处理，默认1000条一批
+                process_in_batches(records, upsert_one_batch)
+
+                return records
+
+        except Exception as e:
+            logger.error("Error during batch upsert: %s", e)
+            db.rollback()
+            raise e
+        
     def select_dataframe_all(self):
         try:
             with get_db() as db:
@@ -415,6 +486,54 @@ class AdjFactorDao:
                 return records
         except Exception as e:
             logger.error("Error during adj_factor batch insert: %s", e)
+            db.rollback()
+            raise e
+
+    def batch_upsert(self, records: List[AdjFactor]):
+        if not records:
+            return []
+
+        try:
+            with get_db() as db:
+                logger.info(f"Using database bind: {db.bind}")
+
+                def upsert_one_batch(batch: List[AdjFactor]):
+                    # 先提取批次中的股票代码和日期
+                    stock_code_list = [rec.stock_code for rec in batch]
+                    date_list = [rec.date for rec in batch]
+
+                    # 查询数据库中已存在的记录
+                    existing_records = db.query(AdjFactor).filter(
+                        AdjFactor.stock_code.in_(stock_code_list),
+                        AdjFactor.date.in_(date_list)
+                    ).all()
+
+                    # 生成字典快速索引
+                    existing_dict = {
+                        (rec.stock_code, rec.date): rec for rec in existing_records
+                    }
+
+                    # 遍历新记录，做upsert
+                    for rec in batch:
+                        key = (rec.stock_code, rec.date)
+                        if key in existing_dict:
+                            # 已存在，更新 adj_factor
+                            existing = existing_dict[key]
+                            existing.adj_factor = rec.adj_factor
+                        else:
+                            # 不存在，新增
+                            db.add(rec)
+
+                    db.commit()
+                    return batch
+
+                # 分批处理
+                process_in_batches(records, upsert_one_batch)
+
+                return records
+
+        except Exception as e:
+            logger.error("Error during adj_factor batch upsert: %s", e)
             db.rollback()
             raise e
     

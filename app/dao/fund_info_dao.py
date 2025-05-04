@@ -80,104 +80,55 @@ class FundHistDao:
     _instance = None  # 用于保存单例对象
 
     def __new__(cls, *args, **kwargs):
-        # 始终返回已经创建好的 _instance
+        if cls._instance is None:
+            cls._instance = super(FundHistDao, cls).__new__(cls)
         return cls._instance
-    
+
     def __init__(self):
-        # __init__ 可能会被多次调用，因此通过 _initialized 标识确保只初始化一次
         if not hasattr(self, '_initialized'):
             self._initialized = True
 
     def get_latest_date(self, fund_code: str):
-        """
-        查询指定指数在历史行情表中的最新日期，如果没有数据则返回 None。
-        """
         try:
             with get_db() as db:
-                logger.info(f"Using database bind: {db.bind}")
                 result = db.query(FundHist.date).filter(FundHist.fund_code == fund_code).order_by(FundHist.date.desc()).first()
-                if result:
-                    return result[0]
-                else:
-                    return None
+                return result[0] if result else None
         except Exception as e:
             logger.error("Error querying latest date for %s: %s", fund_code, e)
             return None
 
-    def batch_insert(self, records: List[FundHist]):
-        """
-        批量插入历史数据记录到数据库。
-        """
-        
+    def batch_upsert(self, records: List[FundHist]):
         try:
             with get_db() as db:
-                logger.info(f"Using database bind: {db.bind}")
-                def insert_one_batch(batch: List[FundHist]):
-                    db.add_all(batch)
+                def upsert_one_batch(batch: List[FundHist]):
+                    existing = db.query(FundHist).filter(
+                        FundHist.fund_code.in_([r.fund_code for r in batch]),
+                        FundHist.date.in_([r.date for r in batch])
+                    ).all()
+                    existing_dict = {(r.fund_code, r.date): r for r in existing}
+                    for r in batch:
+                        key = (r.fund_code, r.date)
+                        if key in existing_dict:
+                            existing_rec = existing_dict[key]
+                            existing_rec.value = r.value
+                            existing_rec.net_value = r.net_value
+                            existing_rec.change_percent = r.change_percent
+                        else:
+                            db.add(r)
                     db.commit()
                     return batch
-                process_in_batches(records, insert_one_batch)
-                return records
+                return process_in_batches(records, upsert_one_batch)
         except Exception as e:
-            logger.error("Error during batch insert: %s", e)
-            db.rollback()
+            logger.error("Error during fund_hist batch upsert: %s", e)
             raise e
-        
-    def select_dataframe_all(self):
-        try:
-            with get_db() as db:
-                # 构造查询条件
-                query = db.query(FundHist)
-                # 使用 pd.read_sql 将 SQLAlchemy 查询转换为 DataFrame
-                df = pd.read_sql(query.statement, db.bind)
-            return df
-        except Exception as e:
-            return pd.DataFrame()
-        
-    def select_dataframe_by_code(self, fund_code: str):
-        """
-        查询指定指数的所有历史数据，并返回为 Pandas DataFrame。
-        
-        :param fund_code: 指数代码，例如 "600012"
-        :return: 包含查询结果的 DataFrame，如果没有数据则返回空 DataFrame。
-        """
-        try:
-            with get_db() as db:
-                # 构造查询条件
-                query = db.query(FundHist).filter(FundHist.fund_code == fund_code).order_by(FundHist.date)
-                # 使用 pd.read_sql 将 SQLAlchemy 查询转换为 DataFrame
-                df = pd.read_sql(query.statement, db.bind)
-            return df
-        except Exception as e:
-            return pd.DataFrame()
-    
-    def select_after_date_as_dataframe(self, fund_code: str, date: Union[str, datetime.date]):
-        """
-        查询指定指数代码在当前日期之后的数据，并返回一个包含查询结果的 DataFrame。
-        :param fund_code: 股票代码
-        :return: 包含查询结果的 DataFrame，如果没有数据则返回空 DataFrame。
-        """
-        try:
-            with get_db() as db:
-                # 构造查询条件，查找 fund_code 相等且 date 大于指定日期的记录
-                query = db.query(FundHist).filter(
-                    FundHist.fund_code == fund_code,
-                    FundHist.date >= date
-                )
-                # 使用 pd.read_sql 将查询结果转换为 DataFrame，
-                df = pd.read_sql(query.statement, db.bind)
-            return df
-        except Exception as e:
-            logger.error("Error querying after date for %s: %s", fund_code, e)
-            return pd.DataFrame()
-    
+
     def delete_all(self):
         try:
             with get_db() as db:
                 db.query(FundHist).delete()
                 db.commit()
         except Exception as e:
-            logger.error("Error deleting allrecords", e)
+            logger.error("Error deleting all fund_hist records: %s", e)
             db.rollback()
             raise e
 

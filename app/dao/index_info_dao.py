@@ -35,8 +35,11 @@ class IndexInfoDao:
     def batch_insert(self, index_info_lst: List[IndexInfo]):
         try:
             with get_db() as db:
-                db.add_all(index_info_lst)
-                db.commit()
+                def insert_one_batch(batch: List[IndexInfo]):
+                    db.add_all(batch)
+                    db.commit()
+                    return batch
+                process_in_batches(index_info_lst, insert_one_batch)
                 return index_info_lst
         except Exception as e:
             logger.error("Error during batch insert: %s", e)
@@ -110,7 +113,52 @@ class IndexHistDao:
             logger.error("Error during batch insert: %s", e)
             db.rollback()
             raise e
-        
+
+    def batch_upsert(self, records: List[IndexHist]):
+        """
+        应用层批量 upsert。如果主键存在则更新，不存在则插入。
+        分批执行，每批默认处理1000条。
+        """
+        try:
+            with get_db() as db:
+                logger.info(f"Using database bind: {db.bind}")
+
+                def upsert_one_batch(batch: List[IndexHist]):
+                    # 提取所有主键
+                    key_set = {(rec.index_code, rec.date) for rec in batch}
+
+                    # 查询已存在记录
+                    existing_records = db.query(IndexHist).filter(
+                        IndexHist.index_code.in_([k[0] for k in key_set]),
+                        IndexHist.date.in_([k[1] for k in key_set])
+                    ).all()
+
+                    existing_dict = {(rec.index_code, rec.date): rec for rec in existing_records}
+
+                    for rec in batch:
+                        key = (rec.index_code, rec.date)
+                        if key in existing_dict:
+                            existing = existing_dict[key]
+                            existing.open = rec.open
+                            existing.close = rec.close
+                            existing.high = rec.high
+                            existing.low = rec.low
+                            existing.volume = rec.volume
+                            existing.amount = rec.amount
+                            existing.change = rec.change
+                            existing.change_percent = rec.change_percent
+                        else:
+                            db.add(rec)
+
+                    db.commit()
+                    return batch
+
+                return process_in_batches(records, upsert_one_batch)
+
+        except Exception as e:
+            logger.error("Error during index_hist batch upsert: %s", e)
+            db.rollback()
+            raise e
     def select_dataframe_all(self):
         try:
             with get_db() as db:

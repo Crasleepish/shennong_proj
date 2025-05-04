@@ -1,6 +1,7 @@
 from typing import List
 from bisect import bisect_left
 import akshare as ak
+import tushare as ts
 import pandas as pd
 import datetime
 import math
@@ -11,10 +12,13 @@ from app.dao.index_info_dao import IndexInfoDao, IndexHistDao
 from app.constants.enums import TaskType, TaskStatus
 from typing import Union
 import re
+import time
 
 import logging
 
 logger = logging.getLogger(__name__)
+
+tspro = ts.pro_api()
 
 def safe_value(val):
     return None if pd.isna(val) else val
@@ -44,19 +48,17 @@ class IndexInfoSynchronizer:
             df = ak.stock_zh_index_spot_em(symbol="sz399812")
         """
         logger.info("Fetching data from akshare ...")
-        sh_list = ak.stock_zh_index_spot_em(symbol="上证系列指数")[['代码', '名称']]
-        sh_list = sh_list.rename(columns={'代码': 'code', '名称': 'name'})
-        sh_list['market'] = 'sh'
 
-        sz_list = ak.stock_zh_index_spot_em(symbol="深证系列指数")[['代码', '名称']]
-        sz_list = sz_list.rename(columns={'代码': 'code', '名称': 'name'})
-        sz_list['market'] = 'sz'
+        csi_list = tspro.index_basic(market='CSI')[['ts_code', 'name', 'market']]
+        csi_list = csi_list.rename(columns={'ts_code': 'code', 'name': 'name', 'market': 'market'})
 
-        zz_list = ak.stock_zh_index_spot_em(symbol="中证系列指数")[['代码', '名称']]
-        zz_list = zz_list.rename(columns={'代码': 'code', '名称': 'name'})
-        zz_list['market'] = 'csi'
+        sse_list = tspro.index_basic(market='SSE')[['ts_code', 'name', 'market']]
+        sse_list = sse_list.rename(columns={'ts_code': 'code', 'name': 'name', 'market': 'market'})
 
-        df = pd.concat([sh_list, sz_list, zz_list], ignore_index=True).reset_index(drop=True)
+        szse_list = tspro.index_basic(market='SZSE')[['ts_code', 'name', 'market']]
+        szse_list = szse_list.rename(columns={'ts_code': 'code', 'name': 'name', 'market': 'market'})
+
+        df = pd.concat([csi_list, sse_list, szse_list], ignore_index=True).reset_index(drop=True)
         df.drop_duplicates(subset=['code'], keep='last', inplace=True)
         return df
 
@@ -118,6 +120,7 @@ class IndexHistSynchronizer:
       3. 对于某一支指数，查看其最新数据的日期
       4. 如果最新日期小于等于当前日期，则同步该指数的历史行情数据
       5. 将新增的数据插入数据库
+      6. 如果从开始日期到结束日期的范围长度超过了20年，则结束日期定为开始日期+20年
     """
     def __init__(self):
         self.index_info_dao = IndexInfoDao._instance
@@ -128,11 +131,15 @@ class IndexHistSynchronizer:
         self.is_running = False
         self.lock = asyncio.Lock()
         self.semaphore = asyncio.Semaphore(6)
+        self.api_call_reset_time = time.time() + 60
+        self.api_call_counter = 0
 
     def initialize(self):
         self.index_list_size = 0
         self.completed_num = 0
         self.is_running = True
+        self.api_call_reset_time = time.time() + 60
+        self.api_call_counter = 0
 
     def terminate(self):
         self.index_list_size = 0
@@ -142,24 +149,47 @@ class IndexHistSynchronizer:
     async def fetch_index_data(self, index_code, start_date, current_date):
         """异步获取历史行情数据"""
         try:
+            await self._check_api_rate_limit()
             async with self.semaphore:
-                df = await asyncio.to_thread(ak.index_zh_a_hist, 
-                                            symbol=index_code, 
+                df = await asyncio.to_thread(tspro.index_daily, 
+                                            ts_code=index_code, 
                                             start_date=start_date, 
                                             end_date=current_date)
+                # 去重：保留同一 ts_code + nav_date 中最后一条记录
+                df = df.drop_duplicates(subset=['ts_code', 'trade_date'], keep='last')
                 return df
         except Exception as e:
             logger.error("Error fetching index data for %s: %s", index_code, e)
             return pd.DataFrame()
         
     pd.DataFrame()
+
+    async def _check_api_rate_limit(self):
+        """检查并控制API调用频率，确保每分钟不超过200次"""
+        current_time = time.time()
+        
+        if current_time > self.api_call_reset_time:
+            # Reset counter if a minute has passed
+            self.api_call_counter = 0
+            self.api_call_reset_time = current_time + 60
+            
+        if self.api_call_counter >= 400:
+            # Wait until the next minute if we've reached the limit
+            wait_time = self.api_call_reset_time - current_time
+            if wait_time > 0:
+                logger.info(f"Rate limit reached, waiting for {wait_time:.2f} seconds")
+                await asyncio.sleep(wait_time)
+                self.api_call_counter = 0
+                self.api_call_reset_time = time.time() + 60
+        
+        self.api_call_counter += 1
         
     async def batch_insert(self, index_code, new_records):
         def _syn_batch_insert(index_code, new_records):
-            # 5. 批量插入新增记录到数据库
+            # 5. 批量插入新增记录到数据库，如果存在则更新
             if new_records:
                 try:
-                    result_records = self.index_hist_dao.batch_insert(new_records)
+                    result_records = self.index_hist_dao.batch_upsert(new_records)
                     logger.info("Inserted %d new historical records for index %s.", len(result_records), index_code)
                 except Exception as e:
                     logger.error("Error inserting new records for index %s: %s", index_code, e)
@@ -169,7 +199,7 @@ class IndexHistSynchronizer:
         async with self.semaphore:
             return await asyncio.to_thread(_syn_batch_insert, index_code, new_records)
     
-    async def process_data(self, index_code, start_date, current_date, progress_callback=None):
+    async def process_data(self, index_code, start_date, current_date):
         try:
             # 3. 调用 akshare 接口获取该股票从 start_date 到 current_date 的历史行情数据（不复权）
             logger.info("Fetching historical data for index %s from %s to %s", index_code, start_date, current_date)
@@ -180,25 +210,23 @@ class IndexHistSynchronizer:
                 return
 
             # 将日期列转换为日期类型
-            if '日期' in df.columns:
-                df['日期'] = pd.to_datetime(df['日期'], errors='coerce')
+            if 'trade_date' in df.columns:
+                df['trade_date'] = pd.to_datetime(df['trade_date'], errors='coerce')
 
             # 处理 DataFrame 数据，构造 IndexHist 对象列表
             new_records = []
             for _, row in df.iterrows():
                 record = IndexHist(
-                    date=row["日期"].date(),
+                    date=row["trade_date"].date(),
                     index_code=index_code,
-                    open=safe_value(row["开盘"]),
-                    close=safe_value(row["收盘"]),
-                    high=safe_value(row["最高"]),
-                    low=safe_value(row["最低"]),
-                    volume=safe_value(row["成交量"]) * 100,
-                    amount=safe_value(row["成交额"]),
-                    amplitude=safe_value(row["振幅"]),
-                    change_percent=safe_value(row["涨跌幅"]),
-                    change=safe_value(row["涨跌额"]),
-                    turnover_rate=safe_value(row["换手率"])
+                    open=safe_value(row["open"]),
+                    close=safe_value(row["close"]),
+                    high=safe_value(row["high"]),
+                    low=safe_value(row["low"]),
+                    volume=safe_value(row["vol"]) * 100,
+                    amount=safe_value(row["amount"]) * 1000,
+                    change_percent=safe_value(row["pct_chg"]),
+                    change=safe_value(row["change"])
                 )
                 new_records.append(record)
 
@@ -206,17 +234,11 @@ class IndexHistSynchronizer:
             await self.batch_insert(index_code, new_records)
         except Exception as e:
             logger.error("Error processing index %s: %s", index_code, e)
-        finally:
-            async with self.lock:
-                self.completed_num = self.completed_num + 1
-                if progress_callback:
-                    progress_callback(self.completed_num, self.index_list_size)
 
     def sync(self, progress_callback=None):
         self.initialize()
         try:
             logger.info("Starting index historical data synchronization.")
-            # 1. 获取当前数据库中的股票列表
             index_list = self.index_info_dao.load_index_info()
             self.index_list_size = len(index_list)
             logger.info("Found %d index to synchronize.", len(index_list))
@@ -228,29 +250,39 @@ class IndexHistSynchronizer:
                 for index in batch:
                     index_code = index.index_code
                     logger.info("Synchronizing index %s", index_code)
-                    # 2. 查询该股票在历史行情数据表中的最新日期
+
                     latest_date = self.index_hist_dao.get_latest_date(index_code)
                     if latest_date is None:
-                        # 如果没有数据，则从一个默认的开始日期开始，例如 19901126
-                        start_date = "19901126"
+                        start_dt = datetime.date(1990, 1, 1)
                     else:
-                        # 否则从最新日期的下一天开始同步
-                        next_date = latest_date + datetime.timedelta(days=1)
-                        start_date = next_date.strftime("%Y%m%d")
-                    
-                    # 当前日期，格式化为 YYYYMMDD
-                    current_date = datetime.datetime.now().strftime("%Y%m%d")
-                    
-                    # 如果开始日期大于当前日期，说明数据已更新完毕
-                    if start_date > current_date:
-                        logger.info("Index %s is up to date. (start_date: %s, current_date: %s)", index_code, start_date, current_date)
+                        start_dt = latest_date + datetime.timedelta(days=1)
+
+                    current_dt = datetime.date.today()
+                    if start_dt > current_dt:
+                        logger.info("Index %s is up to date. (start_date: %s, current_date: %s)", index_code, start_dt, current_dt)
                         continue
 
-                    tasks.append(self.loop.create_task(self.process_data(index_code, start_date, current_date, progress_callback)))
+                    segment_days = 365 * 20
+                    segment_start = start_dt
+                    while segment_start <= current_dt:
+                        segment_end = min(segment_start + datetime.timedelta(days=segment_days), current_dt)
+                        tasks.append(
+                            self.loop.create_task(
+                                self.process_data(
+                                    index_code,
+                                    segment_start.strftime("%Y%m%d"),
+                                    segment_end.strftime("%Y%m%d")
+                                )
+                            )
+                        )
+                        segment_start = segment_end + datetime.timedelta(days=1)
+                    self.completed_num = self.completed_num + 1
+                    if progress_callback:
+                        progress_callback(self.completed_num, self.index_list_size)
                 if tasks:
                     self.loop.run_until_complete(asyncio.gather(*tasks))
         finally:
             self.terminate()
-    
+        
 index_info_synchronizer = IndexInfoSynchronizer()
 index_hist_synchronizer = IndexHistSynchronizer()

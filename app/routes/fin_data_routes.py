@@ -539,7 +539,7 @@ def sync_cninfo_share_change():
 @fin_data_bp.route("/index_info/sync", methods=["POST"])
 def sync_index_info():
     """
-    同步股票基本信息数据
+    同步指数基本信息数据
     """
     try:
         # 创建任务记录（初始状态为 RUNNING，进度为 0）
