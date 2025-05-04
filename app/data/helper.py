@@ -461,3 +461,20 @@ def get_fund_fees_by_code_list(code_list: list):
     return fees_dict
     
     
+def get_stock_status_map() -> pd.DataFrame:
+    """
+    获取所有股票的上市状态列表，返回 DataFrame，索引为 stock_code，值为 list_status（'L' 或 'D'）
+    """
+    try:
+        stock_info_dao = StockInfoDao._instance
+        df = stock_info_dao.select_dataframe_all()
+
+        # 只保留必要列并设置索引
+        if not df.empty:
+            df = df[["stock_code", "list_status"]].dropna()
+            df["list_status"] = df["list_status"].str.upper().str.strip()
+            return df.set_index("stock_code")
+        else:
+            return pd.DataFrame(columns=["list_status"])
+    except Exception as e:
+        return pd.DataFrame(columns=["list_status"])

@@ -37,23 +37,28 @@ def get_rebalance_dates(prices: pd.DataFrame, start_date: str, end_date: str) ->
     return pd.DatetimeIndex(sorted(rebalance_dates))
 
 def filter_universe(prices: pd.DataFrame, volumes: pd.DataFrame, mkt_cap: pd.DataFrame,
-                    stock_info: pd.DataFrame, suspend_df: pd.DataFrame, rb_date: pd.Timestamp) -> list:
+                    stock_info: pd.DataFrame, suspend_df: pd.DataFrame, list_status: pd.DataFrame, 
+                    rb_date: pd.Timestamp) -> list:
     """
     在给定再平衡日 rb_date 下，过滤股票：
       1. 剔除成交量在当日最低 1% 的股票；
       2. 剔除上市未满 1 年的股票；
       3. 剔除停牌或过去 6 个月内发生过停牌的股票；
+      4. 剔除已退市的股票（list_status != 'L'）。
     返回符合条件的股票代码列表。
     """
-    # a. 成交量过滤：当日成交量
+    # a. 剔除退市股票（只保留 list_status == 'L' 的股票）
+    valid_listed = set(list_status.index[list_status['list_status'] == 'L'])
+
+    # b. 成交量过滤：当日成交量
     vol = volumes.loc[rb_date]
     threshold = vol.quantile(0.01)
     valid_volume = set(vol[vol > threshold].index)
     
-    # b. 上市时间过滤：上市时间至少在 rb_date 前 1 年
+    # c. 上市时间过滤：上市时间至少在 rb_date 前 1 年
     valid_listing = set(stock_info.index[stock_info["listing_date"] <= (rb_date - pd.DateOffset(years=1))])
     
-    # c. 停牌过滤：假设 suspend_df 包含所有停牌记录，排除过去 6 个月内（包括当日）停牌且未复牌的股票
+    # d. 停牌过滤：假设 suspend_df 包含所有停牌记录，排除过去 6 个月内（包括当日）停牌且未复牌的股票
     six_months_ago = rb_date - pd.DateOffset(months=6)
     recent_suspend = suspend_df[(suspend_df["suspend_date"] >= six_months_ago) & (suspend_df["suspend_date"] <= rb_date)]
     suspended_stocks = recent_suspend[
@@ -61,7 +66,7 @@ def filter_universe(prices: pd.DataFrame, volumes: pd.DataFrame, mkt_cap: pd.Dat
     ]["stock_code"].unique()
     valid_suspension = set(prices.columns) - set(suspended_stocks)
     
-    valid = valid_volume & valid_listing & valid_suspension
+    valid = valid_listed & valid_volume & valid_listing & valid_suspension
     return list(valid)
 
 def get_latest_fundamental(stock_code: str, rb_date: pd.Timestamp, fundamental_df: pd.DataFrame) -> pd.Series:
@@ -99,6 +104,7 @@ def backtest_strategy(start_date: str, end_date: str):
     mkt_cap = get_mkt_cap_df(data_start_date, end_date)
     stock_info = get_stock_info_df()
     suspend_df = get_suspend_df()
+    list_status_of_stocks = get_stock_status_map()
 
     # 获取再平衡日期
     rb_dates = get_rebalance_dates(prices, start_date, end_date)
@@ -125,7 +131,7 @@ def backtest_strategy(start_date: str, end_date: str):
             # 筛选逻辑
             # ---------------------------
 
-            valid_stocks = filter_universe(prices, volumes, mkt_cap, stock_info, suspend_df, rb_date)
+            valid_stocks = filter_universe(prices, volumes, mkt_cap, stock_info, suspend_df, list_status_of_stocks, rb_date)
             logger.info("Valid stocks count on %s: %d", rb_date.strftime("%Y-%m-%d"), len(valid_stocks))
             if not valid_stocks:
                 continue

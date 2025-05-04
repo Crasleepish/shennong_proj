@@ -11,6 +11,7 @@ class StockInfo(Base):
     exchange = Column('exchange', String(10), nullable=True)
     industry = Column('industry', String(50), nullable=True)
     listing_date = Column('listing_date', Date, nullable=False)
+    list_status = Column('list_status', String(4), nullable=True)
 
     __table_args__ = (
         Index('idx_stock_code_task_date_stock_info', 'stock_code'),

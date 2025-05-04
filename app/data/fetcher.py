@@ -51,14 +51,14 @@ class StockInfoSynchronizer:
             df = ak.stock_info_sh_name_code(symbol="主板A股")
         """
         logger.info("Fetching data from akshare ...")
-        stock_list = tspro.stock_basic(exchange='', list_status='L', fields='ts_code,symbol,name,market,exchange,list_date')
-        stock_list = stock_list.rename(columns={'ts_code': 'stock_code', 'name': 'stock_name', 'market': 'market', 'exchange': 'exchange', 'list_date': 'listing_date'})
+        stock_list = tspro.stock_basic(exchange='', list_status='L', fields='ts_code,symbol,name,market,exchange,list_date,list_status')
+        stock_list = stock_list.rename(columns={'ts_code': 'stock_code', 'name': 'stock_name', 'market': 'market', 'exchange': 'exchange', 'list_date': 'listing_date', 'list_status': 'list_status'})
         # 将上市日期转换为日期类型（若转换失败则置为 NaT）
         stock_list['listing_date'] = pd.to_datetime(stock_list['listing_date'], errors='coerce').dt.date
 
         # 退市股票列表
-        stock_ts_list = tspro.stock_basic(exchange='', list_status='D', fields='ts_code,symbol,name,market,exchange,list_date')
-        stock_ts_list = stock_ts_list.rename(columns={'ts_code': 'stock_code', 'name': 'stock_name', 'market': 'market', 'exchange': 'exchange', 'list_date': 'listing_date'})
+        stock_ts_list = tspro.stock_basic(exchange='', list_status='D', fields='ts_code,symbol,name,market,exchange,list_date,list_status')
+        stock_ts_list = stock_ts_list.rename(columns={'ts_code': 'stock_code', 'name': 'stock_name', 'market': 'market', 'exchange': 'exchange', 'list_date': 'listing_date', 'list_status': 'list_status'})
         stock_ts_list['listing_date'] = pd.to_datetime(stock_ts_list['listing_date'], errors='coerce').dt.date
 
         df = pd.concat([stock_list, stock_ts_list], ignore_index=True).sort_values('listing_date').reset_index(drop=True)
@@ -94,24 +94,13 @@ class StockInfoSynchronizer:
         同步数据：将接口返回的新增记录插入到数据库中
         """
         logger.info("Starting synchronization for stock info.")
-        df = self.fetch_data()
-        if df.empty:
+        new_data = self.fetch_data()
+        if new_data.empty:
             logger.warning("Fetched data is empty.")
             return
         
-        # 获取数据库中已有的股票代码集合
         try:
-            stock_info_lst : List[StockInfo] = self.stock_info_dao.load_stock_info()
-            existing_codes = {si.stock_code for si in stock_info_lst}
-            logger.debug("Existing stock codes in DB: %s", existing_codes)
-            
-            # 筛选出新增数据（证券代码不在 existing_codes 中）
-            new_data = df[~df['stock_code'].isin(existing_codes)]
-            logger.info("Found %d new records to insert.", len(new_data))
-            
-            if new_data.empty:
-                logger.info("No new records to insert.")
-                return
+            logger.info("Found %d new records to insert/update.", len(new_data))
             
             # 将 DataFrame 中每一行转换为 StockInfo 对象
             new_records = []
@@ -122,7 +111,8 @@ class StockInfoSynchronizer:
                     market=safe_value(row['market']),
                     exchange=safe_value(row['exchange']),
                     listing_date=safe_value(row['listing_date']),
-                    industry=None
+                    industry=None,
+                    list_status=safe_value(row['list_status']),
                 )
                 new_records.append(record)
                 if progress_callback:
@@ -130,7 +120,7 @@ class StockInfoSynchronizer:
                         progress_callback(idx, len(new_records))
             
             # 批量插入新增记录
-            self.stock_info_dao.batch_insert(new_records)
+            self.stock_info_dao.batch_upsert(new_records)
 
             # 更新行业信息
             self.update_industry()

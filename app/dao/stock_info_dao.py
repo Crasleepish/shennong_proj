@@ -4,6 +4,7 @@ from sqlalchemy import or_, tuple_
 from app.models.stock_models import StockInfo, StockHistUnadj, UpdateFlag, FutureTask, CompanyAction, StockHistAdj, AdjFactor, FundamentalData, SuspendData, StockShareChangeCNInfo, MarketFactors
 from app.database import get_db
 from app.utils.data_utils import process_in_batches
+from app.utils.db_utils import chunked_query_to_dataframe
 import logging
 import pandas as pd
 import datetime
@@ -40,6 +41,48 @@ class StockInfoDao:
                 return stock_info_lst
         except Exception as e:
             logger.error("Error during batch insert: %s", e)
+            db.rollback()
+            raise e
+        
+    def batch_upsert(self, stock_info_lst: List[StockInfo]):
+        """
+        批量 upsert（存在则更新，不存在则插入）StockInfo 记录
+        """
+        if not stock_info_lst:
+            logger.info("batch_upsert 传入空列表，跳过处理")
+            return []
+
+        try:
+            with get_db() as db:
+                # 获取所有传入记录的 stock_code
+                input_codes = [s.stock_code for s in stock_info_lst]
+
+                # 查找数据库中已存在的记录
+                existing_records = db.query(StockInfo).filter(StockInfo.stock_code.in_(input_codes)).all()
+                existing_dict = {r.stock_code: r for r in existing_records}
+
+                inserted = 0
+                updated = 0
+                for new_rec in stock_info_lst:
+                    if new_rec.stock_code in existing_dict:
+                        existing = existing_dict[new_rec.stock_code]
+                        # 更新字段（保留主键 stock_code）
+                        existing.stock_name = new_rec.stock_name
+                        existing.market = new_rec.market
+                        existing.exchange = new_rec.exchange
+                        existing.industry = new_rec.industry
+                        existing.listing_date = new_rec.listing_date
+                        existing.list_status = new_rec.list_status
+                        updated += 1
+                    else:
+                        db.add(new_rec)
+                        inserted += 1
+
+                db.commit()
+                logger.info(f"StockInfo batch_upsert 完成：新增 {inserted} 条，更新 {updated} 条")
+                return stock_info_lst
+        except Exception as e:
+            logger.error("StockInfo batch_upsert 失败: %s", e)
             db.rollback()
             raise e
     
@@ -400,32 +443,22 @@ class StockHistUnadjDao:
         except Exception as e:
             return pd.DataFrame()
     
-    def select_dataframe_by_date_range(self, stock_code: str, start_date: Union[str, datetime.date], end_date: Union[str, datetime.date]):
-        """
-        查询指定股票代码在指定日期范围的数据，并返回一个包含查询结果的 DataFrame。
-        :param stock_code: 股票代码
-        :param start_date: 开始日期，可以是字符串或 datetime.date 对象
-        :param end_date: 结束日期，可以是字符串或 datetime.date 对象
-        :return: 包含查询结果的 DataFrame，如果没有数据则返回空 DataFrame。
-        """
+    def select_dataframe_by_date_range(self, stock_code: str, start_date, end_date):
         try:
-            with get_db() as db:
-                query = db.query(StockHistUnadj)
-                if stock_code is not None:
-                    query = query.filter(
-                        StockHistUnadj.stock_code == stock_code
-                    )
-                
-                # 根据 start_date 和 end_date 的情况添加日期条件
-                if start_date is not None:
-                    query = query.filter(StockHistUnadj.date >= start_date)
+            filters = []
+            if stock_code:
+                filters = filters.append[StockHistUnadj.stock_code == stock_code]
+            if start_date:
+                filters.append(StockHistUnadj.date >= start_date)
+            if end_date:
+                filters.append(StockHistUnadj.date <= end_date)
 
-                if end_date is not None:
-                    query = query.filter(StockHistUnadj.date <= end_date)
-                
-                # 使用 pd.read_sql 将查询结果转换为 DataFrame
-                df = pd.read_sql(query.statement, db.bind)
-            return df
+            return chunked_query_to_dataframe(
+                model=StockHistUnadj,
+                filters=filters,
+                order_by=StockHistUnadj.date.asc(),
+                chunksize=10000
+            )
         except Exception as e:
             logger.error("Error querying after date for %s: %s", stock_code, e)
             return pd.DataFrame()
@@ -588,24 +621,22 @@ class AdjFactorDao:
             raise e
     
     def get_adj_factor_dataframe(self, stock_code: str, start_date=None, end_date=None):
-        """
-        以DataFrame形式返回指定股票的复权因子数据。
-        """
         try:
-            adj_factors = self.get_adj_factors(stock_code, start_date, end_date)
-            if not adj_factors:
-                return pd.DataFrame()
-            
-            data = []
-            for factor in adj_factors:
-                data.append({
-                    'stock_code': factor.stock_code,
-                    'date': factor.date,
-                    'adj_factor': factor.adj_factor
-                })
-            
-            df = pd.DataFrame(data)
-            return df
+            filters = []
+            if stock_code:
+                filters = filters.append[AdjFactor.stock_code == stock_code]
+            if start_date:
+                filters.append(AdjFactor.date >= start_date)
+            if end_date:
+                filters.append(AdjFactor.date <= end_date)
+
+            return chunked_query_to_dataframe(
+                model=AdjFactor,
+                filters=filters,
+                order_by=AdjFactor.date.asc(),
+                columns=['stock_code', 'date', 'adj_factor'],
+                chunksize=10000
+            )
         except Exception as e:
             logger.error("Error getting adj_factor dataframe for %s: %s", stock_code, e)
             return pd.DataFrame()
