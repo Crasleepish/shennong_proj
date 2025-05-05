@@ -64,29 +64,32 @@ def filter_universe(prices: pd.DataFrame, volumes: pd.DataFrame, mkt_cap: pd.Dat
     在给定再平衡日 rb_date 下，过滤股票：
       1. 剔除成交量在当日最低 1% 的股票；
       2. 剔除上市未满 1 年的股票；
-      3. 剔除停牌或过去 6 个月内发生过停牌的股票；
+      3. 剔除过去 6 个月内发生过停牌的股票；
       4. 剔除已退市的股票（list_status != 'L'）。
     返回符合条件的股票代码列表。
     """
-    # a. 剔除退市股票（只保留 list_status == 'L' 的股票）
+    # a. 剔除退市股票
     valid_listed = set(list_status.index[list_status['list_status'] == 'L'])
 
-    # b. 成交量过滤：当日成交量
+    # b. 成交量过滤：当日成交量大于1%分位点
     vol = volumes.loc[rb_date]
     threshold = vol.quantile(0.01)
     valid_volume = set(vol[vol > threshold].index)
-    
-    # c. 上市时间过滤：上市时间至少在 rb_date 前 1 年
+
+    # c. 上市时间过滤：至少上市满1年
     valid_listing = set(stock_info.index[stock_info["listing_date"] <= (rb_date - pd.DateOffset(years=1))])
-    
-    # d. 停牌过滤：假设 suspend_df 包含所有停牌记录，排除过去 6 个月内（包括当日）停牌且未复牌的股票
+
+    # d. 停牌过滤：过去 6 个月内只要出现过停牌（suspend_type == 'S'）就剔除
     six_months_ago = rb_date - pd.DateOffset(months=6)
-    recent_suspend = suspend_df[(suspend_df["suspend_date"] >= six_months_ago) & (suspend_df["suspend_date"] <= rb_date)]
-    suspended_stocks = recent_suspend[
-        (recent_suspend["resume_date"].isnull()) | (recent_suspend["resume_date"] > rb_date)
-    ]["stock_code"].unique()
-    valid_suspension = set(prices.columns) - set(suspended_stocks)
-    
+    recent_suspend = suspend_df[
+        (suspend_df["trade_date"] >= six_months_ago) &
+        (suspend_df["trade_date"] <= rb_date) &
+        (suspend_df["suspend_type"] == "S")
+    ]
+    suspended_stocks = set(recent_suspend["stock_code"].unique())
+    valid_suspension = set(prices.columns) - suspended_stocks
+
+    # 综合过滤
     valid = valid_listed & valid_volume & valid_listing & valid_suspension
     return list(valid)
 
@@ -186,9 +189,9 @@ def backtest_strategy(start_date: str, end_date: str):
             # 确保调仓日的价格无缺失或异常
             if prices.loc[rb_date, selected_stocks].isnull().any():
                 logger.warning("Missing price data for selected stocks on %s; skipping.", rb_date.strftime("%Y-%m-%d"))
-                invalid_stocks = selected_stocks[prices.loc[rb_date, selected_stocks].isnull()]
-                # 从selected_stocks中删除invalid_stocks
-                selected_stocks = selected_stocks.drop(invalid_stocks)
+                missing_mask = prices.loc[rb_date, selected_stocks].isnull()
+                invalid_stocks = list(missing_mask[missing_mask].index)
+                selected_stocks = [s for s in selected_stocks if s not in invalid_stocks]
             logger.info("Selected stocks count on %s: %d", rb_date.strftime("%Y-%m-%d"), len(selected_stocks))
             # 填充目标持仓（示例：市值加权）
             target_weights.loc[rb_date, selected_stocks] = mkt_cap.loc[rb_date, selected_stocks] / mkt_cap.loc[rb_date, selected_stocks].sum()

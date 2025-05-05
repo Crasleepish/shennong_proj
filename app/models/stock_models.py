@@ -155,15 +155,13 @@ class SuspendData(Base):
     # 主键：序号
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     #停复牌数据
-    stock_code = Column(String(10), nullable=False)         # 股票代码
-    suspend_date = Column(Date, nullable=False)             # 停牌时间
-    resume_date = Column(Date, nullable=True)               # 停牌截止时间
-    suspend_period = Column(String(10), nullable=True)      # 停牌期限
-    suspend_reason = Column(String(100), nullable=True)     # 停牌原因
-    market = Column(String(20), nullable=True)              # 所属市场
+    stock_code = Column(String(10), nullable=True)          # 股票代码
+    trade_date = Column(Date, nullable=False)               # 交易日期
+    suspend_type = Column(String(5), nullable=True)        # 停复牌类型：S-停牌，R-复牌
+    suspend_timing = Column(String(30), nullable=True)      # 日内停牌时间段（如有）
 
     __table_args__ = (
-        Index('idx_suspend_data_stock_code_suspend_date', 'stock_code', 'suspend_date'),
+        Index('idx_suspend_data_stock_code', 'trade_date'),
     )
 
     def __repr__(self):

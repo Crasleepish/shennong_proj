@@ -1528,117 +1528,66 @@ class FundamentalDataSynchronizer:
 class SuspendDataSynchronizer:
     def __init__(self):
         self.suspend_data_dao = SuspendDataDao._instance
+        self.semaphore = asyncio.Semaphore(6)
+        self.api_call_counter = 0
+        self.api_call_reset_time = time.time() + 60
+        self.loop = asyncio.get_event_loop()
 
-    def _parse_date(self, val):
-        """
-        将输入值转换为 datetime.date，如果值为 NaT 或无法转换，则返回 None
-        """
-        if pd.isnull(val):
-            return None
-        try:
-            dt = pd.to_datetime(val, errors="coerce")
-            if pd.isnull(dt):
-                return None
-            return dt.date()
-        except Exception as e:
-            logger.error("Error parsing date %s: %s", val, e)
-            return None
-        
-    def sync_all(self, date: str, progress_callback=None):
-        """
-        获取指定日期（全量数据查询日期，例如 "20120222"）的停复牌数据，
-        将数据入库。接口返回的是从该日期起的全量数据。
-        """
-        try:
-            logger.info("Fetching full suspend data from date %s", date)
-            df = ak.stock_tfp_em(date=date)
-        except Exception as e:
-            logger.error("Error fetching suspend data for date %s: %s", date, e)
-            return
+    async def _check_api_rate_limit(self):
+        current_time = time.time()
+        if current_time > self.api_call_reset_time:
+            self.api_call_counter = 0
+            self.api_call_reset_time = current_time + 60
+        if self.api_call_counter >= 400:
+            await asyncio.sleep(self.api_call_reset_time - current_time)
+            self.api_call_counter = 0
+            self.api_call_reset_time = time.time() + 60
+        self.api_call_counter += 1
 
+    async def fetch_suspend_data(self, start_date: str, end_date: str) -> pd.DataFrame:
+        await self._check_api_rate_limit()
+        return await asyncio.to_thread(tspro.suspend_d, suspend_type='S', start_date=start_date, end_date=end_date)
+
+    async def process_segment(self, start_date: datetime.date, end_date: datetime.date):
+        df = await self.fetch_suspend_data(start_date.strftime("%Y%m%d"), end_date.strftime("%Y%m%d"))
         if df.empty:
-            logger.info("No suspend data fetched for date %s.", date)
             return
 
-        # 预处理：转换日期字段
-        df["停牌时间"] = df["停牌时间"].apply(self._parse_date)
-        df["停牌截止时间"] = df["停牌截止时间"].apply(self._parse_date)
-        
-        records = []
-        for idx, row in df.iterrows():
-            stock_code = row.get("代码")
-            suspend_date = safe_value(row.get("停牌时间"))
-            # 忽略停牌时间为空的记录
-            if suspend_date is None:
-                continue
-            resume_date = safe_value(row.get("停牌截止时间"))
-            suspend_period = safe_value(row.get("停牌期限"))
-            suspend_reason = safe_value(row.get("停牌原因"))
-            market = safe_value(row.get("所属市场"))
-            record = SuspendData(
-                stock_code = stock_code,
-                suspend_date = suspend_date,
-                resume_date = resume_date,
-                suspend_period = suspend_period,
-                suspend_reason = suspend_reason,
-                market = market
+        df['trade_date'] = pd.to_datetime(df['trade_date']).dt.date
+        records = [
+            SuspendData(
+                stock_code=row['ts_code'],
+                trade_date=row['trade_date'],
+                suspend_type=row['suspend_type'],
+                suspend_timing=row.get('suspend_timing')
             )
-            records.append(record)
+            for _, row in df.iterrows()
+        ]
+        self.suspend_data_dao.batch_insert(records)
+
+    def sync_by_date(self, start_date: str, end_date: str, progress_callback=None):
+        start = datetime.datetime.strptime(start_date, "%Y%m%d").date()
+        end = datetime.datetime.strptime(end_date, "%Y%m%d").date()
+
+        delta = datetime.timedelta(days=10)
+        segments = []
+        while start <= end:
+            segment_end = min(start + delta - datetime.timedelta(days=1), end)
+            segments.append((start, segment_end))
+            start = segment_end + datetime.timedelta(days=1)
+
+        for i, (seg_start, seg_end) in enumerate(segments):
+            logger.info("Processing segment %d/%d: %s to %s", i+1, len(segments), seg_start, seg_end)
+            self.loop.run_until_complete(self.process_segment(seg_start, seg_end))
             if progress_callback:
-                progress_callback(idx, len(df))
-        if records:
-            self.suspend_data_dao.batch_upsert(records)
-            logger.info("Full sync: Processed %d suspend data records.", len(records))
-        else:
-            logger.info("Full sync: No suspend data records to process.")
+                progress_callback(i + 1, len(segments))
+
+    def sync_all(self, date: str, progress_callback=None):
+        self.sync_by_date("19900101", date, progress_callback)
 
     def sync_today(self, progress_callback=None):
-        """
-        获取当天增量停复牌数据（接口参数 date 为当天），
-        对于每条记录，根据股票代码+停牌时间判断是否已存在，存在则更新，否则新增。
-        """
-        today = datetime.date.today()
-        today_str = today.strftime("%Y%m%d")
-        try:
-            logger.info("Fetching today's suspend data for date %s", today_str)
-            df = ak.stock_tfp_em(date=today_str)
-        except Exception as e:
-            logger.error("Error fetching today's suspend data for date %s: %s", today_str, e)
-            return
-
-        if df.empty:
-            logger.info("No suspend data fetched for today %s.", today_str)
-            return
-
-        df["停牌时间"] = df["停牌时间"].apply(self._parse_date)
-        df["停牌截止时间"] = df["停牌截止时间"].apply(self._parse_date)
-        
-        records = []
-        for idx, row in df.iterrows():
-            stock_code = row.get("代码")
-            suspend_date = safe_value(row.get("停牌时间"))
-            if suspend_date is None:
-                continue
-            resume_date = safe_value(row.get("停牌截止时间"))
-            suspend_period = safe_value(row.get("停牌期限"))
-            suspend_reason = safe_value(row.get("停牌原因"))
-            market = safe_value(row.get("所属市场"))
-            record = SuspendData(
-                stock_code = stock_code,
-                suspend_date = suspend_date,
-                resume_date = resume_date,
-                suspend_period = suspend_period,
-                suspend_reason = suspend_reason,
-                market = market
-            )
-            records.append(record)
-            if progress_callback:
-                progress_callback(idx, len(df))
-        if records:
-            self.suspend_data_dao.batch_upsert(records)
-            logger.info("Incremental sync: Processed %d suspend data records for today.", len(records))
-        else:
-            logger.info("Incremental sync: No suspend data records to process for today.")
+        today = datetime.date.today().strftime("%Y%m%d")
+        self.sync_by_date(today, today, progress_callback)
 
 def parse_amount(s: Union[str, float, None]) -> Union[float, None]:
     """

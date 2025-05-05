@@ -70,6 +70,7 @@ fundamental_data_holder = FundamentalDataHolder()
 
 class SuspendDataHolder:
     suspend_data_all = None
+
     def __init__(self):
         pass
 
@@ -77,10 +78,12 @@ class SuspendDataHolder:
         if self.suspend_data_all is None:
             suspend_data_dao = SuspendDataDao._instance
             self.suspend_data_all = suspend_data_dao.select_dataframe_all()
-            self.suspend_data_all["suspend_date"] = pd.to_datetime(self.suspend_data_all["suspend_date"], errors="coerce")
-            self.suspend_data_all["resume_date"] = pd.to_datetime(self.suspend_data_all["resume_date"], errors="coerce")
+
+            # 确保字段存在再进行转换
+            if 'trade_date' in self.suspend_data_all.columns:
+                self.suspend_data_all["trade_date"] = pd.to_datetime(self.suspend_data_all["trade_date"], errors="coerce")
         return self.suspend_data_all
-    
+
 suspend_data_holder = SuspendDataHolder()
 
 class IndexHistHolder:
@@ -207,12 +210,10 @@ def get_prices_df(start_date: str, end_date: str) -> pd.DataFrame:
     # 获取原始数据并转换为数据透视表
     df_hist = stock_hist_holder.get_stock_hist(start_date, end_date)
     pivot_df_hist = df_hist.pivot(index="date", columns="stock_code", values="close")
-    pivot_df_hist = pivot_df_hist.ffill()
     pivot_df_hist = pivot_df_hist.sort_index(ascending=True)
     
     df_adjf = adj_factor_holder.get_adj_factor(start_date, end_date)
     pivot_adjf = df_adjf.pivot(index="date", columns="stock_code", values="adj_factor")
-    pivot_adjf = pivot_adjf.ffill()
     pivot_adjf = pivot_adjf.sort_index(ascending=True)
     
     # 确保两个数据框的列(股票代码)一致
@@ -303,7 +304,6 @@ def get_return_df(start_date: str, end_date: str) -> pd.DataFrame:
     """
     df_prices = get_prices_df(change_date(start_date, -10), end_date)
     df_return = df_prices.pct_change()
-    df_return = df_return.ffill()
     df_return = df_return[df_return.index >= start_date]
     return df_return
 
@@ -326,7 +326,6 @@ def get_mkt_cap_df(start_date: str, end_date: str) -> pd.DataFrame:
     """
     df_all = stock_hist_holder.get_stock_hist(start_date, end_date)
     pivot_df = df_all.pivot(index="date", columns="stock_code", values="mkt_cap")
-    pivot_df = pivot_df.ffill()
     pivot_df = pivot_df.sort_index(ascending=True)
     return pivot_df
 
@@ -372,21 +371,18 @@ def get_fundamental_df() -> pd.DataFrame:
 
 def get_suspend_df() -> pd.DataFrame:
     """
-    返回停牌数据。
-    
-    DataFrame 格式要求：
-      - 包含字段：stock_code, suspend_date, resume_date, suspend_period, suspend_reason, market 等。
-      - suspend_date 和 resume_date 为 datetime64[ns] 类型
-     
-    样例输出：
-         stock_code  suspend_date  resume_date suspend_period  suspend_reason      market
-    0       600012   2020-06-15   2020-06-16      "1天"         "公告停牌"      Main Board
-    1       600016   2021-01-10        NaT         "连续停牌"     "重要公告"      Main Board
-    2       600018   2020-12-20   2020-12-22      "3天"         "公告停牌"      GEM
-    ...
+    返回停复牌数据 DataFrame。
+
+    要求包含字段：
+      - stock_code, trade_date, suspend_type, suspend_timing
+      - trade_date 应为 datetime64 类型
     """
     df = suspend_data_holder.get_suspend_data_all()
-    return df
+    expected_columns = ['stock_code', 'trade_date', 'suspend_type', 'suspend_timing']
+    for col in expected_columns:
+        if col not in df.columns:
+            df[col] = pd.NA
+    return df[expected_columns]
 
 def get_index_daily_return(index_code: str) -> pd.DataFrame:
     """

@@ -30,46 +30,39 @@ def get_rebalance_dates(prices: pd.DataFrame, start_date: str, end_date: str) ->
     return pd.DatetimeIndex(sorted(rebalance_dates))
 
 def filter_universe(prices: pd.DataFrame, volumes: pd.DataFrame, mkt_cap: pd.DataFrame,
-                    stock_info: pd.DataFrame, suspend_df: pd.DataFrame, rb_date: pd.Timestamp) -> list:
+                    stock_info: pd.DataFrame, suspend_df: pd.DataFrame, list_status: pd.DataFrame, 
+                    rb_date: pd.Timestamp) -> list:
     """
     在给定再平衡日 rb_date 下，过滤股票：
       1. 剔除成交量在当日最低 1% 的股票；
       2. 剔除上市未满 1 年的股票；
-      3. 剔除停牌或过去 6 个月内发生过停牌且未复牌的股票；
-      4. 剔除过去 3 个月内波动率（标准差）最高的 10% 股票。
-      
+      3. 剔除过去 6 个月内发生过停牌的股票；
+      4. 剔除已退市的股票（list_status != 'L'）。
     返回符合条件的股票代码列表。
     """
-    # 1. 成交量过滤：使用当日成交量数据
+    # a. 剔除退市股票
+    valid_listed = set(list_status.index[list_status['list_status'] == 'L'])
+
+    # b. 成交量过滤：当日成交量大于1%分位点
     vol = volumes.loc[rb_date]
     threshold = vol.quantile(0.01)
     valid_volume = set(vol[vol > threshold].index)
-    
-    # 2. 上市时间过滤：股票上市时间至少在 rb_date 前 1 年
+
+    # c. 上市时间过滤：至少上市满1年
     valid_listing = set(stock_info.index[stock_info["listing_date"] <= (rb_date - pd.DateOffset(years=1))])
-    
-    # 3. 停牌过滤：排除过去 6 个月内（包括当日）停牌且未复牌的股票
+
+    # d. 停牌过滤：过去 6 个月内只要出现过停牌（suspend_type == 'S'）就剔除
     six_months_ago = rb_date - pd.DateOffset(months=6)
-    recent_suspend = suspend_df[(suspend_df["suspend_date"] >= six_months_ago) & (suspend_df["suspend_date"] <= rb_date)]
-    suspended_stocks = recent_suspend[
-        (recent_suspend["resume_date"].isnull()) | (recent_suspend["resume_date"] > rb_date)
-    ]["stock_code"].unique()
-    valid_suspension = set(prices.columns) - set(suspended_stocks)
-    
-    # 4. 波动率过滤：计算过去3个月内的日收益率标准差（波动率），剔除波动率最高的10%
-    start_vol = rb_date - pd.DateOffset(months=3)
-    try:
-        price_3m = prices.loc[start_vol:rb_date]
-        returns_3m = price_3m.pct_change().dropna()
-        vol_series = returns_3m.std()  # 计算每只股票的日收益率标准差
-        vol_threshold = vol_series.quantile(0.9)  # 取90分位数作为阈值
-        valid_volatility = set(vol_series[vol_series <= vol_threshold].index)
-    except Exception as e:
-        logger.error("Error calculating volatility filter: %s", e)
-        valid_volatility = set(prices.columns)
-    
-    # 综合所有条件
-    valid = valid_volume & valid_listing & valid_suspension & valid_volatility
+    recent_suspend = suspend_df[
+        (suspend_df["trade_date"] >= six_months_ago) &
+        (suspend_df["trade_date"] <= rb_date) &
+        (suspend_df["suspend_type"] == "S")
+    ]
+    suspended_stocks = set(recent_suspend["stock_code"].unique())
+    valid_suspension = set(prices.columns) - suspended_stocks
+
+    # 综合过滤
+    valid = valid_listed & valid_volume & valid_listing & valid_suspension
     return list(valid)
 
 def get_latest_fundamental(stock_code: str, rb_date: pd.Timestamp, fundamental_df: pd.DataFrame) -> pd.Series:

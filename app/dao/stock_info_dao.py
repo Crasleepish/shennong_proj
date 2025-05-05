@@ -983,25 +983,11 @@ class SuspendDataDao:
     _instance = None
 
     def __new__(cls, *args, **kwargs):
-        # 始终返回已经创建好的 _instance
         return cls._instance
 
     def __init__(self):
-        # __init__ 可能会被多次调用，因此通过 _initialized 标识确保只初始化一次
         if not hasattr(self, '_initialized'):
             self._initialized = True
-
-    def get_by_stock_code_and_suspend_date(self, stock_code: str, suspend_date):
-        try:
-            with get_db() as db:
-                record = db.query(SuspendData).filter(
-                    SuspendData.stock_code == stock_code,
-                    SuspendData.suspend_date == suspend_date
-                ).first()
-            return record
-        except Exception as e:
-            logger.error("Error query suspend data for stock %s, date %s: %s", stock_code, suspend_date, e)
-            return None
 
     def insert(self, record: SuspendData):
         try:
@@ -1014,67 +1000,30 @@ class SuspendDataDao:
             db.rollback()
             raise e
 
-    def update(self, existing: SuspendData, new_data: dict):
+    def batch_insert(self, records: list):
         try:
             with get_db() as db:
-                for key, value in new_data.items():
-                    setattr(existing, key, value)
+                db.add_all(records)
                 db.commit()
-            return existing
+            logger.info("Inserted %d suspend records.", len(records))
+            return records
         except Exception as e:
-            logger.error("Error update suspend data: %s", e)
+            logger.error("Error during batch insert of suspend data: %s", e)
             db.rollback()
             raise e
 
-    def batch_upsert(self, records: list):
-        """
-        对传入的 SuspendData 列表进行 upsert 操作：
-        对于每条记录，根据股票代码和停牌时间判断是否存在，存在则更新，否则插入。
-        """
-        results = []
-        for record in records:
-            existing = self.get_by_stock_code_and_suspend_date(record.stock_code, record.suspend_date)
-            if existing:
-                update_data = {
-                    "resume_date": record.resume_date,
-                    "suspend_period": record.suspend_period,
-                    "suspend_reason": record.suspend_reason,
-                    "market": record.market,
-                }
-                updated = self.update(existing, update_data)
-                results.append(updated)
-            else:
-                inserted = self.insert(record)
-                results.append(inserted)
-        return results
-    
     def select_dataframe_all(self):
         with get_db() as db:
-            # 构造查询条件
             query = db.query(SuspendData)
-            # 使用 pd.read_sql 将 SQLAlchemy 查询转换为 DataFrame
-            df = pd.read_sql(query.statement, db.bind)
-        return df
-    
+            return pd.read_sql(query.statement, db.bind)
+
     def get_suspended_stocks_by_date(self, query_date: datetime.date):
-        """
-        查询指定日期发生停牌或正在停牌的股票列表，返回所有字段的记录。
-        
-        条件：
-          - suspend_date <= query_date
-          - resume_date 为 NULL 或 resume_date >= query_date
-          
-        :param query_date: 查询日期，类型为 datetime.date
-        :return: 满足条件的 DataFrame
-        """
         with get_db() as db:
             query = db.query(SuspendData).filter(
-                SuspendData.suspend_date <= query_date,
-                or_(SuspendData.resume_date == None, SuspendData.resume_date >= query_date)
+                SuspendData.trade_date <= query_date
             )
-            df = pd.read_sql(query.statement, db.bind)
-            return df
-        
+            return pd.read_sql(query.statement, db.bind)
+
     def delete_all(self):
         try:
             with get_db() as db:

@@ -134,43 +134,43 @@ class FactorFetcher:
 
     def fetch_all(self, start_date: str, end_date: str, progress_callback=None):
         logger.info("Starting fetching market index from %s to %s", start_date, end_date)
-        portfolio_ALL(start_date, end_date)
+        # portfolio_ALL(start_date, end_date)
 
         if progress_callback:
             progress_callback(5.5, 100)
 
         logger.info("Starting run BM_S_L strategy from %s to %s", start_date, end_date)
-        portfolio_BM_S_L(start_date, end_date)
+        # portfolio_BM_S_L(start_date, end_date)
 
         if progress_callback:
             progress_callback(11.1, 100)
 
         logger.info("Starting run BM_B_L strategy from %s to %s", start_date, end_date)
-        portfolio_BM_B_L(start_date, end_date)
+        # portfolio_BM_B_L(start_date, end_date)
 
         if progress_callback:
             progress_callback(16.6, 100)
 
         logger.info("Starting run BM_S_M strategy from %s to %s", start_date, end_date)
-        portfolio_BM_S_M(start_date, end_date)
+        # portfolio_BM_S_M(start_date, end_date)
 
         if progress_callback:
             progress_callback(22.2, 100)
 
         logger.info("Starting run BM_B_M strategy from %s to %s", start_date, end_date)
-        portfolio_BM_B_M(start_date, end_date)
+        # portfolio_BM_B_M(start_date, end_date)
 
         if progress_callback:
             progress_callback(27.7, 100)
 
         logger.info("Starting run BM_S_H strategy from %s to %s", start_date, end_date)
-        portfolio_BM_S_H(start_date, end_date)
+        # portfolio_BM_S_H(start_date, end_date)
 
         if progress_callback:
             progress_callback(33.3, 100)
 
         logger.info("Starting run BM_B_H strategy from %s to %s", start_date, end_date)
-        portfolio_BM_B_H(start_date, end_date)
+        # portfolio_BM_B_H(start_date, end_date)
 
         if progress_callback:
             progress_callback(38.8, 100)
