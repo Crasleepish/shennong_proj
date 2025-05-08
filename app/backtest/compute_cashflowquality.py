@@ -38,12 +38,12 @@ def compute_cash_flow_quality(code, rb_date, fundamental_df):
         logger.error("Error calculating cash flow quality for stock %s on %s: %s", code, rb_date.strftime("%Y-%m-%d"), str(e))
         return None
 
-def compute_and_cache_cash_flow_quality(rb_date, fundamental_df, cache_dir='.cache'):
+def compute_and_cache_cash_flow_quality(stock_universe, rb_date, fundamental_df, cache_dir='.cache'):
     os.makedirs(cache_dir, exist_ok=True)
     cash_flow_quality_cache = os.path.join(cache_dir, f'cash_flow_quality_{rb_date}.csv')
 
     stock_df = get_stock_info_df()
-    stock_df = stock_df[stock_df["listing_date"] <= rb_date]
+    stock_df = stock_df.loc[stock_universe]
     cash_flow_quality_data = []
     cash_flow_quality_dict = {}
 

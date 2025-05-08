@@ -19,7 +19,7 @@ from app.backtest.portfolio_VLT_B_H import backtest_strategy as portfolio_VLT_B_
 from app.backtest.portfolio_LIQ_X_H import backtest_strategy as portfolio_LIQ_X_H
 from app.backtest.portfolio_LIQ_X_L import backtest_strategy as portfolio_LIQ_X_L
 from app.backtest.portfolio_ALL import backtest_strategy as portfolio_ALL
-from app.data.helper import get_index_daily_return
+from app.data.helper import get_index_daily_return, refresh_holders
 import os
 from datetime import datetime
 import pandas as pd
@@ -32,6 +32,8 @@ output_dir = r"./bt_result"
 
 RET_DATE_COL = "date"
 RET_VAL_COL = "group"
+INDEX_FILE = "csi_index_zzqz.csv"
+INDEX_COL = "daily_return"
 
 def format_date(date_str):
     """
@@ -57,6 +59,15 @@ def safe_value(val):
 
 def safe_get(val):
     return 0.0 if val is None or pd.isna(val) else val
+
+def csi_index_zzqz(start_date: str, end_date: str):
+    df = get_index_daily_return("000985.CSI")
+    df = df.sort_index()
+    df = df.loc[start_date:end_date]
+    if not os.path.exists(os.path.join(output_dir, format_date(end_date))):
+        os.makedirs(os.path.join(output_dir, format_date(end_date)))
+    df.to_csv(os.path.join(output_dir, format_date(end_date), "csi_index_zzqz.csv"), index=True)
+    return df
 
 class FactorFetcher:
     def __init__(self):
@@ -88,6 +99,15 @@ class FactorFetcher:
         merged_df = pd.concat(returns_dict.values(), axis=1, join='inner')
         merged_df.index.name = "date"
 
+        # 加载中证全指
+        index_path = os.path.join(folder, INDEX_FILE)
+        index_df = pd.read_csv(index_path, usecols=["date", INDEX_COL], parse_dates=["date"])
+        index_df = index_df.set_index("date").rename(columns={INDEX_COL: "INDEX"})
+
+        # 合并指数
+        merged_df = merged_df.join(index_df, how='inner')
+
+
         # 计算每日因子
         def calc_smb(factor: str, merged_df: pd.DataFrame) -> pd.Series:
             small = [col for col in merged_df.columns if col.startswith(f"portfolio_{factor}_S_")]
@@ -107,7 +127,7 @@ class FactorFetcher:
         low_liq = merged_df[[col for col in merged_df.columns if col.startswith("portfolio_LIQ_") and col.endswith("_L_daily_returns")]].mean(axis=1)
 
         factors_df = pd.DataFrame(index=merged_df.index)
-        factors_df["MKT"] = merged_df["portofolio_ALL_daily_returns"]
+        factors_df["MKT"] = merged_df["INDEX"]
         factors_df["SMB"] = calc_smb("BM", merged_df) #SMB仅相对HML保持纯净
         factors_df["HML"] = high_bm - low_bm
         factors_df["QMJ"] = high_op - low_op
@@ -133,44 +153,45 @@ class FactorFetcher:
 
 
     def fetch_all(self, start_date: str, end_date: str, progress_callback=None):
+        refresh_holders()
         logger.info("Starting fetching market index from %s to %s", start_date, end_date)
-        # portfolio_ALL(start_date, end_date)
+        csi_index_zzqz(start_date, end_date)
 
         if progress_callback:
             progress_callback(5.5, 100)
 
         logger.info("Starting run BM_S_L strategy from %s to %s", start_date, end_date)
-        # portfolio_BM_S_L(start_date, end_date)
+        portfolio_BM_S_L(start_date, end_date)
 
         if progress_callback:
             progress_callback(11.1, 100)
 
         logger.info("Starting run BM_B_L strategy from %s to %s", start_date, end_date)
-        # portfolio_BM_B_L(start_date, end_date)
+        portfolio_BM_B_L(start_date, end_date)
 
         if progress_callback:
             progress_callback(16.6, 100)
 
         logger.info("Starting run BM_S_M strategy from %s to %s", start_date, end_date)
-        # portfolio_BM_S_M(start_date, end_date)
+        portfolio_BM_S_M(start_date, end_date)
 
         if progress_callback:
             progress_callback(22.2, 100)
 
         logger.info("Starting run BM_B_M strategy from %s to %s", start_date, end_date)
-        # portfolio_BM_B_M(start_date, end_date)
+        portfolio_BM_B_M(start_date, end_date)
 
         if progress_callback:
             progress_callback(27.7, 100)
 
         logger.info("Starting run BM_S_H strategy from %s to %s", start_date, end_date)
-        # portfolio_BM_S_H(start_date, end_date)
+        portfolio_BM_S_H(start_date, end_date)
 
         if progress_callback:
             progress_callback(33.3, 100)
 
         logger.info("Starting run BM_B_H strategy from %s to %s", start_date, end_date)
-        # portfolio_BM_B_H(start_date, end_date)
+        portfolio_BM_B_H(start_date, end_date)
 
         if progress_callback:
             progress_callback(38.8, 100)

@@ -10,10 +10,11 @@ from app.database import get_db
 from app.data.helper import to_adjusted_hist, get_qfq_price_by_code, get_prices_df
 from sqlalchemy import text
 from app.dao.stock_info_dao import StockHistUnadjDao, AdjFactorDao
+from app.data.helper import get_stock_info_df
 
 @pytest.fixture
 def app():
-    app = create_app(config_class=TestConfig)
+    app = create_app(config_class=Config)
     # Note: since our app's init_db() was already called, we assume the tables are created.
     # If necessary, you could call init_db() again here.
     yield app
@@ -221,3 +222,24 @@ def test_get_prices_df(setup_test_data):
             result_df[stock_code].values, 
             expected_values[stock_code]
         )
+
+# @patch('app.data.helper.stock_info_holder')
+def test_get_stock_info_df(app):
+    """测试获取股票基本信息的函数 get_stock_info_df"""
+    # 模拟返回数据
+    # mock_data = pd.DataFrame({
+    #     'stock_code': ['600001', '600002'],
+    #     'listing_date': [pd.Timestamp('2010-01-01'), pd.Timestamp('2012-06-30')],
+    #     'market': ['Main Board', 'GEM']
+    # })
+    # mock_holder.get_stock_info_all.return_value = mock_data
+
+    # 调用函数
+    result_df = get_stock_info_df()
+
+    # 验证结果
+    assert isinstance(result_df, pd.DataFrame)
+    assert result_df.index.name == 'stock_code'
+    assert 'listing_date' in result_df.columns
+    assert 'market' in result_df.columns
+    assert 'industry' in result_df.columns

@@ -108,12 +108,12 @@ def compute_profit(code, rb_date, fundamental_df):
         logger.error("Error calculating OP for stock %s on %s: %s", code, rb_date.strftime("%Y-%m-%d"), str(e))
         return None
 
-def compute_and_cache_profitability(rb_date, fundamental_df, cache_dir='.cache'):
+def compute_and_cache_profitability(stock_universe, rb_date, fundamental_df, cache_dir='.cache'):
     os.makedirs(cache_dir, exist_ok=True)
     profitability_cache = os.path.join(cache_dir, f'profitability_{rb_date}.csv')
 
     stock_df = get_stock_info_df()
-    stock_df = stock_df[stock_df["listing_date"] <= rb_date]
+    stock_df = stock_df.loc[stock_universe]
     profits_data = []
     profits_dict = {}
 

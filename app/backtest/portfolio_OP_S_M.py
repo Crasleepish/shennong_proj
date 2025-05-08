@@ -36,7 +36,7 @@ from vectorbt.portfolio import nb
 from .compute_profit import compute_and_cache_profitability, compute_and_cache_industry_avg_profit
 from .compute_cashflowquality import compute_and_cache_cash_flow_quality, compute_and_cache_industry_avg_cash_flow_quality
 from .compute_leverageratio import compute_and_cache_leverage, compute_and_cache_industry_avg_leverage
-from app.utils.data_utils import format_date
+from app.utils.data_utils import format_date, filter_listed_and_traded_universe
 
 logger = logging.getLogger(__name__)
 logging.getLogger('numba').setLevel(logging.INFO)
@@ -60,40 +60,39 @@ def get_rebalance_dates(prices: pd.DataFrame, start_date: str, end_date: str) ->
                 rebalance_dates.append(month_dates[-1])
     return pd.DatetimeIndex(sorted(rebalance_dates))
 
-def filter_universe(prices: pd.DataFrame, volumes: pd.DataFrame, mkt_cap: pd.DataFrame,
-                    stock_info: pd.DataFrame, suspend_df: pd.DataFrame, list_status: pd.DataFrame, 
-                    rb_date: pd.Timestamp) -> list:
+def filter_universe(prices: pd.DataFrame, volumes: pd.DataFrame, stock_info: pd.DataFrame, rb_date: pd.Timestamp) -> list:
     """
     在给定再平衡日 rb_date 下，过滤股票：
-      1. 剔除成交量在当日最低 1% 的股票；
-      2. 剔除上市未满 1 年的股票；
-      3. 剔除过去 6 个月内发生过停牌的股票；
-      4. 剔除已退市的股票（list_status != 'L'）。
+      1. 剔除上市未满 1 年的股票；
+      2. 剔除成交量在当日最低 1% 的股票；
+      3. 仅保留 prices 在当日有数据的股票;
+      4. 基础过滤.
     返回符合条件的股票代码列表。
     """
-    # a. 剔除退市股票
-    valid_listed = set(list_status.index[list_status['list_status'] == 'L'])
 
-    # b. 成交量过滤：当日成交量大于1%分位点
-    vol = volumes.loc[rb_date]
+    # 1. 上市时间过滤：至少在 rb_date 前 1 年
+    valid_listing = set(stock_info.index[stock_info["listing_date"] <= (rb_date - pd.DateOffset(years=1))])
+
+    # 2. 成交量过滤（取 valid_listing 中出现在 volumes 中的股票）
+    volume_candidates = valid_listing & set(volumes.columns)
+    if rb_date not in volumes.index:
+        logger.error("rb_date %s not in volumes data", rb_date.strftime("%Y-%m-%d"))
+        return []
+    vol = volumes.loc[rb_date, list(volume_candidates)]
     threshold = vol.quantile(0.01)
     valid_volume = set(vol[vol > threshold].index)
 
-    # c. 上市时间过滤：至少上市满1年
-    valid_listing = set(stock_info.index[stock_info["listing_date"] <= (rb_date - pd.DateOffset(years=1))])
+    # 4. 仅保留当日 prices 有数据的股票
+    if rb_date not in prices.index:
+        logger.warning("rb_date %s not in prices data", rb_date.strftime("%Y-%m-%d"))
+        return []
+    valid_price = set(prices.loc[rb_date].dropna().index)
 
-    # d. 停牌过滤：过去 6 个月内只要出现过停牌（suspend_type == 'S'）就剔除
-    six_months_ago = rb_date - pd.DateOffset(months=6)
-    recent_suspend = suspend_df[
-        (suspend_df["trade_date"] >= six_months_ago) &
-        (suspend_df["trade_date"] <= rb_date) &
-        (suspend_df["suspend_type"] == "S")
-    ]
-    suspended_stocks = set(recent_suspend["stock_code"].unique())
-    valid_suspension = set(prices.columns) - suspended_stocks
+    # 5. 基础过滤
+    basic_filtered = set(filter_listed_and_traded_universe(prices, stock_info, rb_date))
 
-    # 综合过滤
-    valid = valid_listed & valid_volume & valid_listing & valid_suspension
+    # 综合过滤条件
+    valid = valid_listing & valid_volume & valid_price & basic_filtered
     return list(valid)
 
 def get_latest_fundamental(stock_code: str, rb_date: pd.Timestamp, fundamental_df: pd.DataFrame) -> pd.Series:
@@ -178,7 +177,6 @@ def backtest_strategy(start_date: str, end_date: str):
     logger.info("Starting backtest strategy from %s to %s", start_date, end_date)
     
     # 加载数据
-    refresh_holders()
     # 为保证数据的完整性，加载180天前的数据
     data_start_date = datetime.strptime(start_date, "%Y-%m-%d").date() - timedelta(days=180)
     data_start_date = data_start_date.strftime("%Y-%m-%d")
@@ -187,8 +185,6 @@ def backtest_strategy(start_date: str, end_date: str):
     mkt_cap = get_mkt_cap_df(data_start_date, end_date)
     stock_info = get_stock_info_df()
     fundamental_df = get_fundamental_df()
-    suspend_df = get_suspend_df()
-    list_status_of_stocks = get_stock_status_map()
 
     # 获取再平衡日期
     rb_dates = get_rebalance_dates(prices, start_date, end_date)
@@ -215,7 +211,7 @@ def backtest_strategy(start_date: str, end_date: str):
             # 筛选逻辑
             # ---------------------------
 
-            valid_stocks = filter_universe(prices, volumes, mkt_cap, stock_info, suspend_df, list_status_of_stocks, rb_date)
+            valid_stocks = filter_universe(prices, volumes, stock_info, rb_date)
             logger.info("Valid stocks count on %s: %d", rb_date.strftime("%Y-%m-%d"), len(valid_stocks))
             if not valid_stocks:
                 continue
@@ -241,13 +237,16 @@ def backtest_strategy(start_date: str, end_date: str):
             leverage_cache = f'.cache/leverage_{rb_date}.csv'
             industry_leverage_cache = f'.cache/industry_leverage_{rb_date}.csv'
 
+            # 为行业中性化准备股票universe
+            basic_valid_stocks = filter_listed_and_traded_universe(prices, stock_info, rb_date)
+
             # 加载或计算盈利能力
             if os.path.exists(profitability_cache):
                 logging.info("Loading cached profitability data from %s", profitability_cache)
                 profits_df = pd.read_csv(profitability_cache, dtype={'stock_code': str, 'industry': str, 'profitability': 'float64'})
                 profits_dict = profits_df.set_index('stock_code')['profitability'].to_dict()
             else:
-                profits_df, profits_dict = compute_and_cache_profitability(rb_date, fundamental_df)
+                profits_df, profits_dict = compute_and_cache_profitability(basic_valid_stocks, rb_date, fundamental_df)
 
             if os.path.exists(industry_profit_cache):
                 logging.info("Loading cached industry avg profit data from %s", industry_profit_cache)
@@ -263,7 +262,7 @@ def backtest_strategy(start_date: str, end_date: str):
                 cash_flow_df = pd.read_csv(cash_flow_quality_cache, dtype={'stock_code': str, 'industry': str, 'cash_flow_quality': 'float64'})
                 cash_flow_dict = cash_flow_df.set_index('stock_code')['cash_flow_quality'].to_dict()
             else:
-                cash_flow_df, cash_flow_dict = compute_and_cache_cash_flow_quality(rb_date, fundamental_df)
+                cash_flow_df, cash_flow_dict = compute_and_cache_cash_flow_quality(basic_valid_stocks, rb_date, fundamental_df)
 
             if os.path.exists(industry_cash_flow_quality_cache):
                 logging.info("Loading cached industry avg cash flow quality data from %s", industry_cash_flow_quality_cache)
@@ -279,7 +278,7 @@ def backtest_strategy(start_date: str, end_date: str):
                 leverage_df = pd.read_csv(leverage_cache, dtype={'stock_code': str, 'industry': str, 'leverage_ratio': 'float64'})
                 leverage_dict = leverage_df.set_index('stock_code')['leverage_ratio'].to_dict()
             else:
-                leverage_df, leverage_dict = compute_and_cache_leverage(rb_date, fundamental_df)
+                leverage_df, leverage_dict = compute_and_cache_leverage(basic_valid_stocks, rb_date, fundamental_df)
 
             if os.path.exists(industry_leverage_cache):
                 logging.info("Loading cached industry avg leverage data from %s", industry_leverage_cache)
@@ -403,6 +402,7 @@ def backtest_strategy(start_date: str, end_date: str):
     # -------------------------------
 
     # 利用占位符Rep传递参数，并利用broadcast_named_args完成广播
+    prices = prices.ffill()
     pf = vbt.Portfolio.from_order_func(
         prices,
         order_func_nb,

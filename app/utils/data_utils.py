@@ -94,20 +94,32 @@ def calculate_column_volatility(prices_series):
 
 def calculate_column_illiquidity(returns_series: pd.Series, amount_series: pd.Series) -> float:
     """
-    计算Amihud illiquidity指标：日度 |收益率| / 成交额 的均值。
-    输入为日度数据，建议使用过去1个月或12个月作为窗口。
+    计算 Amihud illiquidity 指标：日度 |收益率| / 前一日成交额 的均值。
+    要求两个 Series 对齐，并去除任何 NaN 值后再计算。
 
     参数:
-        returns_series: 日收益率序列（pd.Series）
-        amount_series: 成交额序列（pd.Series）
-    
+        returns_series: pd.Series, 日收益率（float）
+        amount_series: pd.Series, 日成交额（float）
+
     返回:
-        float: 平均 illiquidity（越低越流动）
+        float: Amihud illiquidity 值（越低越流动）
     """
     try:
-        illiq = returns_series.abs() / amount_series.shift(1)
-        return illiq.dropna().mean()
-    except:
+        # 向后错位成交额
+        shifted_amount = amount_series.shift(1)
+        # 组合为 DataFrame 并只保留非空值行
+        df = pd.DataFrame({
+            'ret': returns_series,
+            'amt': shifted_amount
+        }).dropna()
+        
+        if df.empty:
+            return np.nan
+        
+        illiq = df['ret'].abs() / df['amt']
+        return illiq.mean()
+    except Exception as e:
+        # 可加入日志记录详细信息
         return np.nan
 
 
@@ -166,3 +178,25 @@ def format_date(date_str):
     except ValueError:
         # 如果解析失败，返回 "invaliddate"
         return "invaliddate"
+    
+def filter_listed_and_traded_universe(prices: pd.DataFrame,
+                                      stock_info: pd.DataFrame,
+                                      rb_date: pd.Timestamp) -> list:
+    """
+    在给定再平衡日 rb_date 下，过滤股票：
+      1. 仅保留在 rb_date 当天或更早已上市的股票；
+      2. 仅保留 prices 在 rb_date 有价格数据的股票。
+    返回符合条件的股票代码列表。
+    """
+
+    # 1. 已上市股票（在 rb_date 当天或更早已上市）
+    listed_stocks = set(stock_info.index[stock_info["listing_date"] <= rb_date])
+
+    # 2. 有价格数据的股票（prices 中 rb_date 当天不为空的列）
+    if rb_date not in prices.index:
+        return []
+    traded_stocks = set(prices.loc[rb_date].dropna().index)
+
+    # 综合过滤
+    valid_stocks = listed_stocks & traded_stocks
+    return list(valid_stocks)

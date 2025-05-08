@@ -281,7 +281,6 @@ def get_amount_df(start_date: str, end_date: str) -> pd.DataFrame:
     """
     df_all = stock_hist_holder.get_stock_hist(start_date, end_date)
     pivot_df = df_all.pivot(index="date", columns="stock_code", values="amount")
-    pivot_df = pivot_df.fillna(0)
     pivot_df = pivot_df.sort_index(ascending=True)
     return pivot_df
 
