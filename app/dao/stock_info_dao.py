@@ -418,7 +418,21 @@ class StockHistUnadjDao:
     def select_dataframe_by_date_range(self, stock_code: str, start_date, end_date):
         try:
             with get_db() as db:
-                query = db.query(StockHistUnadj).join(
+                # 指定需要查询的字段
+                selected_columns = [
+                    StockHistUnadj.stock_code,
+                    StockHistUnadj.date,
+                    StockHistUnadj.close,
+                    StockHistUnadj.volume,
+                    StockHistUnadj.amount,
+                    StockHistUnadj.pre_close,
+                    StockHistUnadj.change_percent,
+                    StockHistUnadj.change,
+                    StockHistUnadj.mkt_cap,
+                    StockHistUnadj.circ_mv,
+                    StockInfo.exchange
+                ]
+                query = db.query(*selected_columns).join(
                     StockInfo, StockHistUnadj.stock_code == StockInfo.stock_code
                 ).filter(
                     StockInfo.exchange.in_(["SSE", "SZSE"])
@@ -460,8 +474,21 @@ class StockHistUnadjDao:
     def select_dataframe_by_date_range(self, stock_code: str, start_date, end_date):
         try:
             with get_db() as db:
+                selected_columns = [
+                    StockHistUnadj.stock_code,
+                    StockHistUnadj.date,
+                    StockHistUnadj.close,
+                    StockHistUnadj.volume,
+                    StockHistUnadj.amount,
+                    StockHistUnadj.pre_close,
+                    StockHistUnadj.change_percent,
+                    StockHistUnadj.change,
+                    StockHistUnadj.mkt_cap,
+                    StockHistUnadj.circ_mv,
+                    StockInfo.exchange
+                ]
                 # 仅查询沪深上市的股票
-                query = db.query(StockHistUnadj).join(
+                query = db.query(*selected_columns).join(
                     StockInfo, StockHistUnadj.stock_code == StockInfo.stock_code
                 ).filter(
                     StockInfo.exchange.in_(["SSE", "SZSE"])

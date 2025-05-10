@@ -4,6 +4,9 @@ from app.dao.fund_info_dao import FundInfoDao, FundHistDao
 import pandas as pd
 from typing import List
 from app.utils.data_utils import change_date
+import logging
+
+logger = logging.getLogger(__name__)
 
 class StockHistHolder:
 
@@ -152,11 +155,12 @@ def to_adjusted_hist(unadj_df: pd.DataFrame, adj_factor_df: pd.DataFrame, hist_c
     result_df = unadj_df.copy()
     
     # 确定基准复权因子（最新日期的复权因子）
-    latest_date = adj_factor_df[date_column].max()
-    base_adj_factor = adj_factor_df.loc[adj_factor_df[date_column] == latest_date, adj_factor_column].iloc[0]
+    adj_factor_df_fill = adj_factor_df.ffill()
+    latest_date = adj_factor_df_fill[date_column].max()
+    base_adj_factor = adj_factor_df_fill.loc[adj_factor_df_fill[date_column] == latest_date, adj_factor_column].iloc[0]
     
     # 将复权因子数据合并到历史数据中
-    merged_df = result_df.merge(adj_factor_df[[date_column, adj_factor_column]], 
+    merged_df = result_df.merge(adj_factor_df_fill[[date_column, adj_factor_column]], 
                                on=date_column, how='left')
     
     # 计算调整比率
@@ -217,12 +221,15 @@ def get_prices_df(start_date: str, end_date: str) -> pd.DataFrame:
     pivot_adjf = pivot_adjf.sort_index(ascending=True)
     
     # 确保两个数据框的列(股票代码)一致
+    if set(pivot_df_hist.columns) != set(pivot_adjf.columns):
+        logger.warning("Columns of pivot_df_hist and pivot_adjf are not equal. Using intersection ====> %s.", pivot_df_hist.columns.difference(pivot_adjf.columns))
     common_stocks = pivot_df_hist.columns.intersection(pivot_adjf.columns)
     pivot_df_hist = pivot_df_hist[common_stocks]
     pivot_adjf = pivot_adjf[common_stocks]
     
     # 确保索引对齐
-    pivot_df_hist = pivot_df_hist.reindex(pivot_adjf.index)
+    pivot_adjf = pivot_adjf.reindex(pivot_df_hist.index)
+    pivot_adjf = pivot_adjf.ffill()
     
     # 获取每只股票的最新复权因子(最后一行)
     latest_adj_factors = pivot_adjf.iloc[-1]
@@ -302,7 +309,7 @@ def get_return_df(start_date: str, end_date: str) -> pd.DataFrame:
     ...
     """
     df_prices = get_prices_df(change_date(start_date, -10), end_date)
-    df_return = df_prices.pct_change()
+    df_return = df_prices.ffill().pct_change(fill_method=None)
     df_return = df_return[df_return.index >= start_date]
     return df_return
 

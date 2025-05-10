@@ -50,7 +50,7 @@ def calculate_volatility(prices, stock_code, start_date, end_date):
             raise ValueError("有效数据不足（至少需要2个交易日）")
         
         # 计算日收益率
-        returns = price_series.pct_change().dropna()
+        returns = price_series.ffill().pct_change(fill_method=None).dropna()
         
         # 计算日波动率并年化（假设252个交易日）
         daily_volatility = returns.std()
@@ -80,7 +80,7 @@ def calculate_column_volatility(prices_series):
             return pd.NaT
         
         # 计算日收益率
-        returns = prices_series.pct_change().dropna()
+        returns = prices_series.ffill().pct_change(fill_method=None).dropna()
         
         # 计算日波动率并年化（假设252个交易日）
         daily_volatility = returns.std()

@@ -1,5 +1,5 @@
 '''
-### 本组合为全市场高换手率组合
+### 本组合为全市场低流动性组合
 '''
 from app.data.helper import *
 import os
@@ -49,8 +49,14 @@ def filter_universe(prices: pd.DataFrame, volumes: pd.DataFrame, stock_info: pd.
     # 1. 上市时间过滤：至少在 rb_date 前 1 年
     valid_listing = set(stock_info.index[stock_info["listing_date"] <= (rb_date - pd.DateOffset(years=1))])
 
-    # 2. 成交量过滤（取 valid_listing 中出现在 volumes 中的股票）
-    volume_candidates = valid_listing & set(volumes.columns)
+    # 2. 仅保留当日 prices 有数据的股票
+    if rb_date not in prices.index:
+        logger.warning("rb_date %s not in prices data", rb_date.strftime("%Y-%m-%d"))
+        return []
+    valid_price = set(prices.loc[rb_date].dropna().index)
+
+    # 3. 成交量过滤（取 valid_listing 中出现在 volumes 中的股票）
+    volume_candidates = valid_price & valid_listing & set(volumes.columns)
     if rb_date not in volumes.index:
         logger.error("rb_date %s not in volumes data", rb_date.strftime("%Y-%m-%d"))
         return []
@@ -58,13 +64,7 @@ def filter_universe(prices: pd.DataFrame, volumes: pd.DataFrame, stock_info: pd.
     threshold = vol.quantile(0.01)
     valid_volume = set(vol[vol > threshold].index)
 
-    # 4. 仅保留当日 prices 有数据的股票
-    if rb_date not in prices.index:
-        logger.warning("rb_date %s not in prices data", rb_date.strftime("%Y-%m-%d"))
-        return []
-    valid_price = set(prices.loc[rb_date].dropna().index)
-
-    # 5. 基础过滤
+    # 4. 基础过滤
     basic_filtered = set(filter_listed_and_traded_universe(prices, stock_info, rb_date))
 
     # 综合过滤条件
@@ -100,10 +100,15 @@ def backtest_strategy(start_date: str, end_date: str):
     data_start_date = data_start_date.strftime("%Y-%m-%d")
     prices = get_prices_df(data_start_date, end_date)
     volumes = get_volume_df(data_start_date, end_date)
+    volumes = volumes.fillna(0)
     amounts = get_amount_df(data_start_date, end_date)
+    amounts = amounts.fillna(0)
     returns = get_return_df(start_date, end_date)
+    returns = returns.fillna(0)
     mkt_cap = get_mkt_cap_df(data_start_date, end_date)
+    mkt_cap = mkt_cap.ffill()
     stock_info = get_stock_info_df()
+    prices_fill = prices.ffill()
 
     # 获取再平衡日期
     rb_dates = get_rebalance_dates(prices, start_date, end_date)
@@ -152,10 +157,10 @@ def backtest_strategy(start_date: str, end_date: str):
                 logger.info("No illiquidity data on %s.", rb_date.strftime("%Y-%m-%d"))
                 continue
 
-            # 选出“流动性高”的股票：illiquidity 值越低越好
+            # 选出“流动性低”的股票：illiquidity 值越高越好
             illiq_sorted = illiq_series.sort_values(ascending=True)
-            num_selected = int(len(illiq_sorted) * 0.3)
-            selected_stocks = illiq_sorted.index[:num_selected]
+            num_selected = int(len(illiq_sorted) * 0.7)
+            selected_stocks = illiq_sorted.index[num_selected:]
 
             # 确保调仓日的价格无缺失或异常
             if prices.loc[rb_date, selected_stocks].isnull().any():
@@ -167,7 +172,7 @@ def backtest_strategy(start_date: str, end_date: str):
             # 填充目标持仓（示例：市值加权）
             target_weights.loc[rb_date, selected_stocks] = mkt_cap.loc[rb_date, selected_stocks] / mkt_cap.loc[rb_date, selected_stocks].sum()
 
-            current_prices = prices.loc[rb_date]
+            current_prices = prices_fill.loc[rb_date]
             holdings_value = (current_positions * current_prices).sum()
             total_asset = holdings_value + current_cash
             # 计算目标持仓
@@ -241,9 +246,8 @@ def backtest_strategy(start_date: str, end_date: str):
     # -------------------------------
 
     # 利用占位符Rep传递参数，并利用broadcast_named_args完成广播
-    prices = prices.ffill()
     pf = vbt.Portfolio.from_order_func(
-        prices,
+        prices_fill,
         order_func_nb,
         # 订单生成函数的参数：首先传入订单 size（此处用目标权重），然后price, size_type, direction, fees, slippage
         vbt.Rep('size'),
@@ -259,7 +263,7 @@ def backtest_strategy(start_date: str, end_date: str):
         # pre_segment_func_nb 的附加参数（注意：这里传入的 'size' 实际为目标权重）
         pre_segment_args=(vbt.Rep('size'), vbt.Rep('price'), vbt.Rep('size_type'), vbt.Rep('direction')),
         broadcast_named_args=dict(
-            price=prices,                # 订单价格使用收盘价数据
+            price=prices_fill,                # 订单价格使用收盘价数据
             size=order_sizes,         # 目标权重矩阵作为订单 size（用百分比表示）
             size_type=SizeType.Amount,   # 订单类型： 按数量
             direction=Direction.Both, # 订单方向：双向

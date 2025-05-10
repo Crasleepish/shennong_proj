@@ -173,7 +173,7 @@ class FundHistSynchronizer:
                     # 去重：保留同一 ts_code + nav_date 中最后一条记录
                     df = df.drop_duplicates(subset=['ts_code', 'nav_date'], keep='last')
                     df = df.sort_values('nav_date').reset_index(drop=True)
-                    df['pct_change'] = df['unit_nav'].pct_change()
+                    df['pct_change'] = df['unit_nav'].ffill().pct_change(fill_method=None)
                     return df[['nav_date', 'unit_nav', 'adj_nav', 'pct_change']]
                 return pd.DataFrame()
         except Exception as e:

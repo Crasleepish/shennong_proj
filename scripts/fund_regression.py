@@ -85,7 +85,7 @@ def annualized_return(df, value_col='net_value'):
     return (end_value / start_value) ** (365 / days) - 1
 
 def annualized_volatility(df, value_col='net_value'):
-    df['daily_return'] = df[value_col].pct_change()
+    df['daily_return'] = df[value_col].ffill().pct_change(fill_method=None)
     return df['daily_return'].std() * np.sqrt(252)
 
 def max_drawdown(df, value_col='net_value'):

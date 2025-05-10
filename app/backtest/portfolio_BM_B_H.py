@@ -121,9 +121,12 @@ def backtest_strategy(start_date: str, end_date: str):
     data_start_date = data_start_date.strftime("%Y-%m-%d")
     prices = get_prices_df(data_start_date, end_date)
     volumes = get_volume_df(data_start_date, end_date)
+    volumes = volumes.fillna(0)
     mkt_cap = get_mkt_cap_df(data_start_date, end_date)
+    mkt_cap = mkt_cap.ffill()
     stock_info = get_stock_info_df()
     fundamental_df = get_fundamental_df()
+    prices_fill = prices.ffill()
 
     # 获取再平衡日期
     rb_dates = get_rebalance_dates(prices, start_date, end_date)
@@ -192,7 +195,7 @@ def backtest_strategy(start_date: str, end_date: str):
             # 填充目标持仓（示例：市值加权）
             target_weights.loc[rb_date, selected_stocks] = mkt_cap.loc[rb_date, selected_stocks] / mkt_cap.loc[rb_date, selected_stocks].sum()
 
-            current_prices = prices.loc[rb_date]
+            current_prices = prices_fill.loc[rb_date]
             holdings_value = (current_positions * current_prices).sum()
             total_asset = holdings_value + current_cash
             # 计算目标持仓
@@ -266,9 +269,8 @@ def backtest_strategy(start_date: str, end_date: str):
     # -------------------------------
 
     # 利用占位符Rep传递参数，并利用broadcast_named_args完成广播
-    prices = prices.ffill()
     pf = vbt.Portfolio.from_order_func(
-        prices,
+        prices_fill,
         order_func_nb,
         # 订单生成函数的参数：首先传入订单 size（此处用目标权重），然后price, size_type, direction, fees, slippage
         vbt.Rep('size'),
@@ -284,7 +286,7 @@ def backtest_strategy(start_date: str, end_date: str):
         # pre_segment_func_nb 的附加参数（注意：这里传入的 'size' 实际为目标权重）
         pre_segment_args=(vbt.Rep('size'), vbt.Rep('price'), vbt.Rep('size_type'), vbt.Rep('direction')),
         broadcast_named_args=dict(
-            price=prices,                # 订单价格使用收盘价数据
+            price=prices_fill,                # 订单价格使用收盘价数据
             size=order_sizes,         # 目标权重矩阵作为订单 size（用百分比表示）
             size_type=SizeType.Amount,   # 订单类型： 按数量
             direction=Direction.Both, # 订单方向：双向
