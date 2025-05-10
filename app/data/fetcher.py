@@ -163,6 +163,7 @@ class StockHistSynchronizer:
         # Track API calls to comply with Tushare's rate limiting (400 calls per minute)
         self.api_call_counter = 0
         self.api_call_reset_time = time.time() + 60
+        self.failed_stocks = []
 
     def initialize(self):
         self.stock_list_size = 0
@@ -170,6 +171,7 @@ class StockHistSynchronizer:
         self.is_running = True
         self.api_call_counter = 0
         self.api_call_reset_time = time.time() + 60
+        self.failed_stocks = []
 
     def terminate(self):
         self.stock_list_size = 0
@@ -342,7 +344,7 @@ class StockHistSynchronizer:
         async with self.semaphore:
             return await asyncio.to_thread(_syn_batch_insert_unadj, stock_code, new_records)
         
-    async def process_data_unadj(self, stock_code, market, start_date, current_date, progress_callback=None):
+    async def process_data_unadj(self, stock_code, market, start_date, current_date):
         try:
             # 3. 调用 tushare 接口获取该股票从 start_date 到 current_date 的历史行情数据（不复权）和基本面数据
             logger.info("Fetching historical data for stock %s from %s to %s", stock_code, start_date, current_date)
@@ -367,7 +369,7 @@ class StockHistSynchronizer:
                     close=safe_value(row["收盘"]),
                     high=safe_value(row["最高"]),
                     low=safe_value(row["最低"]),
-                    volume=safe_value(row["成交量"]) * 100,  # Tushare volume is in 100s of shares
+                    volume=safe_value(row["成交量"]) * 100 if safe_value(row["成交量"]) is not None else None,  # Tushare volume is in 100s of shares
                     amount=safe_value(row["成交额"]),
                     change_percent=safe_value(row["涨跌幅"]),
                     change=safe_value(row["涨跌额"]),
@@ -386,7 +388,7 @@ class StockHistSynchronizer:
                     float_shares=safe_value(row.get("float_shares")),
                     free_shares=safe_value(row.get("free_shares")),
                     mkt_cap=safe_value(row.get("mkt_cap")),
-                    circ_mv=safe_value(row.get("circ_mv")) * 10000 if row.get("circ_mv") is not None else None,  # Convert from 万元 to 元
+                    circ_mv=safe_value(row.get("circ_mv")) * 10000 if safe_value(row.get("circ_mv")) is not None else None,  # Convert from 万元 to 元
                     # Include pre_close if available
                     pre_close=safe_value(row.get("前收盘"))
                 )
@@ -396,11 +398,7 @@ class StockHistSynchronizer:
             await self.batch_insert_unadj(stock_code, new_records)
         except Exception as e:
             logger.error("Error processing stock %s: %s", stock_code, e)
-        finally:
-            async with self.lock:
-                self.completed_num = self.completed_num + 1
-                if progress_callback:
-                    progress_callback(self.completed_num, self.stock_list_size)
+            raise e
 
     def sync(self, progress_callback=None):
         self.initialize()
@@ -413,7 +411,6 @@ class StockHistSynchronizer:
             batch_size = 20
             for i in range(0, len(stock_list), batch_size):
                 batch = stock_list[i : i + batch_size]
-                tasks = []
                 for stock in batch:
                     stock_code = stock.stock_code
                     market = stock.market
@@ -425,6 +422,9 @@ class StockHistSynchronizer:
                     else:
                         start_date_dt = latest_date + datetime.timedelta(days=1)
 
+                    listing_date = stock.listing_date
+                    start_date_dt = max(listing_date, start_date_dt)
+
                     current_date_dt = datetime.date.today()
                     if start_date_dt > current_date_dt:
                         logger.info("Stock %s is up to date. (start_date: %s, current_date: %s)", stock_code, start_date_dt, current_date_dt)
@@ -433,23 +433,29 @@ class StockHistSynchronizer:
                     # 每段最多20年（约7300天）
                     segment_days = 365 * 20
                     segment_start = start_date_dt
-                    while segment_start < current_date_dt:
+                    while segment_start <= current_date_dt:
                         segment_end = min(segment_start + datetime.timedelta(days=segment_days), current_date_dt)
-                        tasks.append(
-                            self.loop.create_task(
+                        try:
+                            self.loop.run_until_complete(
                                 self.process_data_unadj(
                                     stock_code, market,
                                     segment_start.strftime("%Y%m%d"),
-                                    segment_end.strftime("%Y%m%d"),
-                                    progress_callback
+                                    segment_end.strftime("%Y%m%d")
                                 )
                             )
-                        )
+                        except Exception as e:
+                            self.failed_stocks.append(stock)
+                            break
                         segment_start = segment_end + datetime.timedelta(days=1)
 
-                if tasks:
-                    self.loop.run_until_complete(asyncio.gather(*tasks))
+                    self.completed_num = self.completed_num + 1
+                    if progress_callback:
+                        progress_callback(self.completed_num, self.stock_list_size)
         finally:
+            if len(self.failed_stocks) > 0:
+                failed_stock_code = [stock.stock_code for stock in self.failed_stocks]
+                unique_failed_stock_code = list(set(failed_stock_code))
+                logger.error(">>>>>>>>>Failed to process stocks<<<<<<<<<: %s", unique_failed_stock_code)
             self.terminate()
 
     def sync_by_trade_date(self, trade_date: str):
@@ -822,12 +828,14 @@ class AdjFactorSynchronizer:
         self.stock_list_size = 0
         self.completed_num = 0
         self.lock = asyncio.Lock()
+        self.failed_stocks = []
 
     def initialize(self):
         self.stock_list_size = 0
         self.completed_num = 0
         self.api_call_counter = 0
         self.api_call_reset_time = time.time() + 60
+        self.failed_stocks = []
 
     def terminate(self):
         self.stock_list_size = 0
@@ -890,7 +898,7 @@ class AdjFactorSynchronizer:
         if records:
             await asyncio.to_thread(_syn_batch_insert, records)
 
-    async def process_stock(self, stock_code, market, start_date, end_date, progress_callback=None):
+    async def process_stock(self, stock_code, market, start_date, end_date):
         try:
             logger.info(f"Fetching adj factor for stock {stock_code} from {start_date} to {end_date}")
 
@@ -903,11 +911,7 @@ class AdjFactorSynchronizer:
 
         except Exception as e:
             logger.error(f"Error processing stock {stock_code}: {e}")
-        finally:
-            async with self.lock:
-                self.completed_num += 1
-                if progress_callback:
-                    progress_callback(self.completed_num, self.stock_list_size)
+            raise e
 
     def sync(self, progress_callback=None):
         self.initialize()
@@ -932,6 +936,9 @@ class AdjFactorSynchronizer:
                     else:
                         start_date_dt = latest_date + datetime.timedelta(days=1)
 
+                    listing_date = stock.listing_date
+                    start_date_dt = max(listing_date, start_date_dt)
+
                     current_date_dt = datetime.date.today()
                     if start_date_dt > current_date_dt:
                         logger.info(f"Stock {stock_code} is up to date.")
@@ -941,20 +948,27 @@ class AdjFactorSynchronizer:
                     segment_start = start_date_dt
                     while segment_start <= current_date_dt:
                         segment_end = min(segment_start + datetime.timedelta(days=segment_days), current_date_dt)
-                        tasks.append(self.loop.create_task(
-                            self.process_stock(
-                                stock_code,
-                                market,
-                                segment_start.strftime("%Y%m%d"),
-                                segment_end.strftime("%Y%m%d"),
-                                progress_callback
+                        try:
+                            self.loop.run_until_complete(
+                                self.process_stock(
+                                    stock_code,
+                                    market,
+                                    segment_start.strftime("%Y%m%d"),
+                                    segment_end.strftime("%Y%m%d")
+                                )
                             )
-                        ))
+                        except Exception as e:
+                            break
                         segment_start = segment_end + datetime.timedelta(days=1)
+                    self.completed_num = self.completed_num + 1
+                    if progress_callback:
+                        progress_callback(self.completed_num, self.stock_list_size)
 
-                if tasks:
-                    self.loop.run_until_complete(asyncio.gather(*tasks))
         finally:
+            if len(self.failed_stocks) > 0:
+                failed_stock_code = [stock.stock_code for stock in self.failed_stocks]
+                unique_failed_stock_code = list(set(failed_stock_code))
+                logger.error(">>>>>>>>>Failed to process stocks<<<<<<<<<: %s", unique_failed_stock_code)
             self.terminate()
 
     def sync_by_trade_date(self, trade_date: str):

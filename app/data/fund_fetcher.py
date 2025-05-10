@@ -39,87 +39,79 @@ def percent_to_float(value):
         return None
 
 class FundInfoSynchronizer:
-    """
-    同步基金信息数据到数据库。
-    
-    主要流程：
-      1. 调用 akshare 接口获取数据（pandas DataFrame）
-      2. 查询数据库中已存在的指数代码集合
-      3. 筛选出新增记录（基于指数代码）
-      4. 将新增记录插入数据库（仅新增，不更新或删除）
-    """
     def __init__(self):
         self.fund_info_dao = FundInfoDao._instance
+        self.tspro = ts.pro_api()  # 请确保你的 Tushare token 已配置好
 
     def fetch_data(self) -> pd.DataFrame:
-        """
-        调用 akshare 接口获取数据，返回 pandas DataFrame
-        
-        示例接口：
-            import akshare as ak
-            df = ak.fund_open_fund_daily_em()
-        """
-        logger.info("Fetching data from akshare ...")
-        fund_list = ak.fund_info_index_em(symbol="全部", indicator="全部")[['基金代码', '基金名称', '手续费']]
-        df = fund_list.rename(columns={'基金代码': 'fund_code', '基金名称': 'fund_name', '手续费': 'fee_rate'})
-        df['fund_code'] = df['fund_code'] + '.OF'
+        logger.info("Fetching fund data from Tushare...")
+        all_data = []
+        offset = 0
+        limit = 10000
 
-        etf_list = tspro.fund_basic(market='E')[['ts_code', 'name']]
-        etf_list = etf_list.rename(columns={'ts_code': 'fund_code', 'name': 'fund_name'})
-        etf_list['fee_rate'] = 0.0
+        while True:
+            df = self.tspro.fund_basic(
+                ts_code='', market='O', status='L', offset=offset, limit=limit,
+                fields='ts_code,name,fund_type,invest_type,found_date,m_fee,c_fee,market'
+            )
+            if df.empty:
+                break
+            all_data.append(df)
+            offset += limit
 
-        df = pd.concat([df, etf_list], ignore_index=True)
+        if not all_data:
+            return pd.DataFrame()
 
-        df.drop_duplicates(subset=['fund_code'], keep='last', inplace=True)
-        return df
+        df_all = pd.concat(all_data, ignore_index=True)
+        df_all = df_all.rename(columns={
+            'ts_code': 'fund_code',
+            'name': 'fund_name',
+            'fund_type': 'fund_type',
+            'invest_type': 'invest_type',
+            'found_date': 'found_date',
+            'm_fee': 'm_fee',
+            'c_fee': 'c_fee',
+            'market': 'market'
+        })
+        df_all['found_date'] = pd.to_datetime(df_all['found_date'], errors='coerce')
+        return df_all
 
     def sync(self, progress_callback=None):
-        """
-        同步数据：将接口返回的新增记录插入到数据库中
-        """
-        logger.info("Starting synchronization for fund info.")
+        logger.info("Starting fund info synchronization.")
         df = self.fetch_data()
         if df.empty:
-            logger.warning("Fetched data is empty.")
+            logger.warning("No data fetched from Tushare.")
             return
-        
-        # 获取数据库中已有的股票代码集合
-        try:
-            fund_info_lst : List[FundInfo] = self.fund_info_dao.load_fund_info()
-            existing_codes = {si.fund_code for si in fund_info_lst}
-            logger.debug("Existing fund codes in DB: %s", existing_codes)
-            
-            # 筛选出新增数据（证券代码不在 existing_codes 中）
-            new_data = df[~df['fund_code'].isin(existing_codes)]
-            logger.info("Found %d new records to insert.", len(new_data))
-            
-            if new_data.empty:
-                logger.info("No new records to insert.")
-                return
-            
-            # 将 DataFrame 中每一行转换为 FundInfo 对象
-            new_records = []
-            for idx, row in new_data.iterrows():
-                record = FundInfo(
-                    fund_code=row['fund_code'],
-                    fund_name=safe_value(row['fund_name']),
-                    fee_rate=percent_to_float(safe_value(row['fee_rate']))
-                )
-                new_records.append(record)
-                if progress_callback:
-                    if idx % 100 == 0:
-                        progress_callback(idx, len(new_records))
-            
-            # 批量插入新增记录
-            self.fund_info_dao.batch_insert(new_records)
 
-            logger.info("Inserted %d new records into the database.", len(new_records))
-            if progress_callback:
-                progress_callback(len(new_records), len(new_records))
-        except Exception as e:
-            logger.exception("Error during synchronization: %s", str(e))
-            raise e
+        fund_info_lst: List[FundInfo] = self.fund_info_dao.load_fund_info()
+        existing_codes = {fi.fund_code for fi in fund_info_lst}
+        new_data = df[~df['fund_code'].isin(existing_codes)]
+        logger.info("Found %d new records to insert.", len(new_data))
 
+        if new_data.empty:
+            return
+
+        new_records = []
+        for idx, row in new_data.iterrows():
+            record = FundInfo(
+                fund_code=row['fund_code'],
+                fund_name=safe_value(row['fund_name']),
+                fund_type=safe_value(row['fund_type']),
+                invest_type=safe_value(row['invest_type']),
+                found_date=row['found_date'].date() if pd.notnull(row['found_date']) else None,
+                fee_rate=safe_value(row['m_fee']),
+                commission_rate=safe_value(row['c_fee']),
+                market=safe_value(row['market'])
+            )
+            new_records.append(record)
+            if progress_callback and idx % 100 == 0:
+                progress_callback(idx, len(new_data))
+
+        self.fund_info_dao.batch_insert(new_records)
+        logger.info("Inserted %d new records.", len(new_records))
+        if progress_callback:
+            progress_callback(len(new_records), len(new_records))
+            
 class FundHistSynchronizer:
     def __init__(self):
         self.fund_info_dao = FundInfoDao._instance
@@ -132,6 +124,7 @@ class FundHistSynchronizer:
         self.semaphore = asyncio.Semaphore(6)
         self.api_call_counter = 0
         self.api_call_reset_time = time.time() + 60
+        self.failed_funds = []
 
     def initialize(self):
         self.fund_list_size = 0
@@ -139,6 +132,7 @@ class FundHistSynchronizer:
         self.is_running = True
         self.api_call_counter = 0
         self.api_call_reset_time = time.time() + 60
+        self.failed_funds = []
 
     def terminate(self):
         self.fund_list_size = 0
@@ -235,6 +229,9 @@ class FundHistSynchronizer:
                     else:
                         start_date_dt = latest_date + datetime.timedelta(days=1)
 
+                    found_date = fund.found_date
+                    start_date_dt = max(start_date_dt, found_date)
+
                     current_date_dt = datetime.date.today()
                     if start_date_dt > current_date_dt:
                         logger.info("Fund %s is up to date. (start_date: %s, current_date: %s)", fund_code, start_date_dt, current_date_dt)
@@ -254,6 +251,10 @@ class FundHistSynchronizer:
                     if progress_callback:
                         progress_callback(self.completed_num, self.fund_list_size)
         finally:
+            if len(self.failed_funds) > 0:
+                failed_fund_codes = [fund.fund_code for fund in self.failed_funds]
+                unique_failed_fund_codes = list(set(failed_fund_codes))
+                logger.error(">>>>>>>>>Failed to process stocks<<<<<<<<<: %s", unique_failed_fund_codes)
             self.terminate()
 
     

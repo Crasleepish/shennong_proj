@@ -7,7 +7,12 @@ class FundInfo(Base):
     # 使用证券代码作为主键
     fund_code = Column('fund_code', String(10), primary_key=True)
     fund_name = Column('fund_name', String(50), nullable=False)
-    fee_rate = Column('fee_rate', Float)
+    fund_type = Column('fund_type', String(20), nullable=True)                 # 基金类型
+    invest_type = Column('invest_type', String(20), nullable=True)             # 投资类型
+    found_date = Column('found_date', Date, nullable=False)                      # 上市时间
+    fee_rate = Column('fee_rate', Float, nullable=True)                           # 管理费
+    commission_rate = Column('commission_rate', Float, nullable=True)                    # 托管费
+    market = Column('market', String(8), nullable=True)                        # E场内O场外
 
     def __repr__(self):
         return f"<FundInfo(fund_code='{self.fund_code}', fund_name='{self.fund_name}')>"

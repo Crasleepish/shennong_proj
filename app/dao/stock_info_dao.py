@@ -415,15 +415,29 @@ class StockHistUnadjDao:
             db.rollback()
             raise e
         
-    def select_dataframe_all(self):
+    def select_dataframe_by_date_range(self, stock_code: str, start_date, end_date):
         try:
             with get_db() as db:
-                # 构造查询条件
-                query = db.query(StockHistUnadj)
-                # 使用 pd.read_sql 将 SQLAlchemy 查询转换为 DataFrame
-                df = pd.read_sql(query.statement, db.bind)
-            return df
+                query = db.query(StockHistUnadj).join(
+                    StockInfo, StockHistUnadj.stock_code == StockInfo.stock_code
+                ).filter(
+                    StockInfo.exchange.in_(["SSE", "SZSE"])
+                )
+
+                if stock_code:
+                    query = query.filter(StockHistUnadj.stock_code == stock_code)
+                if start_date:
+                    query = query.filter(StockHistUnadj.date >= start_date)
+                if end_date:
+                    query = query.filter(StockHistUnadj.date <= end_date)
+
+                query = query.order_by(StockHistUnadj.date.asc())
+
+                # ✅ 使用 join 查询的分块读取工具
+                return chunked_query_to_dataframe(query, table_name="stock_hist_unadj + stock_info")
+
         except Exception as e:
+            logger.error("Error querying stock_hist_unadj by date range with join: %s", e)
             return pd.DataFrame()
         
     def select_dataframe_by_code(self, stock_code: str):
@@ -445,22 +459,27 @@ class StockHistUnadjDao:
     
     def select_dataframe_by_date_range(self, stock_code: str, start_date, end_date):
         try:
-            filters = []
-            if stock_code:
-                filters = filters.append[StockHistUnadj.stock_code == stock_code]
-            if start_date:
-                filters.append(StockHistUnadj.date >= start_date)
-            if end_date:
-                filters.append(StockHistUnadj.date <= end_date)
+            with get_db() as db:
+                # 仅查询沪深上市的股票
+                query = db.query(StockHistUnadj).join(
+                    StockInfo, StockHistUnadj.stock_code == StockInfo.stock_code
+                ).filter(
+                    StockInfo.exchange.in_(["SSE", "SZSE"])
+                )
 
-            return chunked_query_to_dataframe(
-                model=StockHistUnadj,
-                filters=filters,
-                order_by=StockHistUnadj.date.asc(),
-                chunksize=10000
-            )
+                if stock_code:
+                    query = query.filter(StockHistUnadj.stock_code == stock_code)
+                if start_date:
+                    query = query.filter(StockHistUnadj.date >= start_date)
+                if end_date:
+                    query = query.filter(StockHistUnadj.date <= end_date)
+
+                query = query.order_by(StockHistUnadj.date.asc())
+
+                return chunked_query_to_dataframe(query, table_name="stock_hist_unadj + stock_info")
+
         except Exception as e:
-            logger.error("Error querying after date for %s: %s", stock_code, e)
+            logger.error("Error querying stock_hist_unadj with filters: %s", e)
             return pd.DataFrame()
     
     def delete_all(self):
@@ -570,28 +589,6 @@ class AdjFactorDao:
             db.rollback()
             raise e
     
-    def get_adj_factors(self, stock_code: str, start_date=None, end_date=None):
-        """
-        获取指定股票在指定日期范围内的复权因子。
-        如果不指定日期范围，则返回所有记录。
-        """
-        try:
-            with get_db() as db:
-                query = db.query(AdjFactor)
-
-                if stock_code is not None:
-                    query = query.filter(AdjFactor.stock_code == stock_code)
-                
-                if start_date:
-                    query = query.filter(AdjFactor.date >= start_date)
-                if end_date:
-                    query = query.filter(AdjFactor.date <= end_date)
-                
-                return query.order_by(AdjFactor.date).all()
-        except Exception as e:
-            logger.error("Error querying adj_factors for %s: %s", stock_code, e)
-            return []
-    
     def delete_stock_data(self, stock_code: str):
         """
         删除指定股票的复权因子记录。
@@ -622,21 +619,31 @@ class AdjFactorDao:
     
     def get_adj_factor_dataframe(self, stock_code: str, start_date=None, end_date=None):
         try:
-            filters = []
-            if stock_code:
-                filters = filters.append[AdjFactor.stock_code == stock_code]
-            if start_date:
-                filters.append(AdjFactor.date >= start_date)
-            if end_date:
-                filters.append(AdjFactor.date <= end_date)
+            with get_db() as db:
+                # 构建联表查询
+                query = db.query(AdjFactor).join(
+                    StockInfo, AdjFactor.stock_code == StockInfo.stock_code
+                ).filter(
+                    StockInfo.exchange.in_(["SSE", "SZSE"])
+                )
 
-            return chunked_query_to_dataframe(
-                model=AdjFactor,
-                filters=filters,
-                order_by=AdjFactor.date.asc(),
-                columns=['stock_code', 'date', 'adj_factor'],
-                chunksize=10000
-            )
+                # 添加条件
+                if stock_code:
+                    query = query.filter(AdjFactor.stock_code == stock_code)
+                if start_date:
+                    query = query.filter(AdjFactor.date >= start_date)
+                if end_date:
+                    query = query.filter(AdjFactor.date <= end_date)
+
+                query = query.order_by(AdjFactor.date.asc())
+
+                # 分块读取
+                return chunked_query_to_dataframe(
+                    base_query=query,
+                    table_name="adj_factor + stock_info",
+                    chunksize=10000
+                )
+
         except Exception as e:
             logger.error("Error getting adj_factor dataframe for %s: %s", stock_code, e)
             return pd.DataFrame()
@@ -961,12 +968,28 @@ class FundamentalDataDao:
         return df
     
     def select_dataframe_all(self):
-        with get_db() as db:
-            # 构造查询条件
-            query = db.query(FundamentalData)
-            # 使用 pd.read_sql 将 SQLAlchemy 查询转换为 DataFrame
-            df = pd.read_sql(query.statement, db.bind)
-        return df
+        """
+        分块读取所有 exchange ∈ {'SSE', 'SZSE'} 的 FundamentalData 数据，返回 DataFrame。
+        """
+        try:
+            with get_db() as db:
+                # 构造联表查询，过滤 exchange
+                query = db.query(FundamentalData).join(
+                    StockInfo, FundamentalData.stock_code == StockInfo.stock_code
+                ).filter(
+                    StockInfo.exchange.in_(["SSE", "SZSE"])
+                ).order_by(FundamentalData.stock_code, FundamentalData.report_date)
+
+                # 使用通用 join 分块读取工具
+                return chunked_query_to_dataframe(
+                    base_query=query,
+                    table_name="fundamental_data + stock_info",
+                    chunksize=10000
+                )
+
+        except Exception as e:
+            logger.error("Error selecting fundamental data with exchange filter: %s", e)
+            return pd.DataFrame()
     
     def delete_all(self):
         try:
