@@ -179,7 +179,7 @@ def get_qfq_price_by_code(stock_code: str, start_date: str, end_date: str) -> pd
     stock_hist_dao = StockHistUnadjDao._instance
     adj_factor_dao = AdjFactorDao._instance
     hist = stock_hist_dao.select_dataframe_by_date_range(stock_code, start_date, end_date)
-    adjf = adj_factor_dao.get_adj_factors(stock_code, start_date, end_date)
+    adjf = adj_factor_dao.get_adj_factor_dataframe(stock_code, start_date, end_date)
     adj_hist = to_adjusted_hist(hist, adjf, ["open", "high", "low", "close"], "adj_factor", "date")
     adjf["pre_adj_factor"] = adjf["adj_factor"].shift(1)
     adjf["pre_adj_factor"] = adjf["pre_adj_factor"].bfill()
