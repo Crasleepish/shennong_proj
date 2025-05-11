@@ -60,7 +60,7 @@ def calculate_factor_exposure_daily(fund_daily_returns: pd.DataFrame,
 
     # 回归分析
     y = merged["excess_return"]
-    X = merged[["MKT", "SMB", "HML", "QMJ", "VOL"]]
+    X = merged[["MKT", "SMB", "HML", "QMJ"]]
     X = sm.add_constant(X)
     model = sm.OLS(y, X, missing='drop').fit()
     exposures = model.params
@@ -128,7 +128,7 @@ def main():
     fund_info_dao = FundInfoDao._instance
     market_factors_dao = MarketFactorsDao._instance
     fund_info_df = fund_info_dao.select_dataframe_all()
-    factor_df = market_factors_dao.select_dataframe_by_date('2011-01-01', datetime.datetime.today().strftime('%Y-%m-%d'))
+    factor_df = market_factors_dao.select_dataframe_by_date('2007-01-01', datetime.datetime.today().strftime('%Y-%m-%d'))
 
     fund_factors_list = []
     for _, fund_info in fund_info_df.iterrows():

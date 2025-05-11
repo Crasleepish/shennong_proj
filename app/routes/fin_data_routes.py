@@ -723,7 +723,7 @@ def sync_factors_recent():
         start_date=(datetime.now()-timedelta(days=183)).strftime("%Y-%m-%d")
 
         def task_func():
-            factor_fetcher.fetch_all(start_date=start_date, end_date=end_date)
+            factor_fetcher.fetch_all(start_date=start_date, end_date=end_date, progress_callback=progress_cb)
 
         # 启动后台任务
         launch_background_task(task_id, task_func)

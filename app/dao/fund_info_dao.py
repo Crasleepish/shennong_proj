@@ -47,7 +47,7 @@ class FundInfoDao:
         try:
             with get_db() as db:
                 # 构造查询条件
-                query = db.query(FundInfo)
+                query = db.query(FundInfo).filter(FundInfo.invest_type.in_(['增强指数型', '被动指数型']))
                 # 使用 pd.read_sql 将 SQLAlchemy 查询转换为 DataFrame
                 df = pd.read_sql(query.statement, db.bind)
             return df
@@ -131,6 +131,20 @@ class FundHistDao:
             logger.error("Error deleting all fund_hist records: %s", e)
             db.rollback()
             raise e
+        
+    def select_dataframe_by_code(self, fund_code: str) -> pd.DataFrame:
+        """
+        查询指定基金代码的所有历史行情数据，返回为 Pandas DataFrame。
+        """
+        try:
+            with get_db() as db:
+                query = db.query(FundHist).filter(FundHist.fund_code == fund_code).order_by(FundHist.date.asc())
+                df = pd.read_sql(query.statement, db.bind)
+                return df
+        except Exception as e:
+            logger.error("Error querying fund_hist for %s: %s", fund_code, e)
+            return pd.DataFrame()
+
 
 
 FundInfoDao._instance = object.__new__(FundInfoDao)
