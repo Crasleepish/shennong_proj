@@ -357,6 +357,10 @@ def backtest_strategy(start_date: str, end_date: str):
         os.makedirs(os.path.join(output_dir, format_date(end_date)))
     target_weights.loc[rb_dates].to_csv(os.path.join(output_dir, format_date(end_date), output_prefix + "_portfolio.csv"))
 
+    prices = None
+    volumes = None
+    mkt_cap = None
+
     # -------------------------------
     # 定义回测所需的回调函数
     # -------------------------------
