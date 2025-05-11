@@ -131,15 +131,17 @@ class IndexHistSynchronizer:
         self.is_running = False
         self.lock = asyncio.Lock()
         self.semaphore = asyncio.Semaphore(6)
-        self.api_call_reset_time = time.time() + 60
+        self.api_call_reset_time = time.time() + 10
         self.api_call_counter = 0
+        self.failed_indexes = []
 
     def initialize(self):
         self.index_list_size = 0
         self.completed_num = 0
         self.is_running = True
-        self.api_call_reset_time = time.time() + 60
+        self.api_call_reset_time = time.time() + 10
         self.api_call_counter = 0
+        self.failed_indexes = []
 
     def terminate(self):
         self.index_list_size = 0
@@ -171,18 +173,18 @@ class IndexHistSynchronizer:
         if current_time > self.api_call_reset_time:
             # Reset counter if a minute has passed
             self.api_call_counter = 0
-            self.api_call_reset_time = current_time + 60
+            self.api_call_reset_time = current_time + 10
+            logger.info("重置计数器，下一次重置%s", self.api_call_reset_time)
             
-        if self.api_call_counter >= 400:
+        if self.api_call_counter >= 40:
             # Wait until the next minute if we've reached the limit
             wait_time = self.api_call_reset_time - current_time
             if wait_time > 0:
                 logger.info(f"Rate limit reached, waiting for {wait_time:.2f} seconds")
                 await asyncio.sleep(wait_time)
-                self.api_call_counter = 0
-                self.api_call_reset_time = time.time() + 60
-        
-        self.api_call_counter += 1
+        else:
+            self.api_call_counter += 1
+            logger.info("已调用%s次" % self.api_call_counter)
         
     async def batch_insert(self, index_code, new_records):
         def _syn_batch_insert(index_code, new_records):
@@ -246,7 +248,6 @@ class IndexHistSynchronizer:
             batch_size = 20
             for i in range(0, len(index_list), batch_size):
                 batch = index_list[i : i + batch_size]
-                tasks = []
                 for index in batch:
                     index_code = index.index_code
                     logger.info("Synchronizing index %s", index_code)
@@ -266,7 +267,7 @@ class IndexHistSynchronizer:
                     segment_start = start_dt
                     while segment_start <= current_dt:
                         segment_end = min(segment_start + datetime.timedelta(days=segment_days), current_dt)
-                        tasks.append(
+                        try:
                             self.loop.create_task(
                                 self.process_data(
                                     index_code,
@@ -274,14 +275,57 @@ class IndexHistSynchronizer:
                                     segment_end.strftime("%Y%m%d")
                                 )
                             )
-                        )
+                        except Exception as e:
+                            self.failed_indexes.append(index)
+                            break
                         segment_start = segment_end + datetime.timedelta(days=1)
+
                     self.completed_num = self.completed_num + 1
                     if progress_callback:
                         progress_callback(self.completed_num, self.index_list_size)
-                if tasks:
-                    self.loop.run_until_complete(asyncio.gather(*tasks))
         finally:
+            if len(self.failed_indexes) > 0:
+                failed_index_code = [index.index_code for index in self.failed_indexes]
+                unique_failed_index_code = list(set(failed_index_code))
+                logger.error(">>>>>>>>>Failed to process stocks<<<<<<<<<: %s", unique_failed_index_code)
+            self.terminate()
+
+    def sync_by_trade_date(self, start_date: str, end_date: str, progress_callback=None):
+        """
+        同步指定交易日的所有指数历史行情数据。
+        :param start_date: 交易日期，格式为 'YYYYMMDD'
+        :param end_date: 交易日期，格式为 'YYYYMMDD'
+        """
+        self.initialize()
+        try:
+            logger.info("Starting index historical data synchronization for %s to %s", start_date, end_date)
+            index_list = self.index_info_dao.load_index_info()
+            self.index_list_size = len(index_list)
+            logger.info("Found %d indexes to process.", len(index_list))
+
+            for index in index_list:
+                index_code = index.index_code
+                logger.info("Synchronizing index %s for %s to %s", index_code, start_date, end_date)
+                try:
+                    self.loop.run_until_complete(
+                        self.process_data(
+                            index_code,
+                            start_date,
+                            end_date
+                        )
+                    )
+                except Exception as e:
+                    self.failed_indexes.append(index)
+                    break
+
+                self.completed_num = self.completed_num + 1
+                if progress_callback:
+                    progress_callback(self.completed_num, self.index_list_size)
+
+        finally:
+            if self.failed_indexes:
+                unique_failed_index_code = list(set(self.failed_indexes))
+                logger.error(">>>>>>>>>Failed to process indexes<<<<<<<<<: %s", unique_failed_index_code)
             self.terminate()
         
 index_info_synchronizer = IndexInfoSynchronizer()

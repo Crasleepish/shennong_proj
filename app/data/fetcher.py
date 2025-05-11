@@ -198,7 +198,7 @@ class StockHistSynchronizer:
         
         self.api_call_counter += 1
 
-    async def fetch_stock_data(self, stock_code, market, start_date, end_date):
+    async def fetch_stock_data(self, stock_code, start_date, end_date):
         """异步获取股票历史行情数据"""
         try:
             async with self.semaphore:
@@ -344,12 +344,12 @@ class StockHistSynchronizer:
         async with self.semaphore:
             return await asyncio.to_thread(_syn_batch_insert_unadj, stock_code, new_records)
         
-    async def process_data_unadj(self, stock_code, market, start_date, current_date):
+    async def process_data_unadj(self, stock_code, start_date, current_date):
         try:
             # 3. 调用 tushare 接口获取该股票从 start_date 到 current_date 的历史行情数据（不复权）和基本面数据
             logger.info("Fetching historical data for stock %s from %s to %s", stock_code, start_date, current_date)
-            daily_task = self.loop.create_task(self.fetch_stock_data(stock_code, market, start_date, current_date))
-            daily_basic_task = self.loop.create_task(self.fetch_daily_basic_data(stock_code, market, start_date, current_date))
+            daily_task = self.loop.create_task(self.fetch_stock_data(stock_code, start_date, current_date))
+            daily_basic_task = self.loop.create_task(self.fetch_daily_basic_data(stock_code, start_date, current_date))
             daily_df, daily_basic_df = await asyncio.gather(daily_task, daily_basic_task)
 
             if daily_df.empty:
@@ -413,7 +413,6 @@ class StockHistSynchronizer:
                 batch = stock_list[i : i + batch_size]
                 for stock in batch:
                     stock_code = stock.stock_code
-                    market = stock.market
                     logger.info("Synchronizing stock %s", stock_code)
 
                     latest_date = self.stock_hist_unadj_dao.get_latest_date(stock_code)
@@ -438,7 +437,7 @@ class StockHistSynchronizer:
                         try:
                             self.loop.run_until_complete(
                                 self.process_data_unadj(
-                                    stock_code, market,
+                                    stock_code,
                                     segment_start.strftime("%Y%m%d"),
                                     segment_end.strftime("%Y%m%d")
                                 )

@@ -603,7 +603,51 @@ def sync_index_hist():
         logger.exception("Error creating index hist sync task.")
         return jsonify({"status": "error", "message": str(e)}), 500
     
+@fin_data_bp.route("/index_hist/sync_by_date", methods=["POST"])
+def sync_index_hist_by_date():
+    """
+    同步指定交易日的指数历史行情数据。
+    请求参数格式：
+    {
+        "start_date": "20240510",  # 格式必须为 YYYYMMDD
+        "end_date": "20240510"  # 格式必须为 YYYYMMDD
+    }
+    """
+    try:
+        req_data = request.get_json()
+        start_date = req_data.get("start_date")
+        end_date = req_data.get("end_date")
 
+        if not start_date or not start_date.isdigit() or len(start_date) != 8 \
+            or not end_date or not end_date.isdigit() or len(end_date) != 8:
+            return jsonify({"status": "error", "message": "参数格式不正确，应为 'YYYYMMDD'"}), 400
+
+        # 创建任务记录
+        new_task = TaskRecord(
+            task_type="INDEX_HIST_SYNC_BY_DATE",
+            task_status="RUNNING",
+            progress_current=0,
+            progress_total=0,
+            message=f"Task started."
+        )
+        new_task = task_dao.insert(new_task)
+        task_id = new_task.id
+        logger.info("Created task id %d for index sync on %s to %s", task_id, start_date, end_date)
+
+        # 定义进度回调函数
+        progress_cb = make_progress_callback(task_id)
+
+        def task_func():
+            index_hist_synchronizer.sync_by_trade_date(start_date, end_date, progress_callback=progress_cb)
+
+        launch_background_task(task_id, task_func)
+
+        return jsonify({"status": "success", "task_id": task_id, "message": "Task started"}), 200
+
+    except Exception as e:
+        logger.exception("Error starting index sync by trade_date.")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    
 @fin_data_bp.route("/fund_info/sync", methods=["POST"])
 def sync_fund_info():
     """
