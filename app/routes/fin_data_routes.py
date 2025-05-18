@@ -12,6 +12,8 @@ from app.dao.task_record_dao import task_record_dao
 from app.utils.async_task import launch_background_task
 from app.models.task_record import TaskRecord
 from datetime import datetime, timedelta
+from app.data_fetcher import MacroDataFetcher
+from app.data_fetcher import CalendarFetcher
 
 
 logger = logging.getLogger(__name__)
@@ -734,7 +736,7 @@ def sync_factors_all():
         progress_cb = make_progress_callback(task_id)
 
         def task_func():
-            factor_fetcher.fetch_all(start_date="2004-12-01", end_date=datetime.now().strftime("%Y-%m-%d"))
+            factor_fetcher.fetch_all(start_date="2004-12-01", end_date=datetime.now().strftime("%Y-%m-%d"), append=False, progress_callback=progress_cb)
 
         # 启动后台任务
         launch_background_task(task_id, task_func)
@@ -767,7 +769,7 @@ def sync_factors_recent():
         start_date=(datetime.now()-timedelta(days=183)).strftime("%Y-%m-%d")
 
         def task_func():
-            factor_fetcher.fetch_all(start_date=start_date, end_date=end_date, progress_callback=progress_cb)
+            factor_fetcher.fetch_all(start_date=start_date, end_date=end_date, append=True, progress_callback=progress_cb)
 
         # 启动后台任务
         launch_background_task(task_id, task_func)
@@ -775,4 +777,30 @@ def sync_factors_recent():
         return jsonify({"status": "success", "task_id": task_id, "message": "Task started"}), 200
     except Exception as e:
         logger.exception("Error creating factors sync task.")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    
+@fin_data_bp.route("/macro/fetch_all", methods=["POST"])
+def fetch_all_macro_data():
+    try:
+        MacroDataFetcher.fetch_all()
+        return jsonify({"status": "success", "message": "All macro data fetched and stored."}), 200
+    except Exception as e:
+        logger.exception("Error during fetch_all_macro_data")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+calender_fetcher = CalendarFetcher()
+@fin_data_bp.route("/trade_cal", methods=["POST"])
+def sync_trade_calendar():
+    try:
+        data = request.get_json()
+        start = data.get("start_date")
+        end = data.get("end_date")
+        if not start or not end:
+            return jsonify({"status": "error", "message": "start_date 和 end_date 必须提供"}), 400
+
+        calender_fetcher.fetch_trade_calendar(start=start, end=end)
+        return jsonify({"status": "success", "message": f"交易日历同步成功：{start} 到 {end}"}), 200
+    except Exception as e:
+        logger.exception("同步交易日失败")
         return jsonify({"status": "error", "message": str(e)}), 500

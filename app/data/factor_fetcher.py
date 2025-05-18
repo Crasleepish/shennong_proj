@@ -73,7 +73,7 @@ class FactorFetcher:
     def __init__(self):
         self.market_factors_dao = MarketFactorsDao._instance
 
-    def compute_and_store_daily_factors(self, end_date: str, base_dir: str):
+    def compute_and_store_daily_factors(self, end_date: str, base_dir: str, append:  bool = False):
         folder = os.path.join(base_dir, end_date.replace('-', ''))
         if not os.path.exists(folder):
             logger.warn("目录不存在: %s， 创建", folder)
@@ -133,8 +133,12 @@ class FactorFetcher:
         factors_df["QMJ"] = high_op - low_op
         factors_df["VOL"] = low_vol - high_vol
         factors_df["LIQ"] = low_liq - high_liq
-
-        logger.info("共计算出 %d 条因子记录", len(factors_df))
+        
+        if append:
+            logger.info("共计算出 %d 条因子记录，入库最近 %d 条", len(factors_df), min(70, len(factors_df)-1))
+            factors_df = factors_df.iloc[-min(70, len(factors_df)-1):, :]
+        else:
+            logger.info("共计算出 %d 条因子记录，入库全部", len(factors_df))
 
         # 入库
         for date, row in factors_df.iterrows():
@@ -152,121 +156,121 @@ class FactorFetcher:
         logger.info("入库完成: %d 条记录", len(factors_df))
 
 
-    def fetch_all(self, start_date: str, end_date: str, progress_callback=None):
+    def fetch_all(self, start_date: str, end_date: str, append: bool = False, progress_callback=None):
         refresh_holders()
         logger.info("Starting fetching market index from %s to %s", start_date, end_date)
-        csi_index_zzqz(start_date, end_date)
+        # csi_index_zzqz(start_date, end_date)
 
         if progress_callback:
             progress_callback(5.5, 100)
 
         logger.info("Starting run BM_S_L strategy from %s to %s", start_date, end_date)
-        portfolio_BM_S_L(start_date, end_date)
+        # portfolio_BM_S_L(start_date, end_date)
 
         if progress_callback:
             progress_callback(11.1, 100)
 
         logger.info("Starting run BM_B_L strategy from %s to %s", start_date, end_date)
-        portfolio_BM_B_L(start_date, end_date)
+        # portfolio_BM_B_L(start_date, end_date)
 
         if progress_callback:
             progress_callback(16.6, 100)
 
         logger.info("Starting run BM_S_M strategy from %s to %s", start_date, end_date)
-        portfolio_BM_S_M(start_date, end_date)
+        # portfolio_BM_S_M(start_date, end_date)
 
         if progress_callback:
             progress_callback(22.2, 100)
 
         logger.info("Starting run BM_B_M strategy from %s to %s", start_date, end_date)
-        portfolio_BM_B_M(start_date, end_date)
+        # portfolio_BM_B_M(start_date, end_date)
 
         if progress_callback:
             progress_callback(27.7, 100)
 
         logger.info("Starting run BM_S_H strategy from %s to %s", start_date, end_date)
-        portfolio_BM_S_H(start_date, end_date)
+        # portfolio_BM_S_H(start_date, end_date)
 
         if progress_callback:
             progress_callback(33.3, 100)
 
         logger.info("Starting run BM_B_H strategy from %s to %s", start_date, end_date)
-        portfolio_BM_B_H(start_date, end_date)
+        # portfolio_BM_B_H(start_date, end_date)
 
         if progress_callback:
             progress_callback(38.8, 100)
 
         logger.info("Starting run OP_S_L strategy from %s to %s", start_date, end_date)
-        portfolio_OP_S_L(start_date, end_date)
+        # portfolio_OP_S_L(start_date, end_date)
 
         if progress_callback:
             progress_callback(44.4, 100)
 
         logger.info("Starting run OP_B_L strategy from %s to %s", start_date, end_date)
-        portfolio_OP_B_L(start_date, end_date)
+        # portfolio_OP_B_L(start_date, end_date)
 
         if progress_callback:
             progress_callback(50.0, 100)
 
         logger.info("Starting run OP_S_M strategy from %s to %s", start_date, end_date)
-        portfolio_OP_S_M(start_date, end_date)
+        # portfolio_OP_S_M(start_date, end_date)
 
         if progress_callback:
             progress_callback(55.5, 100)
 
         logger.info("Starting run OP_B_M strategy from %s to %s", start_date, end_date)
-        portfolio_OP_B_M(start_date, end_date)
+        # portfolio_OP_B_M(start_date, end_date)
 
         if progress_callback:
             progress_callback(61.1, 100)
 
         logger.info("Starting run OP_S_H strategy from %s to %s", start_date, end_date)
-        portfolio_OP_S_H(start_date, end_date)
+        # portfolio_OP_S_H(start_date, end_date)
 
         if progress_callback:
             progress_callback(66.6, 100)
 
         logger.info("Starting run OP_B_H strategy from %s to %s", start_date, end_date)
-        portfolio_OP_B_H(start_date, end_date)
+        # portfolio_OP_B_H(start_date, end_date)
 
         if progress_callback:
             progress_callback(72.2, 100)
 
         logger.info("Starting run VLT_S_L strategy from %s to %s", start_date, end_date)
-        portfolio_VLT_S_L(start_date, end_date)
+        # portfolio_VLT_S_L(start_date, end_date)
 
         if progress_callback:
             progress_callback(77.7, 100)
 
         logger.info("Starting run VLT_B_L strategy from %s to %s", start_date, end_date)
-        portfolio_VLT_B_L(start_date, end_date)
+        # portfolio_VLT_B_L(start_date, end_date)
 
         if progress_callback:
             progress_callback(83.3, 100)
 
         logger.info("Starting run VLT_S_H strategy from %s to %s", start_date, end_date)
-        portfolio_VLT_S_H(start_date, end_date)
+        # portfolio_VLT_S_H(start_date, end_date)
 
         if progress_callback:
             progress_callback(88.8, 100)
 
         logger.info("Starting run VLT_B_H strategy from %s to %s", start_date, end_date)
-        portfolio_VLT_B_H(start_date, end_date)
+        # portfolio_VLT_B_H(start_date, end_date)
 
         if progress_callback:
             progress_callback(94.4, 100)
 
-        portfolio_LIQ_X_H(start_date, end_date)
+        # portfolio_LIQ_X_H(start_date, end_date)
 
         if progress_callback:
             progress_callback(95, 100)
 
-        portfolio_LIQ_X_L(start_date, end_date)
+        # portfolio_LIQ_X_L(start_date, end_date)
 
         if progress_callback:
             progress_callback(99.0, 100)
 
-        self.compute_and_store_daily_factors(end_date, output_dir)
+        self.compute_and_store_daily_factors(end_date, output_dir, append=append)
 
         if progress_callback:
             progress_callback(100, 100)
