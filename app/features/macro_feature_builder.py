@@ -84,3 +84,8 @@ class MacroFeatureBuilder:
         yoy_a = series_a.pct_change(periods=12)
         yoy_b = series_b.pct_change(periods=12)
         return yoy_a - yoy_b
+
+    @staticmethod
+    def diff_yoy(series_a: pd.Series, series_b: pd.Series) -> pd.Series:
+        d = series_a - series_b
+        return MacroFeatureBuilder.yoy_growth(d)

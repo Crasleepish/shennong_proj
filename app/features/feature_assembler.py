@@ -1,8 +1,9 @@
 import pandas as pd
 from app.features.macro_feature_pipeline import MacroFeaturePipeline
+from app.features.factor_feature_pipeline import FactorFeaturePipeline
 from app.features.macro_feature_builder import MacroFeatureBuilder
 from app.data_fetcher.macro_data_reader import MacroDataReader
-
+from app.data_fetcher.factor_data_reader import FactorDataReader
 
 class FeatureAssembler:
     """
@@ -10,12 +11,25 @@ class FeatureAssembler:
     后续可扩展添加因子收益、资产价格、情绪等特征模块。
     """
 
-    def __init__(self, macro_feature_plan: dict):
+    def __init__(self, macro_feature_plan: dict, factor_feature_plan: dict):
         self.macro_pipeline = MacroFeaturePipeline(
             feature_plan=macro_feature_plan
         )
+        self.factor_pipeline = FactorFeaturePipeline(
+            feature_plan=factor_feature_plan
+        )
 
     def assemble_features(self, start: str = None, end: str = None) -> pd.DataFrame:
-        raw_macro = MacroDataReader.read_all_macro_data(start=start, end=end)
-        macro_features = self.macro_pipeline.transform(raw_macro)
-        return macro_features
+        macro_df = MacroDataReader.read_all_macro_data(start, end)
+        macro_features = self.macro_pipeline.transform(macro_df)
+
+        factor_df = FactorDataReader.read_daily_factors(start, end)
+        factor_features = self.factor_pipeline.transform(factor_df)
+
+        # 将月度宏观特征扩展为日度：按 forward fill 补全到每日
+        macro_features_daily = macro_features.reindex(factor_features.index).ffill()
+
+        # 合并并对齐特征
+        combined = pd.concat([macro_features_daily, factor_features], axis=1).dropna()
+        combined.index.name = "date"
+        return combined
