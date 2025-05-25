@@ -136,3 +136,13 @@ class FactorFeatureBuilder:
 
         days_series = pd.Series(days, index=series.index)
         return np.log1p(days_series)
+    
+    @staticmethod
+    def backward_cum_return(series: pd.Series, days: int) -> pd.Series:
+        """
+        计算过去 days 天的复合收益率（从 t-days 到 t）
+        :param series: 累计收益率序列（即净值序列）
+        :param days: 向后的窗口长度
+        :return: 复合收益率序列
+        """
+        return series / series.shift(days) - 1

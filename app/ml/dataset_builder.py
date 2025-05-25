@@ -54,44 +54,52 @@ class DatasetBuilder:
                 {"func": FactorFeatureBuilder.mean_change, "suffix": "ma10_rate", "kwargs": {"period": 10}},
                 {"func": FactorFeatureBuilder.mean_change, "suffix": "ma60_rate", "kwargs": {"period": 60}},
                 {"func": FactorFeatureBuilder.volatility, "suffix": "vol20", "kwargs": {"window": 20}},
-                {"func": FactorFeatureBuilder.rsi, "suffix": "rsi14", "kwargs": {"window": 14}},
+                {"func": FactorFeatureBuilder.rsi, "suffix": "rsi28", "kwargs": {"window": 28}},
                 {"func": FactorFeatureBuilder.regression_slope_on_zscore, "suffix": "slope_z20", "kwargs": {"zscore_window": 20, "reg_window": 20}},
                 {"func": FactorFeatureBuilder.regression_slope_diff_on_zscore, "suffix": "slope_diff_z20", "kwargs": {"zscore_window": 20, "reg_window": 20}},
                 {"func": FactorFeatureBuilder.days_since_rsi_extreme, "suffix": "since_rsi_gt_70", "kwargs": {"window": 14, "threshold": 70, "mode": "gt"}},
                 {"func": FactorFeatureBuilder.days_since_rsi_extreme, "suffix": "since_rsi_lt_30", "kwargs": {"window": 14, "threshold": 30, "mode": "lt"}},
+                {"func": FactorFeatureBuilder.backward_cum_return, "suffix": "cum_ret_20", "kwargs": {"days": 20}},
+                {"func": FactorFeatureBuilder.backward_cum_return, "suffix": "cum_ret_60", "kwargs": {"days": 60}},
             ],
             "SMB": [
                 {"func": FactorFeatureBuilder.rolling_zscore, "suffix": "zscore", "kwargs": {"window": 2000}},
                 {"func": FactorFeatureBuilder.mean_change, "suffix": "ma10_rate", "kwargs": {"period": 10}},
                 {"func": FactorFeatureBuilder.mean_change, "suffix": "ma60_rate", "kwargs": {"period": 60}},
                 {"func": FactorFeatureBuilder.volatility, "suffix": "vol20", "kwargs": {"window": 20}},
-                {"func": FactorFeatureBuilder.rsi, "suffix": "rsi14", "kwargs": {"window": 14}},
+                {"func": FactorFeatureBuilder.rsi, "suffix": "rsi28", "kwargs": {"window": 28}},
                 {"func": FactorFeatureBuilder.regression_slope_on_zscore, "suffix": "slope_z20", "kwargs": {"zscore_window": 20, "reg_window": 20}},
                 {"func": FactorFeatureBuilder.regression_slope_diff_on_zscore, "suffix": "slope_diff_z20", "kwargs": {"zscore_window": 20, "reg_window": 20}},
                 {"func": FactorFeatureBuilder.days_since_rsi_extreme, "suffix": "since_rsi_gt_70", "kwargs": {"window": 14, "threshold": 70, "mode": "gt"}},
                 {"func": FactorFeatureBuilder.days_since_rsi_extreme, "suffix": "since_rsi_lt_30", "kwargs": {"window": 14, "threshold": 30, "mode": "lt"}},
+                {"func": FactorFeatureBuilder.backward_cum_return, "suffix": "cum_ret_20", "kwargs": {"days": 20}},
+                {"func": FactorFeatureBuilder.backward_cum_return, "suffix": "cum_ret_60", "kwargs": {"days": 60}},
             ],
             "HML": [
                 {"func": FactorFeatureBuilder.rolling_zscore, "suffix": "zscore", "kwargs": {"window": 2000}},
                 {"func": FactorFeatureBuilder.mean_change, "suffix": "ma10_rate", "kwargs": {"period": 10}},
                 {"func": FactorFeatureBuilder.mean_change, "suffix": "ma60_rate", "kwargs": {"period": 60}},
                 {"func": FactorFeatureBuilder.volatility, "suffix": "vol20", "kwargs": {"window": 20}},
-                {"func": FactorFeatureBuilder.rsi, "suffix": "rsi14", "kwargs": {"window": 14}},
+                {"func": FactorFeatureBuilder.rsi, "suffix": "rsi28", "kwargs": {"window": 28}},
                 {"func": FactorFeatureBuilder.regression_slope_on_zscore, "suffix": "slope_z20", "kwargs": {"zscore_window": 20, "reg_window": 20}},
                 {"func": FactorFeatureBuilder.regression_slope_diff_on_zscore, "suffix": "slope_diff_z20", "kwargs": {"zscore_window": 20, "reg_window": 20}},
                 {"func": FactorFeatureBuilder.days_since_rsi_extreme, "suffix": "since_rsi_gt_70", "kwargs": {"window": 14, "threshold": 70, "mode": "gt"}},
                 {"func": FactorFeatureBuilder.days_since_rsi_extreme, "suffix": "since_rsi_lt_30", "kwargs": {"window": 14, "threshold": 30, "mode": "lt"}},
+                {"func": FactorFeatureBuilder.backward_cum_return, "suffix": "cum_ret_20", "kwargs": {"days": 20}},
+                {"func": FactorFeatureBuilder.backward_cum_return, "suffix": "cum_ret_60", "kwargs": {"days": 60}},
             ],
             "QMJ": [
                 {"func": FactorFeatureBuilder.rolling_zscore, "suffix": "zscore", "kwargs": {"window": 2000}},
                 {"func": FactorFeatureBuilder.mean_change, "suffix": "ma10_rate", "kwargs": {"period": 10}},
                 {"func": FactorFeatureBuilder.mean_change, "suffix": "ma60_rate", "kwargs": {"period": 60}},
                 {"func": FactorFeatureBuilder.volatility, "suffix": "vol20", "kwargs": {"window": 20}},
-                {"func": FactorFeatureBuilder.rsi, "suffix": "rsi14", "kwargs": {"window": 14}},
+                {"func": FactorFeatureBuilder.rsi, "suffix": "rsi28", "kwargs": {"window": 28}},
                 {"func": FactorFeatureBuilder.regression_slope_on_zscore, "suffix": "slope_z20", "kwargs": {"zscore_window": 20, "reg_window": 20}},
                 {"func": FactorFeatureBuilder.regression_slope_diff_on_zscore, "suffix": "slope_diff_z20", "kwargs": {"zscore_window": 20, "reg_window": 20}},
                 {"func": FactorFeatureBuilder.days_since_rsi_extreme, "suffix": "since_rsi_gt_70", "kwargs": {"window": 14, "threshold": 70, "mode": "gt"}},
                 {"func": FactorFeatureBuilder.days_since_rsi_extreme, "suffix": "since_rsi_lt_30", "kwargs": {"window": 14, "threshold": 30, "mode": "lt"}},
+                {"func": FactorFeatureBuilder.backward_cum_return, "suffix": "cum_ret_20", "kwargs": {"days": 20}},
+                {"func": FactorFeatureBuilder.backward_cum_return, "suffix": "cum_ret_60", "kwargs": {"days": 60}},
             ],
             ("SMB", "HML"): [
                 {"func": FactorFeatureBuilder.value_minus, "suffix": "diff_smb_hml"},
@@ -113,6 +121,13 @@ class DatasetBuilder:
         :return: 每日复合收益率
         """
         return df.add(1).rolling(window=days, min_periods=days).apply(np.prod, raw=True).shift(-days) - 1
+    
+    @staticmethod
+    def calc_forward_volatility(df: pd.DataFrame, days: int) -> pd.DataFrame:
+        """
+        计算未来 days 天的年化波动率（从 t+1 到 t+days）
+        """
+        return df.rolling(window=days, min_periods=days).std().shift(-days) * np.sqrt(252)
 
     def build(self, start: str = None, end: str = None) -> tuple[pd.DataFrame, pd.DataFrame]:
         features = self.feature_assembler.assemble_features(start=start, end=end)
@@ -133,3 +148,37 @@ class DatasetBuilder:
         X = select_features_vif_pca(X_raw)
 
         return X, Y
+
+    def train_test_split(self, X: pd.DataFrame, Y: pd.DataFrame, split_date: str) -> tuple:
+        """
+        将训练集和验证集按时间滚动分割，split_date 为分界日期（训练集 ≤ split_date，测试集 > split_date）
+        """
+        split_date = pd.to_datetime(split_date)
+        X.index = pd.to_datetime(X.index)
+        Y.index = pd.to_datetime(Y.index)
+        X_train = X[X.index <= split_date]
+        Y_train = Y[Y.index <= split_date]
+        X_test = X[X.index > split_date]
+        Y_test = Y[Y.index > split_date]
+        return X_train, X_test, Y_train, Y_test
+
+    @staticmethod
+    def train_test_split_ratio(X: pd.DataFrame, Y: pd.DataFrame, test_size: float = 0.2, shuffle: bool = False) -> tuple:
+        """
+        按照比例划分训练集和测试集。保持索引时间顺序（非随机打乱）。
+        :param X: 特征数据
+        :param Y: 标签数据
+        :param test_size: 测试集占比（如 0.2）
+        :param shuffle: 是否打乱（默认 False）
+        """
+        if shuffle:
+            raise NotImplementedError("当前为时间序列任务，不建议打乱顺序。")
+
+        n_samples = len(X)
+        split_idx = int(n_samples * (1 - test_size))
+
+        X_train = X.iloc[:split_idx]
+        Y_train = Y.iloc[:split_idx]
+        X_test = X.iloc[split_idx:]
+        Y_test = Y.iloc[split_idx:]
+        return X_train, X_test, Y_train, Y_test
