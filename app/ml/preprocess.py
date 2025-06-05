@@ -7,12 +7,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def select_features_vif_pca(df_X: pd.DataFrame, vif_thresh: float = 10.0, pca_var: float = 0.95) -> pd.DataFrame:
+def select_features_vif(df_X: pd.DataFrame, vif_thresh: float = 20.0) -> pd.DataFrame:
     """
-    迭代剔除 VIF > 阈值的特征，然后执行 PCA 降维。
+    迭代剔除 VIF > 阈值的特征。
     :param df_X: 原始特征 DataFrame
     :param vif_thresh: VIF 阈值（如 >10 即剔除）
-    :param pca_var: PCA 保留的解释方差比例（如 0.95）
     :return: 降维后的特征 DataFrame
     """
     df_X = df_X.dropna(axis=1).copy()

@@ -16,27 +16,36 @@ def builder(app):
     return DatasetBuilder()
 
 def test_build_output_shape(builder):
-    # 构建一个小时间段的数据（确保数据库中有对应数据）
-    X, Y = builder.build(start="2010-01-01", end="2016-01-01")
+    # 构建一个时间段的数据（你需要保证数据库里这个时间段有数据）
+    start_date = "2018-01-01"
+    end_date = "2020-12-31"
 
-    # X 和 Y 不应为空
-    assert not X.empty, "特征集 X 不应为空"
-    assert not Y.empty, "标签集 Y 不应为空"
+    tasks = [
+        builder.build_mkt_volatility,
+        builder.build_mkt_tri_class,
+        builder.build_smb_hml_tri,
+        builder.build_smb_qmj_tri,
+        builder.build_hml_qmj_tri,
+    ]
 
-    # 样本数量应一致
-    assert X.shape[0] == Y.shape[0], "X 和 Y 的行数应相同"
+    for task in tasks:
+        X, Y = task(start=start_date, end=end_date)
 
-    # 标签应包含预期列（部分即可）
-    expected_cols = ["MKT_20d_ret", "SMB_60d_ret"]
-    for col in expected_cols:
-        assert col in Y.columns, f"标签列缺失: {col}"
+        # 1. 非空
+        assert not X.empty, f"{task.__name__}: X is empty"
+        assert not Y.empty, f"{task.__name__}: Y is empty"
 
-def test_vif_pca_features(builder):
-    X, _ = builder.build(start="2015-01-01", end="2016-01-01")
+        # 2. 对齐
+        assert all(X.index == Y.index), f"{task.__name__}: Index mismatch"
 
-    # VIF + PCA 后维度应合理（不超过原始维度）
-    assert X.shape[1] < 100, "降维后的特征数量不应过大"
+        # 3. 没有NaN
+        assert not X.isnull().values.any(), f"{task.__name__}: X has NaN"
+        assert not Y.isnull().values.any(), f"{task.__name__}: Y has NaN"
 
-    # 检查是否为 DataFrame 且无缺失值
-    assert isinstance(X, pd.DataFrame), "输出应为 DataFrame"
-    assert not X.isnull().any().any(), "特征中不应包含缺失值"
+        # 4. Y 是单列
+        assert Y.shape[1] == 1, f"{task.__name__}: Y should be single-column"
+
+        # 5. X 有足够特征列
+        assert X.shape[1] >= 5, f"{task.__name__}: Too few features"
+
+        print(f"{task.__name__} passed with shape X: {X.shape}, Y: {Y.shape}")

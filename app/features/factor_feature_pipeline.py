@@ -36,19 +36,16 @@ class FactorFeaturePipeline:
         df = df.copy()
         features = []
 
-        # 先计算累计净值曲线
-        nav_df = FactorFeatureBuilder.calc_cum_return(df)
-
         for key, plans in self.feature_plan.items():
             if isinstance(key, str):
                 cols = [key]
             else:
                 cols = list(key)
 
-            if not all(col in nav_df.columns for col in cols):
+            if not all(col in df.columns for col in cols):
                 continue
 
-            inputs = [nav_df[col] for col in cols]
+            inputs = [df[col] for col in cols]
 
             for plan in plans:
                 func: Callable = plan["func"]

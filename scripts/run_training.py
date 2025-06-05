@@ -4,7 +4,7 @@ import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from app import create_app
-from app.ml.train import *
+from app.ml.train_pipeline import *
 
 
 
@@ -14,12 +14,10 @@ logger = logging.getLogger(__name__)
 
 def main():
     date_list = [
-        "2012-12-31", "2013-12-31", "2014-12-31",
-        "2015-12-31", "2016-12-31", "2017-12-31",
-        "2018-12-31", "2019-12-31", "2020-12-31"
+        "2016-12-31", "2024-06-30"
     ]
-    rolling_train(start="2008-01-01", split_dates=date_list)
-    # tune_xgb_with_optuna()
+    rolling_train(start="2005-01-01", split_dates=date_list)
+    # tune_with_optuna("mkt_tri")
 
 
 if __name__ == '__main__':

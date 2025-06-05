@@ -9,20 +9,20 @@ from app.features.factor_feature_builder import FactorFeatureBuilder
 from app.data_fetcher.macro_data_reader import MacroDataReader
 from app.data_fetcher.factor_data_reader import FactorDataReader
 from app.features.feature_assembler import FeatureAssembler
-from app.ml.preprocess import select_features_vif_pca
+from app.ml.preprocess import select_features_vif
 
 class DatasetBuilder:
     def __init__(self):
-        self.macro_feature_plan = {
+        self.macro_plan = {
             # "社融": [
             #     {"func": MacroFeatureBuilder.yoy_growth, "suffix": "yoy"},
             #     {"func": MacroFeatureBuilder.mom_growth, "suffix": "mom"},
             #     {"func": MacroFeatureBuilder.rolling_mean, "suffix": "avg3", "kwargs": {"window": 3}},
             # ],
-            "PMI": [
-                {"func": MacroFeatureBuilder.value_minus, "suffix": "diff_50", "kwargs": {"series2": pd.Series(50, index=pd.date_range("2000-01", "2100-01", freq="M"))}},
-                {"func": MacroFeatureBuilder.rolling_slope, "suffix": "trend12", "kwargs": {"window": 12}},
-            ],
+            # "PMI": [
+            #     {"func": MacroFeatureBuilder.value_minus, "suffix": "diff_50", "kwargs": {"series2": pd.Series(50, index=pd.date_range("2000-01", "2100-01", freq="M"))}},
+            #     {"func": MacroFeatureBuilder.rolling_slope, "suffix": "trend12", "kwargs": {"window": 12}},
+            # ],
             # "外储": [
             #     {"func": MacroFeatureBuilder.yoy_growth, "suffix": "yoy"},
             #     {"func": MacroFeatureBuilder.rolling_log_slope, "suffix": "trend3", "kwargs": {"window": 3}},
@@ -31,123 +31,146 @@ class DatasetBuilder:
             #     {"func": MacroFeatureBuilder.yoy_growth, "suffix": "yoy"},
             #     {"func": MacroFeatureBuilder.rolling_log_slope, "suffix": "trend3", "kwargs": {"window": 3}},
             # ],
-            "CPI": [
-                {"func": MacroFeatureBuilder.raw, "suffix": "raw"},
-                {"func": MacroFeatureBuilder.rolling_slope, "suffix": "trend12", "kwargs": {"window": 12}},
-            ],
-            ("BOND_10Y", "CPI"): [
-                {"func": MacroFeatureBuilder.value_minus, "suffix": "real_rate"},
-                {"func": MacroFeatureBuilder.diff_yoy, "suffix": "diff_yoy"},
-            ],
-            ("M1YOY", "M2YOY"): [
-                {"func": MacroFeatureBuilder.value_minus, "suffix": "diff"},
-            ],
-            ("BOND_10Y", "BOND_2Y"): [
-                {"func": MacroFeatureBuilder.value_minus, "suffix": "diff"},
-                {"func": MacroFeatureBuilder.diff_yoy, "suffix": "diff_yoy"},
-            ]
+            # "CPI": [
+            #     {"func": MacroFeatureBuilder.raw, "suffix": "raw"},
+            #     {"func": MacroFeatureBuilder.rolling_slope, "suffix": "trend12", "kwargs": {"window": 12}},
+            # ],
+            # ("BOND_10Y", "CPI"): [
+            #     {"func": MacroFeatureBuilder.value_minus, "suffix": "real_rate"},
+            #     {"func": MacroFeatureBuilder.diff_yoy, "suffix": "diff_yoy"},
+            # ],
+            # ("M1YOY", "M2YOY"): [
+            #     {"func": MacroFeatureBuilder.value_minus, "suffix": "diff"},
+            # ],
+            # ("BOND_10Y", "BOND_2Y"): [
+            #     {"func": MacroFeatureBuilder.value_minus, "suffix": "diff"},
+            #     {"func": MacroFeatureBuilder.diff_yoy, "suffix": "diff_yoy"},
+            # ]
         }
 
-        self.factor_feature_plan = {
-            "MKT": [
-                {"func": FactorFeatureBuilder.rolling_zscore, "suffix": "zscore", "kwargs": {"window": 2000}},
-                {"func": FactorFeatureBuilder.mean_change, "suffix": "ma10_rate", "kwargs": {"period": 10}},
-                {"func": FactorFeatureBuilder.mean_change, "suffix": "ma60_rate", "kwargs": {"period": 60}},
-                {"func": FactorFeatureBuilder.volatility, "suffix": "vol20", "kwargs": {"window": 20}},
-                {"func": FactorFeatureBuilder.rsi, "suffix": "rsi28", "kwargs": {"window": 28}},
-                {"func": FactorFeatureBuilder.regression_slope_on_zscore, "suffix": "slope_z20", "kwargs": {"zscore_window": 20, "reg_window": 20}},
-                {"func": FactorFeatureBuilder.regression_slope_diff_on_zscore, "suffix": "slope_diff_z20", "kwargs": {"zscore_window": 20, "reg_window": 20}},
-                {"func": FactorFeatureBuilder.days_since_rsi_extreme, "suffix": "since_rsi_gt_70", "kwargs": {"window": 14, "threshold": 70, "mode": "gt"}},
-                {"func": FactorFeatureBuilder.days_since_rsi_extreme, "suffix": "since_rsi_lt_30", "kwargs": {"window": 14, "threshold": 30, "mode": "lt"}},
-                {"func": FactorFeatureBuilder.backward_cum_return, "suffix": "cum_ret_20", "kwargs": {"days": 20}},
-                {"func": FactorFeatureBuilder.backward_cum_return, "suffix": "cum_ret_60", "kwargs": {"days": 60}},
-            ],
-            "SMB": [
-                {"func": FactorFeatureBuilder.rolling_zscore, "suffix": "zscore", "kwargs": {"window": 2000}},
-                {"func": FactorFeatureBuilder.mean_change, "suffix": "ma10_rate", "kwargs": {"period": 10}},
-                {"func": FactorFeatureBuilder.mean_change, "suffix": "ma60_rate", "kwargs": {"period": 60}},
-                {"func": FactorFeatureBuilder.volatility, "suffix": "vol20", "kwargs": {"window": 20}},
-                {"func": FactorFeatureBuilder.rsi, "suffix": "rsi28", "kwargs": {"window": 28}},
-                {"func": FactorFeatureBuilder.regression_slope_on_zscore, "suffix": "slope_z20", "kwargs": {"zscore_window": 20, "reg_window": 20}},
-                {"func": FactorFeatureBuilder.regression_slope_diff_on_zscore, "suffix": "slope_diff_z20", "kwargs": {"zscore_window": 20, "reg_window": 20}},
-                {"func": FactorFeatureBuilder.days_since_rsi_extreme, "suffix": "since_rsi_gt_70", "kwargs": {"window": 14, "threshold": 70, "mode": "gt"}},
-                {"func": FactorFeatureBuilder.days_since_rsi_extreme, "suffix": "since_rsi_lt_30", "kwargs": {"window": 14, "threshold": 30, "mode": "lt"}},
-                {"func": FactorFeatureBuilder.backward_cum_return, "suffix": "cum_ret_20", "kwargs": {"days": 20}},
-                {"func": FactorFeatureBuilder.backward_cum_return, "suffix": "cum_ret_60", "kwargs": {"days": 60}},
-            ],
-            "HML": [
-                {"func": FactorFeatureBuilder.rolling_zscore, "suffix": "zscore", "kwargs": {"window": 2000}},
-                {"func": FactorFeatureBuilder.mean_change, "suffix": "ma10_rate", "kwargs": {"period": 10}},
-                {"func": FactorFeatureBuilder.mean_change, "suffix": "ma60_rate", "kwargs": {"period": 60}},
-                {"func": FactorFeatureBuilder.volatility, "suffix": "vol20", "kwargs": {"window": 20}},
-                {"func": FactorFeatureBuilder.rsi, "suffix": "rsi28", "kwargs": {"window": 28}},
-                {"func": FactorFeatureBuilder.regression_slope_on_zscore, "suffix": "slope_z20", "kwargs": {"zscore_window": 20, "reg_window": 20}},
-                {"func": FactorFeatureBuilder.regression_slope_diff_on_zscore, "suffix": "slope_diff_z20", "kwargs": {"zscore_window": 20, "reg_window": 20}},
-                {"func": FactorFeatureBuilder.days_since_rsi_extreme, "suffix": "since_rsi_gt_70", "kwargs": {"window": 14, "threshold": 70, "mode": "gt"}},
-                {"func": FactorFeatureBuilder.days_since_rsi_extreme, "suffix": "since_rsi_lt_30", "kwargs": {"window": 14, "threshold": 30, "mode": "lt"}},
-                {"func": FactorFeatureBuilder.backward_cum_return, "suffix": "cum_ret_20", "kwargs": {"days": 20}},
-                {"func": FactorFeatureBuilder.backward_cum_return, "suffix": "cum_ret_60", "kwargs": {"days": 60}},
-            ],
-            "QMJ": [
-                {"func": FactorFeatureBuilder.rolling_zscore, "suffix": "zscore", "kwargs": {"window": 2000}},
-                {"func": FactorFeatureBuilder.mean_change, "suffix": "ma10_rate", "kwargs": {"period": 10}},
-                {"func": FactorFeatureBuilder.mean_change, "suffix": "ma60_rate", "kwargs": {"period": 60}},
-                {"func": FactorFeatureBuilder.volatility, "suffix": "vol20", "kwargs": {"window": 20}},
-                {"func": FactorFeatureBuilder.rsi, "suffix": "rsi28", "kwargs": {"window": 28}},
-                {"func": FactorFeatureBuilder.regression_slope_on_zscore, "suffix": "slope_z20", "kwargs": {"zscore_window": 20, "reg_window": 20}},
-                {"func": FactorFeatureBuilder.regression_slope_diff_on_zscore, "suffix": "slope_diff_z20", "kwargs": {"zscore_window": 20, "reg_window": 20}},
-                {"func": FactorFeatureBuilder.days_since_rsi_extreme, "suffix": "since_rsi_gt_70", "kwargs": {"window": 14, "threshold": 70, "mode": "gt"}},
-                {"func": FactorFeatureBuilder.days_since_rsi_extreme, "suffix": "since_rsi_lt_30", "kwargs": {"window": 14, "threshold": 30, "mode": "lt"}},
-                {"func": FactorFeatureBuilder.backward_cum_return, "suffix": "cum_ret_20", "kwargs": {"days": 20}},
-                {"func": FactorFeatureBuilder.backward_cum_return, "suffix": "cum_ret_60", "kwargs": {"days": 60}},
-            ],
-            ("SMB", "HML"): [
-                {"func": FactorFeatureBuilder.value_minus, "suffix": "diff_smb_hml"},
-                {"func": FactorFeatureBuilder.regression_slope_on_zscore_of_diff, "suffix": "slope_z20", "kwargs": {"zscore_window": 20, "reg_window": 20}},
-            ]
+        self.mkt_plan = {
+            "MKT_NAV": self._default_factor_plans()
+        }
+        self.smb_hml_plan = {
+            "SMB_HML": self._default_factor_plans()
+        }
+        self.smb_qmj_plan = {
+            "SMB_QMJ": self._default_factor_plans()
+        }
+        self.hml_qmj_plan = {
+            "HML_QMJ": self._default_factor_plans()
         }
 
-        self.feature_assembler = FeatureAssembler(
-            macro_feature_plan=self.macro_feature_plan,
-            factor_feature_plan=self.factor_feature_plan
-        )
+    @staticmethod
+    def _default_factor_plans():
+        return [
+                # 均线偏离
+                {"func": FactorFeatureBuilder.ma_diff, "suffix": "ma_diff_20", "kwargs": {"window": 20}},
+                {"func": FactorFeatureBuilder.ma_diff, "suffix": "ma_diff_60", "kwargs": {"window": 60}},
+
+                # 趋势交叉
+                {"func": FactorFeatureBuilder.ma_cross_signal, "suffix": "ma10_gt_ma20", "kwargs": {"short_window": 10, "long_window": 20}},
+
+                # RSI
+                {"func": FactorFeatureBuilder.rsi, "suffix": "rsi_14", "kwargs": {"window": 14}},
+
+                # z-score
+                {"func": FactorFeatureBuilder.rolling_zscore, "suffix": "zscore_20", "kwargs": {"window": 20}},
+                {"func": FactorFeatureBuilder.rolling_zscore, "suffix": "zscore_60", "kwargs": {"window": 60}},
+                {"func": FactorFeatureBuilder.rolling_zscore, "suffix": "zscore_2000", "kwargs": {"window": 2000}},
+
+                # 动量
+                {"func": FactorFeatureBuilder.momentum, "suffix": "momentum_20", "kwargs": {"window": 20}},
+                {"func": FactorFeatureBuilder.momentum, "suffix": "momentum_60", "kwargs": {"window": 60}},
+                {"func": FactorFeatureBuilder.momentum, "suffix": "momentum_240", "kwargs": {"window": 240}},
+
+                # 波动率
+                {"func": FactorFeatureBuilder.volatility, "suffix": "vol_20", "kwargs": {"window": 20}},
+
+                # 趋势斜率
+                {"func": FactorFeatureBuilder.slope_of_ma, "suffix": "slope_ma20", "kwargs": {"ma_window": 20, "slope_window": 5}},
+                {"func": FactorFeatureBuilder.slope_of_ma, "suffix": "slope_ma60", "kwargs": {"ma_window": 60, "slope_window": 5}},
+
+                # 布林带位置归一化
+                {"func": FactorFeatureBuilder.bb_position, "suffix": "bb_norm_20", "kwargs": {"window": 20, "num_std": 2.0}},
+
+                # 布林突破信号
+                {"func": FactorFeatureBuilder.bb_break_signal, "suffix": "bb_break_signal", "kwargs": {"window": 20, "num_std": 2.0}},
+            ]
 
     @staticmethod
-    def calc_forward_return(df: pd.DataFrame, days: int) -> pd.DataFrame:
-        """
-        计算未来 days 天的复合收益率（从 t+1 到 t+days）
-        :param df: 日度收益率 DataFrame（index=date, columns=factor_name）
-        :param days: 向前看的交易日数
-        :return: 每日复合收益率
-        """
-        return df.add(1).rolling(window=days, min_periods=days).apply(np.prod, raw=True).shift(-days) - 1
-    
-    @staticmethod
-    def calc_forward_volatility(df: pd.DataFrame, days: int) -> pd.DataFrame:
-        """
-        计算未来 days 天的年化波动率（从 t+1 到 t+days）
-        """
-        return df.rolling(window=days, min_periods=days).std().shift(-days) * np.sqrt(252)
+    def label_three_class(series: pd.Series, lower: float, upper: float) -> pd.Series:
+        return series.apply(lambda x: 2 if x > upper else (0 if x < lower else 1))
 
-    def build(self, start: str = None, end: str = None) -> tuple[pd.DataFrame, pd.DataFrame]:
-        features = self.feature_assembler.assemble_features(start=start, end=end)
-        factor_df = FactorDataReader.read_daily_factors(start=start, end=end)
+    def _build_dataset(self, factor_plan: dict, target_series: pd.Series, start: str = None, end: str = None, vif: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
+        assembler = FeatureAssembler(macro_feature_plan=self.macro_plan, factor_feature_plan=factor_plan)
+        df_feature = assembler.assemble_features(start, end)
+        
+        # 对齐标签
+        idx = df_feature.index.intersection(target_series.index)
+        target_series = target_series.reindex(idx)
+        df_feature = df_feature.reindex(idx)
+        df_feature['target'] = target_series.loc[df_feature.index]
+        df_feature = df_feature.dropna()
+        
+        # 拆分特征和标签
+        df_X = df_feature.drop(columns=['target'])
+        df_Y = df_feature[['target']]
+        
+        # 特征选择+降维
+        if vif:
+            df_X = select_features_vif(df_X)
+        
+        # 再次确保标签和特征对齐（防止降维产生NA）
+        df_Y = df_Y.loc[df_X.index]
+        
+        return df_X, df_Y
 
-        y_20d = self.calc_forward_return(factor_df, 20)
-        y_60d = self.calc_forward_return(factor_df, 60)
+    def build_mkt_volatility(self, start: str = None, end: str = None, vif: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
+        df = FactorDataReader.read_factor_nav_ratios(start, end)
+        target = df['MKT_NAV'].rolling(20).std().shift(-20)
+        target = target.dropna()
+        return self._build_dataset(self.mkt_plan, target, start, end, vif)
 
-        y_20d.columns = [f"{col}_20d_ret" for col in y_20d.columns]
-        y_60d.columns = [f"{col}_60d_ret" for col in y_60d.columns]
+    def build_mkt_tri_class(self, start: str = None, end: str = None, vif: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
+        df = FactorDataReader.read_factor_nav_ratios(start, end)
+        ma5 = df['MKT_NAV'].rolling(5).mean()
+        future_ret = ma5.shift(-10) / ma5 - 1
+        future_ret = future_ret.dropna()
+        lower = future_ret.quantile(0.25)
+        upper = future_ret.quantile(0.75)
+        target = self.label_three_class(future_ret, lower=lower, upper=upper)
+        return self._build_dataset(self.mkt_plan, target, start, end, vif)
 
-        labels = pd.concat([y_20d, y_60d], axis=1)
-        df_all = features.join(labels, how="inner").dropna()
+    def build_smb_hml_tri(self, start: str = None, end: str = None, vif: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
+        df = FactorDataReader.read_factor_nav_ratios(start, end)
+        ma10 = df['SMB_HML'].rolling(10).mean()
+        future_ret = ma10.shift(-20) / ma10 - 1
+        future_ret = future_ret.dropna()
+        lower = future_ret.quantile(0.25)
+        upper = future_ret.quantile(0.75)
+        target = self.label_three_class(future_ret, lower=lower, upper=upper)
+        return self._build_dataset(self.smb_hml_plan, target, start, end, vif)
 
-        X_raw = df_all.drop(columns=labels.columns)
-        Y = df_all[labels.columns]
+    def build_smb_qmj_tri(self, start: str = None, end: str = None, vif: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
+        df = FactorDataReader.read_factor_nav_ratios(start, end)
+        ma10 = df['SMB_QMJ'].rolling(10).mean()
+        future_ret = ma10.shift(-20) / ma10 - 1
+        future_ret = future_ret.dropna()
+        lower = future_ret.quantile(0.25)
+        upper = future_ret.quantile(0.75)
+        target = self.label_three_class(future_ret, lower=lower, upper=upper)
+        return self._build_dataset(self.smb_qmj_plan, target, start, end, vif)
 
-        X = select_features_vif_pca(X_raw)
-
-        return X, Y
+    def build_hml_qmj_tri(self, start: str = None, end: str = None, vif: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
+        df = FactorDataReader.read_factor_nav_ratios(start, end)
+        ma10 = df['HML_QMJ'].rolling(10).mean()
+        future_ret = ma10.shift(-20) / ma10 - 1
+        future_ret = future_ret.dropna()
+        lower = future_ret.quantile(0.25)
+        upper = future_ret.quantile(0.75)
+        target = self.label_three_class(future_ret, lower=lower, upper=upper)
+        return self._build_dataset(self.hml_qmj_plan, target, start, end, vif)
 
     def train_test_split(self, X: pd.DataFrame, Y: pd.DataFrame, split_date: str) -> tuple:
         """

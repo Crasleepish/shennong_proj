@@ -20,14 +20,20 @@ class FeatureAssembler:
         )
 
     def assemble_features(self, start: str = None, end: str = None) -> pd.DataFrame:
-        macro_df = MacroDataReader.read_all_macro_data(start, end)
-        macro_features = self.macro_pipeline.transform(macro_df)
+        if self.macro_pipeline:
+            macro_features =  pd.DataFrame()
+        else:
+            macro_df = MacroDataReader.read_all_macro_data(start, end)
+            macro_features = self.macro_pipeline.transform(macro_df)
 
-        factor_df = FactorDataReader.read_daily_factors(start, end)
+        factor_df = FactorDataReader.read_factor_nav_ratios(start, end)
         factor_features = self.factor_pipeline.transform(factor_df)
-
-        # 将月度宏观特征扩展为日度：按 forward fill 补全到每日
-        macro_features_daily = macro_features.reindex(factor_features.index).ffill()
+        
+        if not macro_features.empty:
+            # 将月度宏观特征扩展为日度：按 forward fill 补全到每日
+            macro_features_daily = macro_features.reindex(factor_features.index).ffill()
+        else:
+            macro_features_daily = pd.DataFrame()
 
         # 合并并对齐特征
         combined = pd.concat([macro_features_daily, factor_features], axis=1).dropna()
