@@ -24,10 +24,13 @@ class IndexInfoDao:
         if not hasattr(self, '_initialized'):
             self._initialized = True
 
-    def load_index_info(self) -> List[IndexInfo]:
+    def load_index_info(self, code_list: List = None) -> List[IndexInfo]:
         try:
             with get_db() as db:
-                index_info_lst = db.query(IndexInfo).all()
+                if code_list:
+                    index_info_lst = db.query(IndexInfo).filter(IndexInfo.index_code.in_(code_list)).all()
+                else:
+                    index_info_lst = db.query(IndexInfo).all()
                 return index_info_lst
         except Exception as e:
             logger.error(e)

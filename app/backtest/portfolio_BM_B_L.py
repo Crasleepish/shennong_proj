@@ -34,6 +34,8 @@ from numba import njit
 from vectorbt.portfolio.enums import Direction, OrderStatus, NoOrder, CallSeqType, SizeType
 from vectorbt.portfolio import nb
 from app.utils.data_utils import format_date, filter_listed_and_traded_universe
+from app.data_fetcher.calender_fetcher import CalendarFetcher
+import calendar
 
 logger = logging.getLogger(__name__)
 logging.getLogger('numba').setLevel(logging.INFO)
@@ -42,19 +44,32 @@ fee_rate = 0.0003
 slippage_rate = 0.0001
 output_dir = r"./bt_result"
 output_prefix = "portfolio_BM_B_L"
+calender_fetcher = CalendarFetcher()
 
 def get_rebalance_dates(prices: pd.DataFrame, start_date: str, end_date: str) -> pd.DatetimeIndex:
     """
-    根据价格数据的交易日期，返回每年6月和12月最后一个交易日作为再平衡日，
-    仅在指定日期区间内。
+    获取每年6月和12月的最后一个交易日，且该日在 prices 中存在，作为再平衡日。
+    日期通过交易日历接口获取，并与 prices.index 做交集。
     """
-    dates = prices.loc[start_date:end_date].index
-    rebalance_dates = []
-    for year in sorted(dates.year.unique()):
+    all_dates = prices.loc[start_date:end_date].index
+    years = sorted(set(all_dates.year))
+
+    candidate_dates = []
+    for year in years:
         for month in [6, 12]:
-            month_dates = dates[(dates.year == year) & (dates.month == month)]
-            if not month_dates.empty:
-                rebalance_dates.append(month_dates[-1])
+            # 获取该月最后一天
+            last_day = calendar.monthrange(year, month)[1]
+            start = f"{year}{month:02d}01"
+            end = f"{year}{month:02d}{last_day:02d}"
+
+            # 获取该月的交易日列表
+            trade_dates = calender_fetcher.get_trade_date(start, end, format="%Y-%m-%d")
+            if trade_dates:
+                last_trade_date = pd.to_datetime(trade_dates[-1])
+                candidate_dates.append(last_trade_date)
+
+    # 仅保留 prices 数据中存在的交易日
+    rebalance_dates = [d for d in candidate_dates if d in all_dates]
     return pd.DatetimeIndex(sorted(rebalance_dates))
 
 def filter_universe(prices: pd.DataFrame, volumes: pd.DataFrame, stock_info: pd.DataFrame, rb_date: pd.Timestamp) -> list:

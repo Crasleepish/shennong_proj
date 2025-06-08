@@ -214,7 +214,7 @@ def sync_adj_factor_by_date():
 @fin_data_bp.route("/stock_adj_hist/sync", methods=["POST"])
 def sync_stock_hist_adj():
     """
-    同步股票前复权历史行情数据
+    Deprecated: 同步股票前复权历史行情数据
     """
     try:
         # 创建任务记录（初始状态为 RUNNING，进度为 0）
@@ -247,7 +247,7 @@ def sync_stock_hist_adj():
 @fin_data_bp.route("/company_action/sync", methods=["POST"])
 def sync_company_action():
     """
-    同步公司行动数据
+    Deprecated: 同步公司行动数据
     """
     try:
         # 创建任务记录（初始状态为 RUNNING，进度为 0）
@@ -312,6 +312,8 @@ def sync_fundamental():
 def sync_fundamental_by_period():
     """
     同步公司基本面数据
+    参数：
+      - period: 财报周期，例如 "20250331" 表示2025年一季度
     """
     data = request.get_json()
     period = data.get("period")
@@ -342,9 +344,9 @@ def sync_fundamental_by_period():
 @fin_data_bp.route("/suspend/sync_all", methods=["POST"])
 def sync_suspend_all():
     """
-    全量同步停复牌数据：使用 query 参数 date（格式如 "20120222"）
+    全量同步停复牌数据：使用 query 参数 date（格式如 "20220222"）
     """
-    date_param = "20120222" # 实际停复牌数据从2012-2-22开始，同步该日期及之后的所有数据
+    date_param = datetime.today().strftime("%Y%m%d") # 同步截止该日期的所有数据
     try:
         # 创建任务记录（初始状态为 RUNNING，进度为 0）
         new_task = TaskRecord(
@@ -403,113 +405,12 @@ def sync_suspend_today():
     except Exception as e:
         logger.exception("Error creating today suspend data sync task.")
         return jsonify({"status": "error", "message": str(e)}), 500
-    
-@fin_data_bp.route("/all_hist/sync", methods=["POST"])
-def sync_all_hist():
-    """
-    同步行情（复权/不复权）相关全部数据
-    """
-    try:
-        # 创建任务记录（初始状态为 RUNNING，进度为 0）
-        from app.models.task_record import TaskRecord
-        new_task = TaskRecord(
-            task_type="STOCK_INFO_SYNC",
-            task_status="RUNNING",
-            progress_current=0,
-            progress_total=0,
-            message="Task started."
-        )
-        new_task = task_dao.insert(new_task)
-        task_id = new_task.id
-        logger.info("Created task id %d for stock info data sync.", task_id)
-
-        # 定义进度回调函数
-        progress_cb = make_progress_callback(task_id)
-
-        # 调用同步器，并传入进度回调
-        stock_info_synchronizer.sync(progress_callback=progress_cb)
-
-        # 同步完成后，将任务状态更新为 DONE
-        task_dao.update_status(task_id, "DONE", "Task completed.")
-		
-		##################################################
-		# 创建任务记录（初始状态为 RUNNING，进度为 0）
-
-        new_task = TaskRecord(
-            task_type="STOCK_HIST_SYNC",
-            task_status="RUNNING",
-            progress_current=0,
-            progress_total=0,
-            message="Task started."
-        )
-        new_task = task_dao.insert(new_task)
-        task_id = new_task.id
-        logger.info("Created task id %d for stock history data sync.", task_id)
-
-        # 定义进度回调函数
-        progress_cb = make_progress_callback(task_id)
-
-        # 调用同步器，并传入进度回调
-        stock_hist_synchronizer.sync(progress_callback=progress_cb)
-
-        # 同步完成后，将任务状态更新为 DONE
-        task_dao.update_status(task_id, "DONE", "Task completed.")
-		
-		##################################################
-		# 创建任务记录（初始状态为 RUNNING，进度为 0）
-
-        new_task = TaskRecord(
-            task_type="COMPANY_ACTION_SYNC",
-            task_status="RUNNING",
-            progress_current=0,
-            progress_total=0,
-            message="Task started."
-        )
-        new_task = task_dao.insert(new_task)
-        task_id = new_task.id
-        logger.info("Created task id %d for company action data sync.", task_id)
-
-        # 定义进度回调函数
-        progress_cb = make_progress_callback(task_id)
-
-        # 调用同步器，并传入进度回调
-        company_action_synchronizer.sync(progress_callback=progress_cb)
-
-        # 同步完成后，将任务状态更新为 DONE
-        task_dao.update_status(task_id, "DONE", "Task completed.")
-		
-		##################################################
-		# 创建任务记录（初始状态为 RUNNING，进度为 0）
-
-        new_task = TaskRecord(
-            task_type="STOCK_ADJ_HIST_SYNC",
-            task_status="RUNNING",
-            progress_current=0,
-            progress_total=0,
-            message="Task started."
-        )
-        new_task = task_dao.insert(new_task)
-        task_id = new_task.id
-        logger.info("Created task id %d for stock adjusted history data sync.", task_id)
-
-        # 定义进度回调函数
-        progress_cb = make_progress_callback(task_id)
-
-        # 调用同步器，并传入进度回调
-        stock_adj_hist_synchronizer.sync(progress_callback=progress_cb)
-
-        # 同步完成后，将任务状态更新为 DONE
-        task_dao.update_status(task_id, "DONE", "Task completed.")
-		
-		
-        return jsonify({"status": "success", "task_id": task_id, "message": "Stock historical all data sync completed."}), 200
-    except Exception as e:
-        logger.exception("Error executing stock hist sync task.")
-        return jsonify({"status": "error", "message": str(e)}), 500
-    
 
 @fin_data_bp.route("/cninfo/share_change/sync", methods=["POST"])
 def sync_cninfo_share_change():
+    """
+    Deprecated
+    """
     try:
         new_task = TaskRecord(
             task_type="CNINFO_SHARE_CHANGE_SYNC",
@@ -613,16 +514,21 @@ def sync_index_hist_by_date():
     {
         "start_date": "20240510",  # 格式必须为 YYYYMMDD
         "end_date": "20240510"  # 格式必须为 YYYYMMDD
+        "target_code_list": ["000985.CSI", "000922.CSI"]
     }
     """
     try:
         req_data = request.get_json()
         start_date = req_data.get("start_date")
         end_date = req_data.get("end_date")
+        target_code_list = req_data.get("target_code_list", [])
 
         if not start_date or not start_date.isdigit() or len(start_date) != 8 \
             or not end_date or not end_date.isdigit() or len(end_date) != 8:
             return jsonify({"status": "error", "message": "参数格式不正确，应为 'YYYYMMDD'"}), 400
+        
+        if not isinstance(target_code_list, list):
+            return jsonify({"error": "target_code_list must be a list"}), 400
 
         # 创建任务记录
         new_task = TaskRecord(
@@ -640,7 +546,7 @@ def sync_index_hist_by_date():
         progress_cb = make_progress_callback(task_id)
 
         def task_func():
-            index_hist_synchronizer.sync_by_trade_date(start_date, end_date, progress_callback=progress_cb)
+            index_hist_synchronizer.sync_by_trade_date(start_date, end_date, target_code_list, progress_callback=progress_cb)
 
         launch_background_task(task_id, task_func)
 
@@ -803,4 +709,46 @@ def sync_trade_calendar():
         return jsonify({"status": "success", "message": f"交易日历同步成功：{start} 到 {end}"}), 200
     except Exception as e:
         logger.exception("同步交易日失败")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@fin_data_bp.route("/update_all", methods=["POST"])
+def update_all_fin_data():
+    """
+    更新所有财务数据
+    Params:
+        - start_date: str, 开始日期, 格式YYYYMMDD
+        - end_date: str, 结束日期, 格式YYYYMMDD
+    """
+    try:
+        data = request.get_json()
+        start = data.get("start_date")
+        end = data.get("end_date")
+        if not start or not end:
+            return jsonify({"status": "error", "message": "start_date 和 end_date 必须提供"}), 400
+        
+        trade_dates = calender_fetcher.get_trade_date(start, end, format="%Y%m%d")
+        
+        stock_info_synchronizer.sync()
+
+        for trade_date in trade_dates:
+            stock_hist_synchronizer.sync_by_trade_date(trade_date)
+            adj_factor_synchronizer.sync_by_trade_date(trade_date)
+
+        suspend_data_synchronizer.sync_by_date(start_date=start, end_date=end)
+        index_hist_synchronizer.sync_by_trade_date(start, end, ["000985.CSI", "000300.SH", "000001.SH", "399006.SZ", "000699.SH", "000905.SH", "000852.SH", "932000.CSI", "000922.CSI"])
+
+        fund_info_synchronizer.sync()
+        fund_hist_synchronizer.sync_by_trade_date(start_date=start, end_date=end)
+
+        start_date_obj = datetime.strptime(start, "%Y%m%d") - timedelta(days=183)
+        end_date_obj = datetime.strptime(end, "%Y%m%d")
+
+        factor_fetcher.fetch_all(start_date=start_date_obj.strftime("%Y-%m-%d"), 
+                                 end_date=end_date_obj.strftime("%Y-%m-%d"), 
+                                 append=True)
+        
+        MacroDataFetcher.fetch_all()
+        return jsonify({"message": "success"})
+    except Exception as e:
+        logger.exception(str(e))
         return jsonify({"status": "error", "message": str(e)}), 500

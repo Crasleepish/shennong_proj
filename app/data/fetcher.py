@@ -1596,6 +1596,7 @@ class SuspendDataSynchronizer:
                 progress_callback(i + 1, len(segments))
 
     def sync_all(self, date: str, progress_callback=None):
+        self.suspend_data_dao.delete_all()
         self.sync_by_date("19900101", date, progress_callback)
 
     def sync_today(self, progress_callback=None):

@@ -158,7 +158,7 @@ class SuspendData(Base):
     stock_code = Column(String(10), nullable=True)          # 股票代码
     trade_date = Column(Date, nullable=False)               # 交易日期
     suspend_type = Column(String(5), nullable=True)        # 停复牌类型：S-停牌，R-复牌
-    suspend_timing = Column(String(30), nullable=True)      # 日内停牌时间段（如有）
+    suspend_timing = Column(String(300), nullable=True)      # 日内停牌时间段（如有）
 
     __table_args__ = (
         Index('idx_suspend_data_stock_code', 'trade_date'),

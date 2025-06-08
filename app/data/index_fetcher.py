@@ -290,7 +290,7 @@ class IndexHistSynchronizer:
                 logger.error(">>>>>>>>>Failed to process stocks<<<<<<<<<: %s", unique_failed_index_code)
             self.terminate()
 
-    def sync_by_trade_date(self, start_date: str, end_date: str, progress_callback=None):
+    def sync_by_trade_date(self, start_date: str, end_date: str, target_code_list: List=None, progress_callback=None):
         """
         同步指定交易日的所有指数历史行情数据。
         :param start_date: 交易日期，格式为 'YYYYMMDD'
@@ -299,7 +299,7 @@ class IndexHistSynchronizer:
         self.initialize()
         try:
             logger.info("Starting index historical data synchronization for %s to %s", start_date, end_date)
-            index_list = self.index_info_dao.load_index_info()
+            index_list = self.index_info_dao.load_index_info(target_code_list)
             self.index_list_size = len(index_list)
             logger.info("Found %d indexes to process.", len(index_list))
 

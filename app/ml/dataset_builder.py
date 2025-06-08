@@ -51,14 +51,14 @@ class DatasetBuilder:
         self.mkt_plan = {
             "MKT_NAV": self._default_factor_plans()
         }
-        self.smb_hml_plan = {
-            "SMB_HML": self._default_factor_plans()
+        self.smb_plan = {
+            "SMB_NAV": self._default_factor_plans()
         }
-        self.smb_qmj_plan = {
-            "SMB_QMJ": self._default_factor_plans()
+        self.hml_plan = {
+            "HML_NAV": self._default_factor_plans()
         }
-        self.hml_qmj_plan = {
-            "HML_QMJ": self._default_factor_plans()
+        self.qmj_plan = {
+            "QMJ_NAV": self._default_factor_plans()
         }
 
     @staticmethod
@@ -102,10 +102,14 @@ class DatasetBuilder:
     def label_three_class(series: pd.Series, lower: float, upper: float) -> pd.Series:
         return series.apply(lambda x: 2 if x > upper else (0 if x < lower else 1))
 
-    def _build_dataset(self, factor_plan: dict, target_series: pd.Series, start: str = None, end: str = None, vif: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def _build_dataset(self, factor_plan: dict, target_series: pd.Series, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
         assembler = FeatureAssembler(macro_feature_plan=self.macro_plan, factor_feature_plan=factor_plan)
         df_feature = assembler.assemble_features(start, end)
-        
+
+        if inference:
+            df_X = df_feature
+            return df_X, None
+
         # 对齐标签
         idx = df_feature.index.intersection(target_series.index)
         target_series = target_series.reindex(idx)
@@ -126,51 +130,51 @@ class DatasetBuilder:
         
         return df_X, df_Y
 
-    def build_mkt_volatility(self, start: str = None, end: str = None, vif: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
-        df = FactorDataReader.read_factor_nav_ratios(start, end)
+    def build_mkt_volatility(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
+        df = FactorDataReader.read_factor_nav(start, end)
         target = df['MKT_NAV'].rolling(20).std().shift(-20)
         target = target.dropna()
-        return self._build_dataset(self.mkt_plan, target, start, end, vif)
+        return self._build_dataset(self.mkt_plan, target, start, end, vif, inference)
 
-    def build_mkt_tri_class(self, start: str = None, end: str = None, vif: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
-        df = FactorDataReader.read_factor_nav_ratios(start, end)
+    def build_mkt_tri_class(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
+        df = FactorDataReader.read_factor_nav(start, end)
         ma5 = df['MKT_NAV'].rolling(5).mean()
         future_ret = ma5.shift(-10) / ma5 - 1
         future_ret = future_ret.dropna()
-        lower = future_ret.quantile(0.25)
-        upper = future_ret.quantile(0.75)
+        lower = future_ret.mean() - 0.67 * future_ret.std()
+        upper = future_ret.mean() + 0.67 * future_ret.std()
         target = self.label_three_class(future_ret, lower=lower, upper=upper)
-        return self._build_dataset(self.mkt_plan, target, start, end, vif)
+        return self._build_dataset(self.mkt_plan, target, start, end, vif, inference)
 
-    def build_smb_hml_tri(self, start: str = None, end: str = None, vif: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
-        df = FactorDataReader.read_factor_nav_ratios(start, end)
-        ma10 = df['SMB_HML'].rolling(10).mean()
+    def build_smb_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
+        df = FactorDataReader.read_factor_nav(start, end)
+        ma10 = df['SMB_NAV'].rolling(10).mean()
         future_ret = ma10.shift(-20) / ma10 - 1
         future_ret = future_ret.dropna()
-        lower = future_ret.quantile(0.25)
-        upper = future_ret.quantile(0.75)
+        lower = future_ret.mean() - 0.67 * future_ret.std()
+        upper = future_ret.mean() + 0.67 * future_ret.std()
         target = self.label_three_class(future_ret, lower=lower, upper=upper)
-        return self._build_dataset(self.smb_hml_plan, target, start, end, vif)
+        return self._build_dataset(self.smb_plan, target, start, end, vif, inference)
 
-    def build_smb_qmj_tri(self, start: str = None, end: str = None, vif: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
-        df = FactorDataReader.read_factor_nav_ratios(start, end)
-        ma10 = df['SMB_QMJ'].rolling(10).mean()
+    def build_hml_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
+        df = FactorDataReader.read_factor_nav(start, end)
+        ma10 = df['HML_NAV'].rolling(10).mean()
         future_ret = ma10.shift(-20) / ma10 - 1
         future_ret = future_ret.dropna()
-        lower = future_ret.quantile(0.25)
-        upper = future_ret.quantile(0.75)
+        lower = future_ret.mean() - 0.67 * future_ret.std()
+        upper = future_ret.mean() + 0.67 * future_ret.std()
         target = self.label_three_class(future_ret, lower=lower, upper=upper)
-        return self._build_dataset(self.smb_qmj_plan, target, start, end, vif)
+        return self._build_dataset(self.hml_plan, target, start, end, vif, inference)
 
-    def build_hml_qmj_tri(self, start: str = None, end: str = None, vif: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
-        df = FactorDataReader.read_factor_nav_ratios(start, end)
-        ma10 = df['HML_QMJ'].rolling(10).mean()
+    def build_qmj_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
+        df = FactorDataReader.read_factor_nav(start, end)
+        ma10 = df['QMJ_NAV'].rolling(10).mean()
         future_ret = ma10.shift(-20) / ma10 - 1
         future_ret = future_ret.dropna()
-        lower = future_ret.quantile(0.25)
-        upper = future_ret.quantile(0.75)
+        lower = future_ret.mean() - 0.67 * future_ret.std()
+        upper = future_ret.mean() + 0.67 * future_ret.std()
         target = self.label_three_class(future_ret, lower=lower, upper=upper)
-        return self._build_dataset(self.hml_qmj_plan, target, start, end, vif)
+        return self._build_dataset(self.qmj_plan, target, start, end, vif, inference)
 
     def train_test_split(self, X: pd.DataFrame, Y: pd.DataFrame, split_date: str) -> tuple:
         """

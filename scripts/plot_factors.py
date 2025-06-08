@@ -111,13 +111,13 @@ def predict_with_model(task: str, start: str, end: str, model_path: str):
     builder = DatasetBuilder()
     build_fn_map = {
         "mkt_tri": builder.build_mkt_tri_class,
-        "smb_hml_tri": builder.build_smb_hml_tri,
-        "smb_qmj_tri": builder.build_smb_qmj_tri,
-        "hml_qmj_tri": builder.build_hml_qmj_tri,
+        "smb_tri": builder.build_smb_tri,
+        "hml_tri": builder.build_hml_tri,
+        "qmj_tri": builder.build_qmj_tri,
     }
 
     build_fn = build_fn_map[task]
-    X, Y = build_fn(start=start, end=end, vif=False)
+    X, _ = build_fn(start=start, end=end, vif=False, inference=True)
 
     model_bundle = joblib.load(model_path)
     model = model_bundle["model"]
@@ -135,7 +135,6 @@ def predict_with_model(task: str, start: str, end: str, model_path: str):
     df_out = pd.DataFrame({
         "date": X.index,
         "pred": y_pred,
-        "true": Y.iloc[:, 0].values,
         "confidence": confidence
     }).set_index("date")
 
@@ -230,33 +229,33 @@ def plot_nav_ratio_with_predictions(
 
 def run_predict_and_export():
     df_out = predict_with_model(
-        task="smb_qmj_tri",
+        task="smb_tri",
         start="2023-01-01",
-        end="2025-05-13",
-        model_path="./models/smb_qmj_tri/model_2024-06-30.pkl"
+        end="2025-06-06",
+        model_path="./models/smb_tri/model_2024-06-30.pkl"
     )
 
-    df_out.to_csv("./ml_results/smb_qmj_tri_pred_vs_true.csv")
+    df_out.to_csv("./ml_results/smb_tri_pred_vs_true.csv")
 
-    plot_nav_ratio_with_predictions(
-        start="2023-01-01",
-        end="2025-05-13",
-        ratio_pair=("SMB", "QMJ"),
-        pred_df=df_out,
-        mean=10,
-        title="SMB/QMJ 净值比值曲线（预测类别点标注）",
-        save_path="./ml_results/smb_qmj_tri_plot_with_preds.png"
-    )
-
-    # plot_cumulative_nav_with_predictions(
+    # plot_nav_ratio_with_predictions(
     #     start="2023-01-01",
     #     end="2025-05-13",
-    #     factor="MKT",
+    #     ratio_pair=("SMB", "QMJ"),
     #     pred_df=df_out,
-    #     mean=5,
-    #     title="MKT 累计净值曲线（预测类别点标注）",
-    #     save_path="./ml_results/mkt_nav_plot_with_preds.png"
+    #     mean=10,
+    #     title="SMB/QMJ 净值比值曲线（预测类别点标注）",
+    #     save_path="./ml_results/smb_qmj_tri_plot_with_preds.png"
     # )
+
+    plot_cumulative_nav_with_predictions(
+        start="2023-01-01",
+        end="2025-06-06",
+        factor="SMB",
+        pred_df=df_out,
+        mean=10,
+        title="SMB 累计净值曲线（预测类别点标注）",
+        save_path="./ml_results/smb_nav_plot_with_preds.png"
+    )
 
 
 if __name__ == '__main__':

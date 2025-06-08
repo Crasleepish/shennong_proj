@@ -26,7 +26,7 @@ class FeatureAssembler:
             macro_df = MacroDataReader.read_all_macro_data(start, end)
             macro_features = self.macro_pipeline.transform(macro_df)
 
-        factor_df = FactorDataReader.read_factor_nav_ratios(start, end)
+        factor_df = FactorDataReader.read_factor_nav(start, end)
         factor_features = self.factor_pipeline.transform(factor_df)
         
         if not macro_features.empty:

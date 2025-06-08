@@ -14,6 +14,7 @@ from app.constants.enums import TaskType, TaskStatus
 from typing import Union
 import re
 from datetime import timedelta
+from app.data_fetcher import CalendarFetcher
 
 import logging
 
@@ -162,25 +163,40 @@ class FundHistSynchronizer:
         try:
             async with self.semaphore:
                 await self._check_api_rate_limit()
+
+                # 获取 start_date 的前一个交易日
+                calender_fetcher = CalendarFetcher()
+                prev_trade_date = calender_fetcher.get_prev_trade_date(start_date.strftime("%Y%m%d"))
+
+                # 拉取从 prev_trade_date 到 end_date 的数据
+                effective_start = prev_trade_date if prev_trade_date else start_date
                 df = await asyncio.to_thread(
                     tspro.fund_nav,
                     ts_code=fund_code,
-                    start_date=start_date.strftime("%Y%m%d"),
-                    end_date=end_date.strftime("%Y%m%d")
+                    start_date=effective_start,
+                    end_date=end_date.strftime("%Y%m%d"),
                 )
-                if not df.empty:
-                    df['nav_date'] = pd.to_datetime(df['nav_date'], errors='coerce')
-                    # 去重：保留同一 ts_code + nav_date 中最后一条记录
-                    df = df.drop_duplicates(subset=['ts_code', 'nav_date'], keep='last')
-                    df = df.sort_values('nav_date').reset_index(drop=True)
-                    df['pct_change'] = df['unit_nav'].ffill().pct_change(fill_method=None)
-                    return df[['nav_date', 'unit_nav', 'adj_nav', 'pct_change']]
-                return pd.DataFrame()
+
+                if df.empty:
+                    return pd.DataFrame()
+
+                df['nav_date'] = pd.to_datetime(df['nav_date'], errors='coerce')
+                df = df.drop_duplicates(subset=['ts_code', 'nav_date'], keep='last')
+                df = df.sort_values('nav_date').reset_index(drop=True)
+
+                # 使用 adj_nav 来计算日收益率
+                df['adj_nav'] = df['adj_nav'].astype(float)
+                df['pct_change'] = df['adj_nav'].pct_change()
+
+                df = df[df['nav_date'].dt.date >= start_date]
+
+                return df[['nav_date', 'unit_nav', 'adj_nav', 'pct_change']]
+
         except Exception as e:
-            logger.error("Error fetching fund data for %s: %s", fund_code, e)
+            logger.error("Error fetching fund data for %s from %s to %s: %s", fund_code, start_date, end_date, e)
             return pd.DataFrame()
 
-    async def batch_insert(self, fund_code, new_records):
+    async def batch_insert(self, new_records):
         async with self.semaphore:
             return await asyncio.to_thread(self.fund_hist_dao.batch_upsert, new_records)
 
@@ -204,7 +220,7 @@ class FundHistSynchronizer:
                 )
                 new_records.append(record)
 
-            await self.batch_insert(fund_code, new_records)
+            await self.batch_insert(new_records)
         except Exception as e:
             logger.error("Error processing fund %s: %s", fund_code, e)
 
@@ -212,7 +228,7 @@ class FundHistSynchronizer:
         self.initialize()
         try:
             logger.info("Starting fund historical data synchronization.")
-            fund_list = self.fund_info_dao.load_fund_info()
+            fund_list = self.fund_info_dao.load_index_fund_info()
             self.fund_list_size = len(fund_list)
             logger.info("Found %d fund to synchronize.", len(fund_list))
 
@@ -257,6 +273,104 @@ class FundHistSynchronizer:
                 logger.error(">>>>>>>>>Failed to process stocks<<<<<<<<<: %s", unique_failed_fund_codes)
             self.terminate()
 
+    async def _batch_fetch_fund_nav(self, fund_code_str: str, start_date: str, end_date: str) -> pd.DataFrame:
+        await self._check_api_rate_limit()
+        try:
+            async with self.semaphore:
+                df = await asyncio.to_thread(
+                    tspro.fund_nav,
+                    ts_code=fund_code_str,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+                return df if not df.empty else pd.DataFrame()
+        except Exception as e:
+            logger.error("Error in batch fetch fund nav: %s", e)
+            return pd.DataFrame()
+        
+    def sync_by_trade_date(self, start_date: str, end_date: str, progress_callback=None):
+        self.initialize()
+        try:
+            logger.info("Start sync fund nav from %s to %s", start_date, end_date)
+            calender_fetcher = CalendarFetcher()
+            trade_dates = calender_fetcher.get_trade_date(start_date, end_date, format="%Y%m%d")
+            if not trade_dates:
+                logger.warning("No trade dates found between %s and %s", start_date, end_date)
+                return
+
+            fund_list = self.fund_info_dao.load_index_fund_info()
+            self.fund_list_size = len(fund_list)
+            logger.info("Found %d funds to sync", self.fund_list_size)
+
+            # 批量处理，每次最多 100 个基金代码
+            batch_size = 100
+            for i in range(0, len(fund_list), batch_size):
+                fund_batch = fund_list[i:i + batch_size]
+                fund_codes = [f.fund_code for f in fund_batch]
+                fund_code_str = ",".join(fund_codes)
+
+                for trade_date in trade_dates:
+                    logger.info("Syncing fund data for trade date: %s", trade_date)
+
+                    # 1. 调用 Tushare 接口
+                    df = self.loop.run_until_complete(self._batch_fetch_fund_nav(
+                        fund_code_str, trade_date, trade_date
+                    ))
+
+                    if df.empty:
+                        logger.info("No data returned for trade_date %s", trade_date)
+                        continue
+
+                    df['nav_date'] = pd.to_datetime(df['nav_date'], errors='coerce')
+                    df = df.dropna(subset=['nav_date'])
+                    df = df.drop_duplicates(subset=['ts_code', 'nav_date'], keep='last')
+                    df.set_index(['ts_code'], inplace=True)
+
+                    # 2. 查询每只基金的上一交易日 net_value
+                    prev_date_str = calender_fetcher.get_prev_trade_date(trade_date)
+                    if prev_date_str:
+                        prev_date = datetime.datetime.strptime(prev_date_str, "%Y%m%d").date()
+                    else:
+                        prev_date = None
+                    prev_nav_df = self.fund_hist_dao.select_dataframe_by_code_and_date(
+                        fund_codes, prev_date
+                    )
+                    prev_nav_map = prev_nav_df.set_index("fund_code")["net_value"].to_dict()
+
+                    # 3. 构造记录，计算 change_percent
+                    new_records = []
+                    for fund in fund_batch:
+                        code = fund.fund_code
+                        if code not in df.index:
+                            continue
+                        nav_date = pd.to_datetime(trade_date).date()
+                        unit_nav = safe_get(df.at[code, 'unit_nav'])
+                        adj_nav = safe_get(df.at[code, 'adj_nav'])
+                        prev_net = safe_get(prev_nav_map.get(code))
+
+                        pct_change = None
+                        if prev_net and adj_nav:
+                            try:
+                                pct_change = (adj_nav - prev_net) / prev_net
+                            except ZeroDivisionError:
+                                pct_change = None
+
+                        record = FundHist(
+                            fund_code=code,
+                            date=nav_date,
+                            value=unit_nav,
+                            net_value=adj_nav,
+                            change_percent=pct_change
+                        )
+                        new_records.append(record)
+
+                    self.loop.run_until_complete(self.batch_insert(new_records))
+
+                self.completed_num += len(fund_batch)
+                if progress_callback:
+                    progress_callback(self.completed_num, self.fund_list_size)
+        finally:
+            self.terminate()
     
 fund_info_synchronizer = FundInfoSynchronizer()
 fund_hist_synchronizer = FundHistSynchronizer()

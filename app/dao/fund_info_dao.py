@@ -31,6 +31,18 @@ class FundInfoDao:
                 return fund_info_lst
         except Exception as e:
             logger.error(e)
+
+    def load_index_fund_info(self) -> List[FundInfo]:
+        try:
+            with get_db() as db:
+                condition = or_(
+                    FundInfo.invest_type.in_(['被动指数型', '增强指数型']),
+                    FundInfo.fund_type == '商品型'
+                )
+                fund_info_lst = db.query(FundInfo).filter(condition).all()
+                return fund_info_lst
+        except Exception as e:
+            logger.error(e)
         
     def batch_insert(self, fund_info_lst: List[FundInfo]):
         try:
@@ -47,7 +59,11 @@ class FundInfoDao:
         try:
             with get_db() as db:
                 # 构造查询条件
-                query = db.query(FundInfo).filter(FundInfo.invest_type.in_(['增强指数型', '被动指数型']))
+                condition = or_(
+                    FundInfo.invest_type.in_(['被动指数型', '增强指数型']),
+                    FundInfo.fund_type == '商品型'
+                )
+                query = db.query(FundInfo).filter(condition)
                 # 使用 pd.read_sql 将 SQLAlchemy 查询转换为 DataFrame
                 df = pd.read_sql(query.statement, db.bind)
             return df
@@ -64,7 +80,7 @@ class FundInfoDao:
             return df
         except Exception as e:
             return pd.DataFrame()
-        
+
     def delete_all(self):
         try:
             with get_db() as db:
@@ -144,6 +160,19 @@ class FundHistDao:
         except Exception as e:
             logger.error("Error querying fund_hist for %s: %s", fund_code, e)
             return pd.DataFrame()
+        
+    def select_dataframe_by_code_and_date(self, fund_codes: List[str], date: datetime.date) -> pd.DataFrame:
+        try:
+            with get_db() as db:
+                query = db.query(FundHist).filter(
+                    FundHist.fund_code.in_(fund_codes),
+                    FundHist.date == date
+                )
+                return pd.read_sql(query.statement, db.bind)
+        except Exception as e:
+            logger.error("Error querying fund_hist for previous date: %s", e)
+            return pd.DataFrame()
+        
 
 
 

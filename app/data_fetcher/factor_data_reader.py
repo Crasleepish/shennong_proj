@@ -75,13 +75,13 @@ class FactorDataReader:
         return df_result.dropna()
     
     @staticmethod
-    def read_factor_nav_diffs(start: str = None, end: str = None) -> pd.DataFrame:
+    def read_factor_nav(start: str = None, end: str = None) -> pd.DataFrame:
         """
         返回以下字段：
         - MKT_NAV：MKT 的累计净值曲线
-        - SMB_HML：SMB - HML 净值差值
-        - SMB_QMJ：SMB - QMJ 净值差值
-        - HML_QMJ：HML - QMJ 净值差值
+        - SMB_NAV：SMB 的累计净值曲线
+        - HML_NAV：HML 的累计净值曲线
+        - QMJ_NAV：QMJ 的累计净值曲线
         """
         df_factors = FactorDataReader.read_daily_factors(start=start, end=end)
         if df_factors.empty:
@@ -89,11 +89,6 @@ class FactorDataReader:
 
         # 计算净值
         df_nav = (1 + df_factors).cumprod()
+        df_nav = df_nav.rename(columns={"MKT": "MKT_NAV", "SMB": "SMB_NAV", "HML": "HML_NAV", "QMJ": "QMJ_NAV"})
 
-        df_result = pd.DataFrame(index=df_factors.index)
-        df_result["MKT_NAV"] = df_nav["MKT"]
-        df_result["SMB_HML"] = df_nav["SMB"] - df_nav["HML"]
-        df_result["SMB_QMJ"] = df_nav["SMB"] - df_nav["QMJ"]
-        df_result["HML_QMJ"] = df_nav["HML"] - df_nav["QMJ"]
-
-        return df_result.dropna()
+        return df_nav.dropna()

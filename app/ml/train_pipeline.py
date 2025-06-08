@@ -23,7 +23,7 @@ os.makedirs(RESULT_DIR, exist_ok=True)
 
 
 def train_one_task(
-    task: Literal["mkt_vol", "mkt_tri", "smb_hml_tri", "smb_qmj_tri", "hml_qmj_tri"],
+    task: Literal["mkt_vol", "mkt_tri", "smb_tri", "hml_tri", "qmj_tri"],
     start: str,
     end: str,
     split_date: str
@@ -32,9 +32,9 @@ def train_one_task(
     build_fn_map = {
         "mkt_vol": builder.build_mkt_volatility,
         "mkt_tri": builder.build_mkt_tri_class,
-        "smb_hml_tri": builder.build_smb_hml_tri,
-        "smb_qmj_tri": builder.build_smb_qmj_tri,
-        "hml_qmj_tri": builder.build_hml_qmj_tri,
+        "smb_tri": builder.build_smb_tri,
+        "hml_tri": builder.build_hml_tri,
+        "qmj_tri": builder.build_qmj_tri,
     }
 
     build_fn = build_fn_map[task]
@@ -77,7 +77,7 @@ def train_one_task(
     else:
         model = XGBClassifier(
             n_estimators=500, max_depth=5, learning_rate=0.02, subsample=0.9, colsample_bytree=0.9, 
-            random_state=42, reg_alpha=1.0, reg_lambda=2.0, n_jobs=-1,
+            random_state=42, reg_alpha=2.0, reg_lambda=2.0, n_jobs=-1,
             objective="multi:softprob", num_class=3, eval_metric="mlogloss", early_stopping_rounds=50
         )
         sample_weight = compute_sample_weight("balanced", Y_train[target_col])
@@ -108,7 +108,7 @@ def train_one_task(
 
 def run_all_models(start, split_date: str) -> pd.DataFrame:
     logger.info("开始训练所有模型，split_date=%s", split_date)
-    tasks = ["mkt_vol", "mkt_tri", "smb_hml_tri", "smb_qmj_tri", "hml_qmj_tri"]
+    tasks = ["mkt_vol", "mkt_tri", "smb_tri", "hml_tri", "qmj_tri"]
     start = start
     end = pd.to_datetime(split_date) + pd.DateOffset(years=1)
 
@@ -135,16 +135,16 @@ def rolling_train(start: str, split_dates: list[str]) -> pd.DataFrame:
 
 
 def tune_with_optuna(
-    task: Literal["mkt_vol", "mkt_tri", "smb_hml_tri", "smb_qmj_tri", "hml_qmj_tri"],
+    task: Literal["mkt_vol", "mkt_tri", "smb_tri", "hml_tri", "qmj_tri"],
     n_trials: int = 50
 ):
     builder = DatasetBuilder()
     build_fn_map = {
         "mkt_vol": builder.build_mkt_volatility,
         "mkt_tri": builder.build_mkt_tri_class,
-        "smb_hml_tri": builder.build_smb_hml_tri,
-        "smb_qmj_tri": builder.build_smb_qmj_tri,
-        "hml_qmj_tri": builder.build_hml_qmj_tri,
+        "smb_tri": builder.build_smb_tri,
+        "hml_tri": builder.build_hml_tri,
+        "qmj_tri": builder.build_qmj_tri,
     }
     build_fn = build_fn_map[task]
 

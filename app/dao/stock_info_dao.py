@@ -1042,7 +1042,7 @@ class SuspendDataDao:
     def insert(self, record: SuspendData):
         try:
             with get_db() as db:
-                db.add(record)
+                db.merge(record)
                 db.commit()
             return record
         except Exception as e:

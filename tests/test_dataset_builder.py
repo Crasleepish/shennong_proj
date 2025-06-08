@@ -23,9 +23,9 @@ def test_build_output_shape(builder):
     tasks = [
         builder.build_mkt_volatility,
         builder.build_mkt_tri_class,
-        builder.build_smb_hml_tri,
-        builder.build_smb_qmj_tri,
-        builder.build_hml_qmj_tri,
+        builder.build_smb_tri,
+        builder.build_hml_tri,
+        builder.build_qmj_tri,
     ]
 
     for task in tasks:

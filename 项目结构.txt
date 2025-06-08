@@ -1,0 +1,130 @@
+---
+
+## ✅ 项目结构概览
+
+本项目旨在对股票因子（如 MKT、SMB、HML、QMJ）的未来走势进行分类预测，并将预测结果用于构建 Black–Litterman 投资观点，最终进行组合优化。
+
+---
+
+## 🧱 模块一览
+
+| 模块名称                             | 主要功能              | 输入              | 输出                 |
+| -------------------------------- | ----------------- | --------------- | ------------------ |
+| `app/data_fetcher/`              | 数据读取模块（因子、宏观、ETF） | 起止日期            | DataFrame          |
+| `app/features/`                  | 特征构造与预处理          | 原始数据、构造 plan    | 特征 DataFrame       |
+| `app/ml/dataset_builder.py`      | 构建训练数据集（X,Y）      | 起止日期、目标任务名      | X: 特征, Y: 标签       |
+| `app/ml/train.py`                | 模型训练，支持单次与滚动训练    | 起止日期、模型目标、拆分点   | 训练模型、测试集、预测结果、图表   |
+| `app/ml/predict_and_plot.py`     | 模型推理 + 可视化        | 预测模型路径、因子名、起止日期 | 预测 vs 实际 CSV、可视化图表 |
+
+---
+
+## 📦 数据读取模块：`data_fetcher`
+
+### 功能
+
+* 提供因子每日收益率、累计净值、ETF 因子暴露等原始数据接口。
+
+### 输入样例：
+
+```python
+FactorDataReader.read_daily_factors(start="2019-01-01", end="2023-12-31")
+```
+
+### 输出样例（DataFrame）：
+
+| date       | MKT   | SMB   | HML    | QMJ    |
+| ---------- | ----- | ----- | ------ | ------ |
+| 2019-01-02 | 0.001 | 0.002 | -0.001 | 0.0005 |
+
+---
+
+## 🧠 特征构造模块：`features/factor_feature_pipeline.py`
+
+### 功能
+
+* 基于各因子收益率，构造如 z-score、动量、均线斜率等滚动特征；
+* 支持多因子组合（如SMB-HML）及自定义函数。
+
+### 输入格式：
+
+```python
+{
+  "SMB": [{"func": FactorFeatureBuilder.zscore, "suffix": "z20", "kwargs": {"window": 20}}],
+  ("SMB", "HML"): [{"func": lambda x, y: x - y, "suffix": "spread"}]
+}
+```
+
+### 输出格式（部分）：
+
+| date       | SMB\_z20 | SMB\_HML\_spread |
+| ---------- | -------- | ---------------- |
+| 2019-01-22 | 0.25     | 0.003            |
+
+---
+
+## 🏗️ 数据集构建模块：`dataset_builder.py`
+
+### 功能
+
+* 构建三分类训练数据集（X,Y）；
+* 标签基于因子累计净值10日均值未来20日涨幅的历史分位数。
+
+### 输入参数：
+
+* `start`, `end`: 时间区间
+* `vif`: 是否执行VIF剔除
+
+### 输出：
+
+```python
+X: 特征 DataFrame
+Y: 标签 DataFrame (0: 下跌, 1: 持平, 2: 上涨)
+```
+
+### 样例：
+
+```python
+X.shape → (1000, 25)
+Y.shape → (1000, 1)
+Y['target'].value_counts() → 0: 300, 1: 400, 2: 300
+```
+
+---
+
+## 🎯 训练模块：`train.py`
+
+### 功能
+
+* 执行 rolling training，按年份逐步训练；
+* 自动保存模型、预测结果、指标CSV、可视化图。
+
+### 关键配置：
+
+```python
+date_list = ["2017-12-31", "2018-12-31", ..., "2022-12-31"]
+rolling_train(start="2010-01-01", split_dates=date_list)
+```
+
+### 输出结果：
+
+* `ml_results/20221231_model.pkl`：模型文件
+* `ml_results/20221231_Y_pred.csv`：预测值
+* `ml_results/20221231_metrics.csv`：分类报告（精度、召回、F1）
+
+---
+
+## 🔍 推理与可视化模块：`predict_and_plot.py`
+
+### 功能
+
+* 载入模型，对指定时间区间内数据预测；
+* 可绘制因子净值曲线，标注预测点（label=0/2）；
+* 支持输出预测与实际标签对比CSV。
+
+### 输出样例（CSV）：
+
+| date       | pred | true | prob\_0 | prob\_1 | prob\_2 |
+| ---------- | ---- | ---- | ------- | ------- | ------- |
+| 2023-01-02 | 2    | 1    | 0.05    | 0.20    | 0.75    |
+
+---
