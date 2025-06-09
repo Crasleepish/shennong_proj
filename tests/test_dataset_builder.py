@@ -21,7 +21,6 @@ def test_build_output_shape(builder):
     end_date = "2020-12-31"
 
     tasks = [
-        builder.build_mkt_volatility,
         builder.build_mkt_tri_class,
         builder.build_smb_tri,
         builder.build_hml_tri,

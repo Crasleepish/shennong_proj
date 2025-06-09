@@ -7,7 +7,9 @@ from app import create_app
 from app.ml.train import *
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.font_manager import FontProperties
 from app.data_fetcher.factor_data_reader import FactorDataReader
+from app.ml.inference import predict_softprob
 import joblib
 
 
@@ -15,7 +17,9 @@ app = create_app()
 
 logger = logging.getLogger(__name__)
 
-
+# 设置字体路径
+font_path = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+chinese_font = FontProperties(fname=font_path)
 
 def plot_cumulative_nav(
     start: str,
@@ -107,39 +111,6 @@ def plot_nav_ratio(
     else:
         plt.show()
 
-def predict_with_model(task: str, start: str, end: str, model_path: str):
-    builder = DatasetBuilder()
-    build_fn_map = {
-        "mkt_tri": builder.build_mkt_tri_class,
-        "smb_tri": builder.build_smb_tri,
-        "hml_tri": builder.build_hml_tri,
-        "qmj_tri": builder.build_qmj_tri,
-    }
-
-    build_fn = build_fn_map[task]
-    X, _ = build_fn(start=start, end=end, vif=False, inference=True)
-
-    model_bundle = joblib.load(model_path)
-    model = model_bundle["model"]
-    feature_names = model_bundle["features"]
-    
-    X = X[feature_names]
-    y_pred = model.predict(X)
-
-    # 获取 softprob 模式下的概率输出（每行是 [P0, P1, P2]）
-    y_proba = model.predict_proba(X)
-
-    # 获取最大概率作为置信度
-    confidence = y_proba.max(axis=1)
-
-    df_out = pd.DataFrame({
-        "date": X.index,
-        "pred": y_pred,
-        "confidence": confidence
-    }).set_index("date")
-
-    return df_out
-
 def plot_cumulative_nav_with_predictions(
     start: str,
     end: str,
@@ -176,10 +147,12 @@ def plot_cumulative_nav_with_predictions(
         idx = idx.intersection(df_nav.index)
         plt.scatter(idx, df_nav.loc[idx, factor], color=color, label=f"Predicted {label}", s=30)
 
-    plt.title(title)
-    plt.xlabel("Date")
-    plt.ylabel("Cumulative NAV")
-    plt.legend()
+    plt.rcParams['font.family'] = chinese_font.get_name()
+    plt.rcParams['axes.unicode_minus'] = False  # 避免负号显示为方块
+    plt.title(title, fontproperties=chinese_font)
+    plt.xlabel("Date", fontproperties=chinese_font)
+    plt.ylabel("Cumulative NAV", fontproperties=chinese_font)
+    plt.legend(prop=chinese_font)
     plt.grid(True)
     plt.tight_layout()
 
@@ -228,14 +201,20 @@ def plot_nav_ratio_with_predictions(
         plt.show()
 
 def run_predict_and_export():
-    df_out = predict_with_model(
-        task="smb_tri",
-        start="2023-01-01",
+    df_prob = predict_softprob(
+        task="mkt_tri",
+        start="2021-01-01",
         end="2025-06-06",
-        model_path="./models/smb_tri/model_2024-06-30.pkl"
+        model_path="./models/mkt_tri/model_2024-06-30.pkl"
     )
 
-    df_out.to_csv("./ml_results/smb_tri_pred_vs_true.csv")
+    df_prob.index.name = "date"
+    max_labels = np.argmax(df_prob.values, axis=1)
+    df_prob["pred"] = max_labels
+    df_prob["confidence"] = df_prob.iloc[:, :3].max(axis=1)
+    df_out = df_prob[["pred", "confidence"]]
+
+    df_out.to_csv("./ml_results/mkt_tri_pred_vs_true.csv")
 
     # plot_nav_ratio_with_predictions(
     #     start="2023-01-01",
@@ -248,13 +227,13 @@ def run_predict_and_export():
     # )
 
     plot_cumulative_nav_with_predictions(
-        start="2023-01-01",
+        start="2021-01-01",
         end="2025-06-06",
-        factor="SMB",
+        factor="MKT",
         pred_df=df_out,
         mean=10,
-        title="SMB 累计净值曲线（预测类别点标注）",
-        save_path="./ml_results/smb_nav_plot_with_preds.png"
+        title="MKT 累计净值曲线(预测类别点标注)",
+        save_path="./ml_results/mkt_nav_plot_with_preds.png"
     )
 
 

@@ -2,6 +2,7 @@
 
 import pandas as pd
 import numpy as np
+from typing import Tuple
 from app.features.macro_feature_pipeline import MacroFeaturePipeline
 from app.features.factor_feature_pipeline import FactorFeaturePipeline
 from app.features.macro_feature_builder import MacroFeatureBuilder
@@ -77,7 +78,7 @@ class DatasetBuilder:
                 # z-score
                 {"func": FactorFeatureBuilder.rolling_zscore, "suffix": "zscore_20", "kwargs": {"window": 20}},
                 {"func": FactorFeatureBuilder.rolling_zscore, "suffix": "zscore_60", "kwargs": {"window": 60}},
-                {"func": FactorFeatureBuilder.rolling_zscore, "suffix": "zscore_2000", "kwargs": {"window": 2000}},
+                {"func": FactorFeatureBuilder.rolling_zscore, "suffix": "zscore_2000", "kwargs": {"window": 240}},
 
                 # 动量
                 {"func": FactorFeatureBuilder.momentum, "suffix": "momentum_20", "kwargs": {"window": 20}},
@@ -101,6 +102,17 @@ class DatasetBuilder:
     @staticmethod
     def label_three_class(series: pd.Series, lower: float, upper: float) -> pd.Series:
         return series.apply(lambda x: 2 if x > upper else (0 if x < lower else 1))
+    
+    @staticmethod
+    def safe_mean(series: pd.Series) -> float:
+        q01, q99 = series.quantile(0.01), series.quantile(0.99)
+        return series[(series >= q01) & (series <= q99)].mean()
+
+    def compute_label_to_ret(self, future_ret: pd.Series, lower: float, upper: float) -> Tuple[float, float, float]:
+        ret0 = self.safe_mean(future_ret[future_ret < lower])
+        ret1 = self.safe_mean(future_ret[(future_ret >= lower) & (future_ret <= upper)])
+        ret2 = self.safe_mean(future_ret[future_ret > upper])
+        return (ret0, ret1, ret2)
 
     def _build_dataset(self, factor_plan: dict, target_series: pd.Series, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
         assembler = FeatureAssembler(macro_feature_plan=self.macro_plan, factor_feature_plan=factor_plan)
@@ -130,21 +142,17 @@ class DatasetBuilder:
         
         return df_X, df_Y
 
-    def build_mkt_volatility(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
-        df = FactorDataReader.read_factor_nav(start, end)
-        target = df['MKT_NAV'].rolling(20).std().shift(-20)
-        target = target.dropna()
-        return self._build_dataset(self.mkt_plan, target, start, end, vif, inference)
-
     def build_mkt_tri_class(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
         df = FactorDataReader.read_factor_nav(start, end)
-        ma5 = df['MKT_NAV'].rolling(5).mean()
-        future_ret = ma5.shift(-10) / ma5 - 1
+        ma5 = df['MKT_NAV'].rolling(10).mean()
+        future_ret = ma5.shift(-20) / ma5 - 1
         future_ret = future_ret.dropna()
         lower = future_ret.mean() - 0.67 * future_ret.std()
         upper = future_ret.mean() + 0.67 * future_ret.std()
         target = self.label_three_class(future_ret, lower=lower, upper=upper)
-        return self._build_dataset(self.mkt_plan, target, start, end, vif, inference)
+        label_to_ret = self.compute_label_to_ret(future_ret, lower, upper)
+        X, Y = self._build_dataset(self.mkt_plan, target, start, end, vif, inference)
+        return X, Y, label_to_ret
 
     def build_smb_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
         df = FactorDataReader.read_factor_nav(start, end)
@@ -154,7 +162,9 @@ class DatasetBuilder:
         lower = future_ret.mean() - 0.67 * future_ret.std()
         upper = future_ret.mean() + 0.67 * future_ret.std()
         target = self.label_three_class(future_ret, lower=lower, upper=upper)
-        return self._build_dataset(self.smb_plan, target, start, end, vif, inference)
+        label_to_ret = self.compute_label_to_ret(future_ret, lower, upper)
+        X, Y = self._build_dataset(self.smb_plan, target, start, end, vif, inference)
+        return X, Y, label_to_ret
 
     def build_hml_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
         df = FactorDataReader.read_factor_nav(start, end)
@@ -164,7 +174,9 @@ class DatasetBuilder:
         lower = future_ret.mean() - 0.67 * future_ret.std()
         upper = future_ret.mean() + 0.67 * future_ret.std()
         target = self.label_three_class(future_ret, lower=lower, upper=upper)
-        return self._build_dataset(self.hml_plan, target, start, end, vif, inference)
+        label_to_ret = self.compute_label_to_ret(future_ret, lower, upper)
+        X, Y = self._build_dataset(self.smb_plan, target, start, end, vif, inference)
+        return X, Y, label_to_ret
 
     def build_qmj_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
         df = FactorDataReader.read_factor_nav(start, end)
@@ -174,7 +186,9 @@ class DatasetBuilder:
         lower = future_ret.mean() - 0.67 * future_ret.std()
         upper = future_ret.mean() + 0.67 * future_ret.std()
         target = self.label_three_class(future_ret, lower=lower, upper=upper)
-        return self._build_dataset(self.qmj_plan, target, start, end, vif, inference)
+        label_to_ret = self.compute_label_to_ret(future_ret, lower, upper)
+        X, Y = self._build_dataset(self.qmj_plan, target, start, end, vif, inference)
+        return X, Y, label_to_ret
 
     def train_test_split(self, X: pd.DataFrame, Y: pd.DataFrame, split_date: str) -> tuple:
         """
