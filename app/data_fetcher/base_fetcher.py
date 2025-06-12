@@ -37,15 +37,27 @@ class BaseFetcher:
         logger.info("获取 [%s] 共 %d 条", name, len(df))
 
     @staticmethod
-    def write_to_db(df: pd.DataFrame, orm_class: Type, db: Session):
+    def write_to_db(df: pd.DataFrame, orm_class: Type, db: Session, drop_na_row: bool = True):
         # 仅过滤非法日期 NaT
         df = df[df["date"].notna()]
 
         count = 0
         for _, row in df.iterrows():
             # 若其他字段为空也一并跳过（可选）
-            if row.drop(labels=["date"]).isna().any():
+            if drop_na_row and row.drop(labels=["date"]).isna().any():
                 continue
+            data_dict = row.to_dict()
+            # 将 Pandas 的 NaN 转为 Python None，确保可映射到 SQL NULL
+            clean_data = data_dict
+            db.merge(orm_class(**clean_data))
+            count += 1
+
+        logger.info("写入数据库 [%s] 共 %d 条记录（允许部分字段为 NULL）", orm_class.__tablename__, count)
+
+    @staticmethod
+    def write_to_db_no_date(df: pd.DataFrame, orm_class: Type, db: Session):
+        count = 0
+        for _, row in df.iterrows():
             data_dict = row.to_dict()
             # 将 Pandas 的 NaN 转为 Python None，确保可映射到 SQL NULL
             clean_data = data_dict

@@ -1073,7 +1073,24 @@ class SuspendDataDao:
                 SuspendData.trade_date <= query_date
             )
             return pd.read_sql(query.statement, db.bind)
-
+    def delete_by_date_range(self, start: datetime.date, end: datetime.date):
+        """
+        删除指定交易日区间的所有停复牌记录。
+        :param start: 开始日期
+        :param end: 结束日期
+        """
+        try:
+            with get_db() as db:
+                db.query(SuspendData).filter(
+                    SuspendData.trade_date >= start, 
+                    SuspendData.trade_date <= end
+                    ).delete()
+                db.commit()
+                logger.info("Deleted suspend records for trade_date: %s to %s", start, end)
+        except Exception as e:
+            logger.error("Error deleting suspend records for trade_date %s to %s: %s", start, end, e)
+            db.rollback()
+            raise e
     def delete_all(self):
         try:
             with get_db() as db:

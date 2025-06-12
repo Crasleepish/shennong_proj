@@ -203,8 +203,8 @@ def plot_nav_ratio_with_predictions(
 def run_predict_and_export():
     df_prob = predict_softprob(
         task="mkt_tri",
-        start="2021-01-01",
-        end="2025-06-06",
+        start="2023-01-01",
+        end="2025-06-11",
         model_path="./models/mkt_tri/model_2024-06-30.pkl"
     )
 
@@ -227,11 +227,11 @@ def run_predict_and_export():
     # )
 
     plot_cumulative_nav_with_predictions(
-        start="2021-01-01",
-        end="2025-06-06",
+        start="2023-01-01",
+        end="2025-06-11",
         factor="MKT",
         pred_df=df_out,
-        mean=10,
+        mean=5,
         title="MKT 累计净值曲线(预测类别点标注)",
         save_path="./ml_results/mkt_nav_plot_with_preds.png"
     )

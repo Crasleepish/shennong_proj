@@ -16,7 +16,7 @@ class IndexInfo(Base):
 class IndexHist(Base):
     __tablename__ = 'index_hist'
     # 联合主键 (index_code, date)
-    index_code = Column("index_code", String(10), primary_key=True)
+    index_code = Column("index_code", String(20), primary_key=True)
     date = Column("date", Date, primary_key=True)
     open = Column("open", Float)
     close = Column("close", Float)

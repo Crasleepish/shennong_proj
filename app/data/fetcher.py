@@ -1576,6 +1576,7 @@ class SuspendDataSynchronizer:
             )
             for _, row in df.iterrows()
         ]
+        self.suspend_data_dao.delete_by_date_range(start_date, end_date)
         self.suspend_data_dao.batch_insert(records)
 
     def sync_by_date(self, start_date: str, end_date: str, progress_callback=None):
