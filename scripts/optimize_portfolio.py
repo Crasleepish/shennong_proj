@@ -5,9 +5,10 @@ from typing import List, Tuple
 from app.ml.view_builder import build_view_matrix
 from app.ml.inference import get_softprob_dict, get_label_to_ret
 import numpy as np
+from app.data_fetcher.factor_data_reader import FactorDataReader
+from app.data_fetcher.csi_index_data_fetcher import CSIIndexDataFetcher
 from app.dao.fund_info_dao import FundHistDao
-from app.data.factor_data_reader import FactorDataReader
-
+from scipy.optimize import minimize
 
 def load_fund_betas(codes: List[str]) -> pd.DataFrame:
     """
@@ -85,53 +86,92 @@ def compute_bl_posterior(
     mu_post = middle @ rhs
     return mu_post
 
-def optimize(fund_codes: List[str], trade_date: str, window: int = 20, view_codes: List[str] = None):
-    # 1. 使用资产因子暴露与每日因子收益率，构造资产的历史收益率矩阵
-    df_beta = pd.read_csv("output/fund_factors.csv")
-    df_beta = df_beta[df_beta["code"].isin(fund_codes)].reset_index(drop=True)
-    df_beta = df_beta.set_index("code")[["MKT", "SMB", "HML", "QMJ"]]
+def optimize(asset_source_map: dict, trade_date: str, window: int = 20, view_codes: List[str] = None):
+    # 1. 根据不同数据来源构造资产净值矩阵
+    factor_codes = [code for code, src in asset_source_map.items() if src == "factor"]
+    index_codes = [code for code, src in asset_source_map.items() if src == "index"]
+    hist_codes = [code for code, src in asset_source_map.items() if src == "hist"]
 
-    df_factors = FactorDataReader.read_daily_factors()
-    df_factors = df_factors[["MKT", "SMB", "HML", "QMJ"]].dropna()
+    net_value_df = pd.DataFrame()
 
-    # 构造资产收益矩阵： asset_ret[t][i] = sum_j beta[i][j] * factor_ret[t][j]
-    asset_ret_df = pd.DataFrame(index=df_factors.index)
-    for code in fund_codes:
-        beta = df_beta.loc[code].values  # shape: (4,)
-        asset_ret_df[code] = df_factors.values @ beta  # matrix dot
+    if factor_codes:
+        df_beta = load_fund_betas(factor_codes).set_index("code")[["MKT", "SMB", "HML", "QMJ"]]
+        df_factors = FactorDataReader.read_daily_factors()[["MKT", "SMB", "HML", "QMJ"]].dropna()
+        for code in factor_codes:
+            beta = df_beta.loc[code].values
+            cumret = df_factors.values @ beta
+            net_value_df[code] = (1 + pd.Series(cumret, index=df_factors.index)).cumprod()
 
-    # 2. 构造先验收益与协方差矩阵（针对 fund_codes）
-    mu_prior, Sigma, code_list_mu = compute_prior_mu_sigma(asset_ret_df, window=window)
+    for code in index_codes:
+        df = CSIIndexDataFetcher.get_data_by_code_and_date(code=code)
+        df = df[["date", "close"]].dropna().set_index("date")
+        df = df.sort_index()
+        net_value_df[code] = df["close"]
+
+    dao = FundHistDao._instance
+    for code in hist_codes:
+        df = dao.select_dataframe_by_code(code)
+        df = df[["date", "net_value"]].dropna().set_index("date").sort_index()
+        net_value_df[code] = df["net_value"]
+
+    net_value_df = net_value_df.dropna(how="any").sort_index()
+    fund_codes = list(asset_source_map.keys())
+
+    # 2. 构造先验收益与协方差矩阵（使用净值曲线）
+    mu_prior, Sigma, code_list_mu = compute_prior_mu_sigma(net_value_df, window=window, method="linear")
 
     # 3. 构造观点（P, q, omega）（仅使用 view_codes 子集）
     view_asset_codes = view_codes if view_codes is not None else fund_codes
     P, q, omega, code_list_view = build_bl_views(view_asset_codes, trade_date)
 
-    # ✅ 对齐 mu_prior 和 Sigma 的顺序与 fund_codes 保持一致
-    code_index_map = {code: i for i, code in enumerate(code_list_mu)}
-    fund_indices = [code_index_map[code] for code in fund_codes]
+    # 对齐 mu_prior 和 Sigma 的顺序与 fund_codes 保持一致
+    # code_index_map = {code: i for i, code in enumerate(code_list_mu)}
+    fund_indices = [code_list_mu.index(code) for code in fund_codes]
     mu_prior_full = mu_prior[fund_indices]
     Sigma_full = Sigma[np.ix_(fund_indices, fund_indices)]
 
-    # ✅ 对齐观点所需子集顺序（用于 mu_post 更新）
+    # 提取观点相关子集
     view_indices = [fund_codes.index(code) for code in code_list_view]
     mu_prior_view = mu_prior_full[view_indices]
     Sigma_view = Sigma_full[np.ix_(view_indices, view_indices)]
 
-    # ✅ 计算后验期望收益（仅观点子集）
+    # 计算后验收益率（仅观点子集）
     mu_post_view = compute_bl_posterior(
         mu_prior=mu_prior_view,
         Sigma=Sigma_view,
         P=P,
         q=q,
         omega=omega,
-        tau=0.05
+        tau=0.5
     )
 
-    # ✅ 将后验结果合并回原始 fund_codes 序列
+    # 将后验结果更新到完整序列中
     mu_post_full = mu_prior_full.copy()
     for i, idx in enumerate(view_indices):
         mu_post_full[idx] = mu_post_view[i]
 
-    # TODO: 进行组合优化，如 mean-variance, max-Sharpe, CVaR 等
-    return mu_post_full, Sigma_full, fund_codes
+    # ✅ 使用最大 Sharpe 比策略进行组合优化
+    mu = mu_post_full
+    cov = Sigma_full
+    n = len(mu)
+
+    def neg_sharpe(w):
+        port_ret = np.dot(w, mu)
+        port_vol = np.sqrt(np.dot(w, np.dot(cov, w)))
+        return -port_ret / port_vol  # 负的 Sharpe 比
+
+    constraints = ({'type': 'eq', 'fun': lambda w: np.sum(w) - 1})
+    bounds = [(0.0, 1.0)] * n  # 权重在 [0,1] 区间
+    x0 = np.ones(n) / n
+
+    result = minimize(neg_sharpe, x0=x0, bounds=bounds, constraints=constraints)
+    weights = result.x
+    expected_return = np.dot(weights, mu)
+    expected_vol = np.sqrt(np.dot(weights, np.dot(cov, weights)))
+
+    return {
+        'weights': dict(zip(fund_codes, weights)),
+        'expected_return': expected_return,
+        'expected_volatility': expected_vol,
+        'sharpe_ratio': expected_return / expected_vol
+    }
