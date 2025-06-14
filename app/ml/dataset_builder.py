@@ -9,6 +9,8 @@ from app.features.macro_feature_builder import MacroFeatureBuilder
 from app.features.factor_feature_builder import FactorFeatureBuilder
 from app.data_fetcher.macro_data_reader import MacroDataReader
 from app.data_fetcher.factor_data_reader import FactorDataReader
+from app.data_fetcher import CSIIndexDataFetcher
+from app.data_fetcher import GoldDataFetcher
 from app.features.feature_assembler import FeatureAssembler
 from app.ml.preprocess import select_features_vif
 
@@ -61,6 +63,12 @@ class DatasetBuilder:
         self.qmj_plan = {
             "QMJ_NAV": self._default_factor_plans()
         }
+        self.bond_plan = {
+            "close": self._default_factor_plans()
+        }
+        self.gold_plan = {
+            "close": self._default_factor_plans()
+        }
 
     @staticmethod
     def _default_factor_plans():
@@ -78,7 +86,7 @@ class DatasetBuilder:
                 # z-score
                 {"func": FactorFeatureBuilder.rolling_zscore, "suffix": "zscore_20", "kwargs": {"window": 20}},
                 {"func": FactorFeatureBuilder.rolling_zscore, "suffix": "zscore_60", "kwargs": {"window": 60}},
-                {"func": FactorFeatureBuilder.rolling_zscore, "suffix": "zscore_2000", "kwargs": {"window": 240}},
+                {"func": FactorFeatureBuilder.rolling_zscore, "suffix": "zscore_240", "kwargs": {"window": 240}},
 
                 # 动量
                 {"func": FactorFeatureBuilder.momentum, "suffix": "momentum_20", "kwargs": {"window": 20}},
@@ -114,9 +122,11 @@ class DatasetBuilder:
         ret2 = self.safe_mean(future_ret[future_ret > upper])
         return (ret0, ret1, ret2)
 
-    def _build_dataset(self, factor_plan: dict, target_series: pd.Series, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
-        assembler = FeatureAssembler(macro_feature_plan=self.macro_plan, factor_feature_plan=factor_plan)
-        df_feature = assembler.assemble_features(start, end)
+    def _build_dataset(self, data_df, factor_plan: dict, target_series: pd.Series, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
+        assembler = FeatureAssembler(macro_feature_plan=self.macro_plan, data_feature_plan=factor_plan)
+        # macro_df = MacroDataReader.read_all_macro_data(start, end)
+        macro_df = None
+        df_feature = assembler.assemble_features(macro_df, data_df, start, end)
 
         if inference:
             df_X = df_feature
@@ -151,7 +161,7 @@ class DatasetBuilder:
         upper = future_ret.mean() + 0.67 * future_ret.std()
         target = self.label_three_class(future_ret, lower=lower, upper=upper)
         label_to_ret = self.compute_label_to_ret(future_ret, lower, upper)
-        X, Y = self._build_dataset(self.mkt_plan, target, start, end, vif, inference)
+        X, Y = self._build_dataset(df, self.mkt_plan, target, start, end, vif, inference)
         return X, Y, label_to_ret
 
     def build_smb_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -163,7 +173,7 @@ class DatasetBuilder:
         upper = future_ret.mean() + 0.67 * future_ret.std()
         target = self.label_three_class(future_ret, lower=lower, upper=upper)
         label_to_ret = self.compute_label_to_ret(future_ret, lower, upper)
-        X, Y = self._build_dataset(self.smb_plan, target, start, end, vif, inference)
+        X, Y = self._build_dataset(df, self.smb_plan, target, start, end, vif, inference)
         return X, Y, label_to_ret
 
     def build_hml_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -175,7 +185,7 @@ class DatasetBuilder:
         upper = future_ret.mean() + 0.67 * future_ret.std()
         target = self.label_three_class(future_ret, lower=lower, upper=upper)
         label_to_ret = self.compute_label_to_ret(future_ret, lower, upper)
-        X, Y = self._build_dataset(self.smb_plan, target, start, end, vif, inference)
+        X, Y = self._build_dataset(df, self.smb_plan, target, start, end, vif, inference)
         return X, Y, label_to_ret
 
     def build_qmj_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -187,7 +197,33 @@ class DatasetBuilder:
         upper = future_ret.mean() + 0.67 * future_ret.std()
         target = self.label_three_class(future_ret, lower=lower, upper=upper)
         label_to_ret = self.compute_label_to_ret(future_ret, lower, upper)
-        X, Y = self._build_dataset(self.qmj_plan, target, start, end, vif, inference)
+        X, Y = self._build_dataset(df, self.qmj_plan, target, start, end, vif, inference)
+        return X, Y, label_to_ret
+    
+    def build_10Ybond_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
+        df = CSIIndexDataFetcher.get_data_by_code_and_date("H11004.CSI", start, end)
+        df = df.set_index("date").sort_index()
+        ma10 = df['close'].rolling(10).mean()
+        future_ret = ma10.shift(-20) / ma10 - 1
+        future_ret = future_ret.dropna()
+        lower = future_ret.mean() - 0.67 * future_ret.std()
+        upper = future_ret.mean() + 0.67 * future_ret.std()
+        target = self.label_three_class(future_ret, lower=lower, upper=upper)
+        label_to_ret = self.compute_label_to_ret(future_ret, lower, upper)
+        X, Y = self._build_dataset(df, self.bond_plan, target, start, end, vif, inference)
+        return X, Y, label_to_ret
+    
+    def build_gold_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
+        df = GoldDataFetcher.get_data_by_code_and_date("Au99.99.SGE", start, end)
+        df = df.set_index("date").sort_index()
+        ma10 = df['close'].rolling(10).mean()
+        future_ret = ma10.shift(-20) / ma10 - 1
+        future_ret = future_ret.dropna()
+        lower = future_ret.mean() - 0.67 * future_ret.std()
+        upper = future_ret.mean() + 0.67 * future_ret.std()
+        target = self.label_three_class(future_ret, lower=lower, upper=upper)
+        label_to_ret = self.compute_label_to_ret(future_ret, lower, upper)
+        X, Y = self._build_dataset(df, self.gold_plan, target, start, end, vif, inference)
         return X, Y, label_to_ret
 
     def train_test_split(self, X: pd.DataFrame, Y: pd.DataFrame, split_date: str) -> tuple:

@@ -16,7 +16,7 @@ def main():
     date_list = [
         "2016-12-31", "2024-06-30"
     ]
-    rolling_train(start="2005-01-01", split_dates=date_list)
+    rolling_train(start="2007-12-01", split_dates=date_list)
     # tune_with_optuna("qmj_tri")
 
 

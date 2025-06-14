@@ -24,17 +24,17 @@ def load_model_and_features(model_path: str):
     return model, feature_names
 
 def predict_softprob(
-    task: Literal["mkt_tri", "smb_tri", "hml_tri", "qmj_tri"],
+    task: Literal["mkt_tri", "smb_tri", "hml_tri", "qmj_tri", "10Ybond_tri", "gold_tri"],
     start: str,
     end: str,
     model_path: str,
     data_start_before: int = 3100
 ) -> pd.DataFrame:
     """
-    对指定因子任务进行推理，返回 softprob 预测结果。
+    对指定任务进行推理，返回 softprob 预测结果。
 
     参数：
-    task (str): 待预测的因子任务，可选值为 "mkt_tri", "smb_tri", "hml_tri", "qmj_tri"。
+    task (str): 待预测的因子任务，可选值为 "mkt_tri", "smb_tri", "hml_tri", "qmj_tri", "10Ybond_tri", "gold_tri"。
     start (str): 预测起始日期，格式为 "YYYY-MM-DD"。
     end (str): 预测结束日期，格式为 "YYYY-MM-DD"。
     model_path (str): 模型保存路径。
@@ -53,12 +53,14 @@ def predict_softprob(
         "smb_tri": builder.build_smb_tri,
         "hml_tri": builder.build_hml_tri,
         "qmj_tri": builder.build_qmj_tri,
+        "10Ybond_tri": builder.build_10Ybond_tri,
+        "gold_tri": builder.build_gold_tri,
     }
 
     horizon_start = pd.to_datetime(start) - pd.Timedelta(days=data_start_before)
 
     build_fn = build_fn_map[task]
-    X, _, _ = build_fn(start=horizon_start, end=end, vif=False, inference=True)
+    X, _, _ = build_fn(start=datetime.strftime(horizon_start, "%Y-%m-%d"), end=end, vif=False, inference=True)
     X = X.loc[datetime.strptime(start, "%Y-%m-%d").date():datetime.strptime(end, "%Y-%m-%d").date()]
 
     model, feature_names = load_model_and_features(model_path)

@@ -11,23 +11,23 @@ class FeatureAssembler:
     后续可扩展添加因子收益、资产价格、情绪等特征模块。
     """
 
-    def __init__(self, macro_feature_plan: dict, factor_feature_plan: dict):
+    def __init__(self, macro_feature_plan: dict, data_feature_plan: dict):
         self.macro_pipeline = MacroFeaturePipeline(
             feature_plan=macro_feature_plan
         )
         self.factor_pipeline = FactorFeaturePipeline(
-            feature_plan=factor_feature_plan
+            feature_plan=data_feature_plan
         )
 
-    def assemble_features(self, start: str = None, end: str = None) -> pd.DataFrame:
+    def assemble_features(self, macro_df, data_df, start: str = None, end: str = None) -> pd.DataFrame:
         if self.macro_pipeline:
             macro_features =  pd.DataFrame()
         else:
-            macro_df = MacroDataReader.read_all_macro_data(start, end)
+            # macro_df = MacroDataReader.read_all_macro_data(start, end)
             macro_features = self.macro_pipeline.transform(macro_df)
 
-        factor_df = FactorDataReader.read_factor_nav(start, end)
-        factor_features = self.factor_pipeline.transform(factor_df)
+        # factor_df = FactorDataReader.read_factor_nav(start, end)
+        factor_features = self.factor_pipeline.transform(data_df)
         
         if not macro_features.empty:
             # 将月度宏观特征扩展为日度：按 forward fill 补全到每日

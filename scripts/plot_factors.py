@@ -9,6 +9,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.font_manager import FontProperties
 from app.data_fetcher.factor_data_reader import FactorDataReader
+from app.data_fetcher import CSIIndexDataFetcher
 from app.ml.inference import predict_softprob
 import joblib
 
@@ -112,6 +113,7 @@ def plot_nav_ratio(
         plt.show()
 
 def plot_cumulative_nav_with_predictions(
+    df_nav: pd.DataFrame,
     start: str,
     end: str,
     factor: str,
@@ -124,6 +126,7 @@ def plot_cumulative_nav_with_predictions(
     """
     绘制带预测标签标注的单因子累计净值曲线。
     
+    :param df_nav: 累计净值数据
     :param start: 起始日期
     :param end: 结束日期
     :param factor: 因子名称，如 "SMB"
@@ -133,9 +136,6 @@ def plot_cumulative_nav_with_predictions(
     :param figsize: 图尺寸
     :param save_path: 保存路径
     """
-    df_ret = FactorDataReader.read_daily_factors(start, end)[[factor]].dropna()
-    df_nav = (df_ret + 1).cumprod()
-
     if mean > 0:
         df_nav = df_nav.rolling(window=mean, min_periods=1).mean()
 
@@ -201,11 +201,13 @@ def plot_nav_ratio_with_predictions(
         plt.show()
 
 def run_predict_and_export():
+    start="2023-01-01"
+    end="2025-06-13"
     df_prob = predict_softprob(
-        task="mkt_tri",
-        start="2023-01-01",
-        end="2025-06-11",
-        model_path="./models/mkt_tri/model_2024-06-30.pkl"
+        task="smb_tri",
+        start=start,
+        end=end,
+        model_path="./models/smb_tri/model_2024-06-30.pkl"
     )
 
     df_prob.index.name = "date"
@@ -214,7 +216,7 @@ def run_predict_and_export():
     df_prob["confidence"] = df_prob.iloc[:, :3].max(axis=1)
     df_out = df_prob[["pred", "confidence"]]
 
-    df_out.to_csv("./ml_results/mkt_tri_pred_vs_true.csv")
+    df_out.to_csv("./ml_results/smb_tri_pred_vs_true.csv")
 
     # plot_nav_ratio_with_predictions(
     #     start="2023-01-01",
@@ -225,15 +227,19 @@ def run_predict_and_export():
     #     title="SMB/QMJ 净值比值曲线（预测类别点标注）",
     #     save_path="./ml_results/smb_qmj_tri_plot_with_preds.png"
     # )
-
+    df_ret = FactorDataReader.read_daily_factors(start, end)[["SMB"]].dropna()
+    df_nav = (df_ret + 1).cumprod()
+    # df_nav = CSIIndexDataFetcher.get_data_by_code_and_date("Au99.99.SGE", start, end)
+    # df_nav = df_nav.set_index("date").sort_index()[["close"]].dropna()
     plot_cumulative_nav_with_predictions(
-        start="2023-01-01",
-        end="2025-06-11",
-        factor="MKT",
+        df_nav,
+        start=start,
+        end=end,
+        factor="SMB",
         pred_df=df_out,
         mean=5,
-        title="MKT 累计净值曲线(预测类别点标注)",
-        save_path="./ml_results/mkt_nav_plot_with_preds.png"
+        title="SMB 累计净值曲线(预测类别点标注)",
+        save_path="./ml_results/smb_nav_plot_with_preds.png"
     )
 
 

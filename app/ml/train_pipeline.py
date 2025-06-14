@@ -24,7 +24,7 @@ os.makedirs(RESULT_DIR, exist_ok=True)
 
 
 def train_one_task(
-    task: Literal["mkt_tri", "smb_tri", "hml_tri", "qmj_tri"],
+    task: Literal["mkt_tri", "smb_tri", "hml_tri", "qmj_tri", "10Ybond_tri", "gold_tri"],
     start: str,
     end: str,
     split_date: str
@@ -35,6 +35,8 @@ def train_one_task(
         "smb_tri": builder.build_smb_tri,
         "hml_tri": builder.build_hml_tri,
         "qmj_tri": builder.build_qmj_tri,
+        "10Ybond_tri": builder.build_10Ybond_tri,
+        "gold_tri": builder.build_gold_tri,
     }
 
     build_fn = build_fn_map[task]
@@ -99,7 +101,7 @@ def train_one_task(
 
 def run_all_models(start, split_date: str) -> pd.DataFrame:
     logger.info("开始训练所有模型，split_date=%s", split_date)
-    tasks = ["mkt_tri", "smb_tri", "hml_tri", "qmj_tri"]
+    tasks = ["mkt_tri", "smb_tri", "hml_tri", "qmj_tri", "10Ybond_tri", "gold_tri"]
     start = start
     end = pd.to_datetime(split_date) + pd.DateOffset(years=1)
 
@@ -126,7 +128,7 @@ def rolling_train(start: str, split_dates: list[str]) -> pd.DataFrame:
 
 
 def tune_with_optuna(
-    task: Literal["mkt_tri", "smb_tri", "hml_tri", "qmj_tri"],
+    task: Literal["mkt_tri", "smb_tri", "hml_tri", "qmj_tri", "10Ybond_tri", "gold_tri"],
     n_trials: int = 50
 ):
     builder = DatasetBuilder()
@@ -135,6 +137,7 @@ def tune_with_optuna(
         "smb_tri": builder.build_smb_tri,
         "hml_tri": builder.build_hml_tri,
         "qmj_tri": builder.build_qmj_tri,
+        "gold_tri": builder.build_gold_tri,
     }
     build_fn = build_fn_map[task]
 
