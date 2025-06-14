@@ -70,7 +70,7 @@ class FactorFeatureBuilder:
     @staticmethod
     def ma_diff(series: pd.Series, window: int) -> pd.Series:
         ma = series.rolling(window).mean()
-        return series - ma
+        return (series - ma) / ma
 
     @staticmethod
     def ma_cross_signal(series: pd.Series, short_window: int, long_window: int) -> pd.Series:
