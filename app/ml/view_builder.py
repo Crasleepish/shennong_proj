@@ -4,13 +4,7 @@ import numpy as np
 import pandas as pd
 from typing import List, Tuple, Dict
 
-def build_view_matrix(
-    df_beta: pd.DataFrame,
-    softprob_dict: Dict[str, np.ndarray],
-    label_to_ret: Dict[str, Tuple[float, float, float]],
-    asset_codes: List[str] = None,
-    top_k: int = 10
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]:
+def build_view_matrix(df_beta: pd.DataFrame, softprob_dict: dict, label_to_ret: dict, asset_codes: list, top_k: int = 100) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]:
     """
     构造 Black–Litterman 所需的 P, q, omega 矩阵。
 
@@ -28,21 +22,22 @@ def build_view_matrix(
     - omega: 协方差矩阵（shape: [num_views, num_views]）
     - code_list: 资产顺序（供对应mu_prior/Σ）
     """
-    factor_names = list(softprob_dict.keys())
     asset_codes = asset_codes or df_beta['code'].tolist()
     code_list = asset_codes  # 资产顺序
 
     pred_mu = {}
     pred_var = {}
+    df_beta = df_beta.set_index('code')
     for code in code_list:
         mu = 0
         var = 0
-        for f in factor_names:
+        valid_factors = df_beta.columns[df_beta.loc[code] != 0].tolist()
+        for f in valid_factors:
             probs = softprob_dict[f]
             labels_ret = label_to_ret[f]
             expected_ret = np.dot(probs, labels_ret)
             variance = np.dot(probs, (np.array(labels_ret) - expected_ret) ** 2)
-            beta = df_beta.loc[df_beta['code'] == code, f].values[0]
+            beta = df_beta.loc[code, f]
             mu += beta * expected_ret
             var += (beta ** 2) * variance
         pred_mu[code] = mu

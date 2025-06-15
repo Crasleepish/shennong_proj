@@ -13,6 +13,8 @@ TASK_MODEL_PATHS = {
     "smb_tri": "./models/smb_tri/model_{0}.pkl",
     "hml_tri": "./models/hml_tri/model_{0}.pkl",
     "qmj_tri": "./models/qmj_tri/model_{0}.pkl",
+    "10Ybond_tri": "./models/10Ybond_tri/model_{0}.pkl",
+    "gold_tri": "./models/gold_tri/model_{0}.pkl",
 }
 
 MODEL_DATE = "2024-06-30"

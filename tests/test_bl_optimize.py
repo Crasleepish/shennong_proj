@@ -25,8 +25,8 @@ def test_build_bl_views(app):
 def test_optimize(app):
     # 创建测试数据
     asset_source_map = {
-        # 'H11004.CSI': 'index',
-        # 'Au99.99.SGE': 'index',
+        'H11004.CSI': 'index',
+        'Au99.99.SGE': 'index',
         '008114.OF': 'factor',
         '020602.OF': 'factor',
         '019918.OF': 'factor', 
@@ -37,9 +37,22 @@ def test_optimize(app):
         '110003.OF': 'factor',
         '019702.OF': 'factor',
     }
-    trade_date = '2025-06-10'
+    code_factors_map = {
+        "008114.OF": ["MKT", "SMB", "HML", "QMJ"],
+        "020602.OF": ["MKT", "SMB", "HML", "QMJ"],
+        "019918.OF": ["MKT", "SMB", "HML", "QMJ"],
+        "002236.OF": ["MKT", "SMB", "HML", "QMJ"],
+        "019311.OF": ["MKT", "SMB", "HML", "QMJ"],
+        "006712.OF": ["MKT", "SMB", "HML", "QMJ"],
+        "011041.OF": ["MKT", "SMB", "HML", "QMJ"],
+        "110003.OF": ["MKT", "SMB", "HML", "QMJ"],
+        "019702.OF": ["MKT", "SMB", "HML", "QMJ"],
+        "H11004.CSI": ["10YBOND"], 
+        "Au99.99.SGE": ["GOLD"]
+    }
+    trade_date = '2025-06-13'
     window = 20
-    view_codes = ['008114.OF', '020602.OF', '019918.OF', '002236.OF', '019311.OF', '006712.OF', '011041.OF', '110003.OF', '019702.OF']
-    portfolio_plan = optimize(asset_source_map, trade_date, window, view_codes)
+    view_codes = ['H11004.CSI', 'Au99.99.SGE', '008114.OF', '020602.OF', '019918.OF', '002236.OF', '019311.OF', '006712.OF', '011041.OF', '110003.OF', '019702.OF']
+    portfolio_plan = optimize(asset_source_map, code_factors_map, trade_date, window, view_codes)
     print(portfolio_plan)
     
