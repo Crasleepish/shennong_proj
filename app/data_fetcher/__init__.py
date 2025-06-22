@@ -4,6 +4,8 @@ from .trade_calender_reader import TradeCalendarReader
 from .calender_fetcher import CalendarFetcher
 from .csi_index_data_fetcher import CSIIndexDataFetcher
 from .gold_data_fetcher import GoldDataFetcher
+from .stock_data_reader import StockDataReader
+from .index_data_reader import IndexDataReader
 
 __all__ = [
     "MacroDataFetcher",
@@ -11,5 +13,7 @@ __all__ = [
     "TradeCalendarReader",
     "CalendarFetcher",
     "CSIIndexDataFetcher",
-    "GoldDataFetcher"
+    "GoldDataFetcher",
+    "StockDataReader",
+    "IndexDataReader"
 ]

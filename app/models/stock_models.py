@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Float, Date, BigInteger, Index, Integer, Numeric, Sequence
+from sqlalchemy import Column, String, Float, Date, BigInteger, Index, Integer, Numeric, Sequence, desc
 from app.database import Base
 
 
@@ -14,7 +14,7 @@ class StockInfo(Base):
     list_status = Column('list_status', String(4), nullable=True)
 
     __table_args__ = (
-        Index('idx_stock_code_task_date_stock_info', 'stock_code'),
+        Index('stock_info_stock_code_idx', 'stock_code'),
     )
 
     def __repr__(self):
@@ -50,6 +50,16 @@ class StockHistUnadj(Base):
     free_shares = Column("free_share", BigInteger)
     mkt_cap = Column("mkt_cap", BigInteger)  # 单位：元
     circ_mv = Column("circ_mv", BigInteger)
+
+    __table_args__ = (
+        Index('stock_hist_unadj_date_idx', 'date'),
+        Index(
+            'stock_hist_unadj_stock_code_date_idx',
+            stock_code,
+            desc(date),
+            postgresql_include=['close', 'total_share']
+        ),
+    )
 
     def __repr__(self):
         return f"<StockHistUnadj(stock_code='{self.stock_code}', date='{self.date}')>"

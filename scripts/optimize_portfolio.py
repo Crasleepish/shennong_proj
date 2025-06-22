@@ -303,7 +303,7 @@ if __name__ == '__main__':
             '020466.OF': ["MKT", "SMB", "HML", "QMJ"],
             '018732.OF': ["MKT", "SMB", "HML", "QMJ"],
         }
-        trade_date = '2025-06-13'
+        trade_date = '2025-06-19'
         window = 20
         # view_codes = ['H11004.CSI', 'Au99.99.SGE', '008114.OF', '020602.OF', '019918.OF', '002236.OF', '019311.OF', '006712.OF', '011041.OF', '110003.OF', '019702.OF', '006342.OF']
         portfolio_plan = optimize(asset_source_map, code_factors_map, trade_date, window, None)

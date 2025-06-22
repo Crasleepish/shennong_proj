@@ -1,5 +1,6 @@
 import pytest
 import datetime
+import pandas as pd
 from app import create_app
 from app.database import Base, engine
 from sqlalchemy import create_engine, text
@@ -14,6 +15,7 @@ from app.database import get_db
 from app.config import TestConfig, Config
 from app.dao.stock_info_dao import StockInfoDao, StockHistUnadjDao, StockHistAdjDao, AdjFactorDao, FundamentalDataDao, SuspendDataDao, StockShareChangeCNInfoDao, CompanyActionDao, FutureTaskDao
 from app.data.helper import get_prices_df, get_fund_prices_by_code_list, get_fund_fees_by_code_list
+from app.data_fetcher import StockDataReader, IndexDataReader
 
 # Create the Flask app using TestConfig
 @pytest.fixture
@@ -203,3 +205,53 @@ def test_get_fund_fees_by_code_list(app):
     code_list = ['008115', '019919', '018733']
     fees_dict = get_fund_fees_by_code_list(code_list)
     print(fees_dict)
+
+def test_stock_data_fetcher_fetch_latest_close_prices(app):
+    fetcher = StockDataReader()
+
+    # 第一次调用，应触发实际查询
+    df = fetcher.fetch_latest_close_prices_from_cache(exchange_filter=['SSE', 'SZSE'], list_status_filter=['L'])
+    assert isinstance(df, pd.DataFrame)
+    assert not df.empty
+    assert 'stock_code' in df.columns
+    assert 'close' in df.columns
+
+    # 第二次调用，应命中缓存
+    df2 = fetcher.fetch_latest_close_prices_from_cache(exchange_filter=['SSE', 'SZSE'], list_status_filter=['L'])
+    assert df2 is fetcher._last_df_cache  # 确保是同一个对象（未重新查询）
+
+    # 第三次调用，使用不同 exchange_filter，应重新查询
+    df3 = fetcher.fetch_latest_close_prices_from_cache(exchange_filter=['SSE'], list_status_filter=['L'])
+    assert isinstance(df3, pd.DataFrame)
+    assert not df3.empty
+    assert df3 is not df2  # 确保是新数据，不是缓存命中
+
+    # 验证 filter key 缓存是否按条件记录
+    assert fetcher._last_cache_filter_key == (('SSE',), ('L',))
+
+def test_fetch_realtime_prices(app):
+    fetcher = StockDataReader()
+    df_rt = fetcher.fetch_realtime_prices()
+    print(df_rt)
+
+def test_index_data_fetcher_fetch_latest_close_prices(app):
+    fetcher = IndexDataReader()
+    df1 = fetcher.fetch_latest_close_prices_from_cache('000985.CSI')
+    assert isinstance(df1, pd.DataFrame)
+    assert not df1.empty
+    assert 'stock_code' in df1.columns
+    assert 'close' in df1.columns
+
+    df2 = fetcher.fetch_latest_close_prices_from_cache('000985.CSI')
+    assert df2 is fetcher._last_df_cache  # 确保是同一个对象（未重新查询）
+
+    # 第三次调用，使用不同参数，应重新查询
+    df3 = fetcher.fetch_latest_close_prices_from_cache('000300.SH')
+    assert isinstance(df3, pd.DataFrame)
+    assert not df3.empty
+    assert df3 is not df2  # 确保是新数据，不是缓存命中
+
+def test_index_fetch_realtime_prices(app):
+    fetcher = IndexDataReader()
+    df_rt = fetcher.fetch_realtime_prices("000985.CSI")
+    print(df_rt)

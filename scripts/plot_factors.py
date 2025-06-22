@@ -201,13 +201,13 @@ def plot_nav_ratio_with_predictions(
         plt.show()
 
 def run_predict_and_export():
-    start="2023-01-01"
-    end="2025-06-13"
+    start="2024-01-01"
+    end="2025-06-17"
     df_prob = predict_softprob(
-        task="gold_tri",
+        task="smb_tri",
         start=start,
         end=end,
-        model_path="./models/gold_tri/model_2024-06-30.pkl"
+        model_path="./models/smb_tri/model_2024-06-30.pkl"
     )
 
     df_prob.index.name = "date"
@@ -216,7 +216,7 @@ def run_predict_and_export():
     df_prob["confidence"] = df_prob.iloc[:, :3].max(axis=1)
     df_out = df_prob[["pred", "confidence"]]
 
-    df_out.to_csv("./ml_results/gold_tri_pred_vs_true.csv")
+    df_out.to_csv("./ml_results/smb_tri_pred_vs_true.csv")
 
     # plot_nav_ratio_with_predictions(
     #     start="2023-01-01",
@@ -227,19 +227,19 @@ def run_predict_and_export():
     #     title="SMB/QMJ 净值比值曲线（预测类别点标注）",
     #     save_path="./ml_results/smb_qmj_tri_plot_with_preds.png"
     # )
-    # df_ret = FactorDataReader.read_daily_factors(start, end)[["SMB"]].dropna()
-    # df_nav = (df_ret + 1).cumprod()
-    df_nav = CSIIndexDataFetcher.get_data_by_code_and_date("Au99.99.SGE", start, end)
-    df_nav = df_nav.set_index("date").sort_index()[["close"]].dropna()
+    df_ret = FactorDataReader.read_daily_factors(start, end)[["SMB"]].dropna()
+    df_nav = (df_ret + 1).cumprod()
+    # df_nav = CSIIndexDataFetcher.get_data_by_code_and_date("Au99.99.SGE", start, end)
+    # df_nav = df_nav.set_index("date").sort_index()[["close"]].dropna()
     plot_cumulative_nav_with_predictions(
         df_nav,
         start=start,
         end=end,
-        factor="close",
+        factor="SMB",
         pred_df=df_out,
         mean=5,
-        title="GOLD 累计净值曲线(预测类别点标注)",
-        save_path="./ml_results/gold_nav_plot_with_preds.png"
+        title="SMB 累计净值曲线(预测类别点标注)",
+        save_path="./ml_results/smb_nav_plot_with_preds.png"
     )
 
 
