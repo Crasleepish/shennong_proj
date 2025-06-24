@@ -24,11 +24,11 @@ class IndexDataReader:
             latest_date = db.query(IndexHist.date).filter(IndexHist.index_code == index_code).order_by(IndexHist.date.desc()).limit(1).scalar()
             if not latest_date:
                 logger.warning(f"未获取到指数 {index_code} 的历史数据")
-                return pd.DataFrame(columns=["stock_code", "close", "vol", "amount"])
+                return pd.DataFrame(columns=["index_code", "close", "vol", "amount"])
 
             row = db.query(IndexHist).filter(IndexHist.index_code == index_code, IndexHist.date == latest_date).first()
             return pd.DataFrame([{
-                "stock_code": row.index_code,
+                "index_code": row.index_code,
                 "close": row.close,
                 "vol": row.volume,
                 "amount": row.amount
@@ -59,14 +59,14 @@ class IndexDataReader:
             df = ak.index_zh_a_hist_min_em(symbol=symbol, period="1", start_date=start_dt)
         except Exception as e:
             logger.warning(f"实时指数行情获取失败: {e}")
-            return pd.DataFrame(columns=["stock_code", "close", "vol", "amount"])
+            return pd.DataFrame(columns=["index_code", "close", "vol", "amount"])
 
         if df.empty:
-            return pd.DataFrame(columns=["stock_code", "close", "vol", "amount"])
+            return pd.DataFrame(columns=["index_code", "close", "vol", "amount"])
 
         latest = df.iloc[-1]
         return pd.DataFrame([{
-            "stock_code": index_code,
+            "index_code": index_code,
             "close": latest["收盘"],
             "vol": latest["成交量"],
             "amount": latest["成交额"]

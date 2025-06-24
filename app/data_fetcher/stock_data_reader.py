@@ -129,7 +129,7 @@ class StockDataReader:
         return df[[
             "stock_code", "stock_name", "exchange", "date",
             "adj_close", "total_shares"
-        ]].rename(columns={"adj_close": "close"})
+        ]].rename(columns={"adj_close": "close"}).dropna(subset=["stock_code", "close"])
     
     def fetch_latest_close_prices_from_cache(self, exchange_filter=None, list_status_filter=None) -> pd.DataFrame:
         trade_date = self._get_current_trade_date()
@@ -151,9 +151,21 @@ class StockDataReader:
             logger.warning("未获取到任何实时数据")
             return pd.DataFrame(columns=["stock_code", "close", "vol", "amount"])
 
-        return df.rename(columns={
+        # 获取带市场标识映射表
+        with get_db() as db:
+            rows = db.query(StockInfo.stock_code).all()
+            code_map = {
+                code.split(".")[0]: code for (code,) in rows if "." in code
+            }
+
+        df = df.rename(columns={
             "代码": "stock_code",
             "最新价": "close",
             "成交量": "vol",
             "成交额": "amount"
-        })[["stock_code", "close", "vol", "amount"]]
+        })
+
+        df["stock_code"] = df["stock_code"].map(code_map)
+        df = df.dropna(subset=["stock_code", "close"])
+
+        return df[["stock_code", "close", "vol", "amount"]]

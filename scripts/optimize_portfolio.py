@@ -249,7 +249,7 @@ def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str, wi
         P=P,
         q=q,
         omega=omega,
-        tau=0.5
+        tau=0.2
     )
 
     # 将后验结果更新到完整序列中，顺序与fund_codes保持一致
@@ -303,7 +303,7 @@ if __name__ == '__main__':
             '020466.OF': ["MKT", "SMB", "HML", "QMJ"],
             '018732.OF': ["MKT", "SMB", "HML", "QMJ"],
         }
-        trade_date = '2025-06-19'
+        trade_date = '2025-06-24'
         window = 20
         # view_codes = ['H11004.CSI', 'Au99.99.SGE', '008114.OF', '020602.OF', '019918.OF', '002236.OF', '019311.OF', '006712.OF', '011041.OF', '110003.OF', '019702.OF', '006342.OF']
         portfolio_plan = optimize(asset_source_map, code_factors_map, trade_date, window, None)

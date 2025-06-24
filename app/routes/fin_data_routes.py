@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from app.data_fetcher import MacroDataFetcher
 from app.data_fetcher import CalendarFetcher
 from app.data_fetcher import CSIIndexDataFetcher, GoldDataFetcher
+from app.data_fetcher import EtfDataFetcher
 
 
 logger = logging.getLogger(__name__)
@@ -712,6 +713,54 @@ def sync_trade_calendar():
         logger.exception("同步交易日失败")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@fin_data_bp.route("/etf_info/sync", methods=["POST"])
+def sync_etf_info():
+    """
+    同步所有etf信息至数据库
+    """
+    etf_data_fetcher = EtfDataFetcher()
+    try:
+        etf_data_fetcher.fetch_etf_info_all()
+        return jsonify({"status": "success"}), 200
+    except Exception as e:
+        logger.exception("Error executing etf info sync task.")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@fin_data_bp.route("/etf_hist/sync", methods=["POST"])
+def sync_etf_hist_all():
+    """
+    同步所有etf历史数据至数据库
+    """
+    etf_data_fetcher = EtfDataFetcher()
+    try:
+        etf_data_fetcher.fetch_etf_hist_all()
+        return jsonify({"status": "success"}), 200
+    except Exception as e:
+        logger.exception("Error executing etf hist sync task.")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@fin_data_bp.route("/etf_hist/sync_by_date")
+def sync_etf_hist_by_date():
+    """
+    同步指定时间段内的etf历史数据至数据库
+    请求参数格式：
+    {
+        "start_date": "20240510",  # 格式必须为 YYYYMMDD
+        "end_date": "20240510"  # 格式必须为 YYYYMMDD
+    }
+    """
+    
+    etf_data_fetcher = EtfDataFetcher()
+    try:
+        req_data = request.get_json()
+        start_date = req_data.get("start_date")
+        end_date = req_data.get("end_date")
+        etf_data_fetcher.fetch_etf_hist_all_by_date(start_date, end_date)
+        return jsonify({"status": "success"}), 200
+    except Exception as e:
+        logger.exception("Error executing etf hist sync task.")
+        return jsonify({"status": "error", "message": str(e)}), 500
+    
 @fin_data_bp.route("/update_all", methods=["POST"])
 def update_all_fin_data():
     """
@@ -743,6 +792,9 @@ def update_all_fin_data():
         fund_info_synchronizer.sync()
         fund_hist_synchronizer.sync_by_trade_date(start_date=start, end_date=end)
 
+        etf_data_fetcher = EtfDataFetcher()
+        etf_data_fetcher.fetch_etf_hist_all_by_date(start, end)
+
         start_date_obj = datetime.strptime(start, "%Y%m%d") - timedelta(days=183)
         end_date_obj = datetime.strptime(end, "%Y%m%d")
 
@@ -755,3 +807,4 @@ def update_all_fin_data():
     except Exception as e:
         logger.exception(str(e))
         return jsonify({"status": "error", "message": str(e)}), 500
+    
