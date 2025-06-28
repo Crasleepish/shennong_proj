@@ -9,7 +9,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.font_manager import FontProperties
 from app.data_fetcher.factor_data_reader import FactorDataReader
-from app.data_fetcher import CSIIndexDataFetcher
 from app.ml.inference import predict_softprob
 import joblib
 
@@ -17,6 +16,8 @@ import joblib
 app = create_app()
 
 logger = logging.getLogger(__name__)
+
+factor_data_reader = FactorDataReader()
 
 # 设置字体路径
 font_path = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
@@ -42,7 +43,7 @@ def plot_cumulative_nav(
     :param figsize: 图表尺寸
     :param save_path: 如果指定路径，将图像保存
     """
-    df_ret = FactorDataReader.read_daily_factors(start, end)[factors].dropna()
+    df_ret = factor_data_reader.read_daily_factors(start, end)[factors].dropna()
     df_nav = (df_ret + 1).cumprod()
 
     if mean > 0:
@@ -85,7 +86,7 @@ def plot_nav_ratio(
     :param save_path: 图像保存路径
     """
     all_factors = list(set([f for pair in ratio_pairs for f in pair]))
-    df_ret = FactorDataReader.read_daily_factors(start, end)[all_factors].dropna()
+    df_ret = factor_data_reader.read_daily_factors(start, end)[all_factors].dropna()
     df_nav = (df_ret + 1).cumprod()
 
     df_ratio = pd.DataFrame(index=df_nav.index)
@@ -172,7 +173,7 @@ def plot_nav_ratio_with_predictions(
     save_path: str = None
 ):
     num, denom = ratio_pair
-    df_ret = FactorDataReader.read_daily_factors(start, end)[[num, denom]].dropna()
+    df_ret = factor_data_reader.read_daily_factors(start, end)[[num, denom]].dropna()
     df_nav = (df_ret + 1).cumprod()
     df_ratio = df_nav[num] / df_nav[denom]
 
@@ -227,10 +228,8 @@ def run_predict_and_export():
     #     title="SMB/QMJ 净值比值曲线（预测类别点标注）",
     #     save_path="./ml_results/smb_qmj_tri_plot_with_preds.png"
     # )
-    df_ret = FactorDataReader.read_daily_factors(start, end)[["SMB"]].dropna()
+    df_ret = factor_data_reader.read_daily_factors(start, end)[["SMB"]].dropna()
     df_nav = (df_ret + 1).cumprod()
-    # df_nav = CSIIndexDataFetcher.get_data_by_code_and_date("Au99.99.SGE", start, end)
-    # df_nav = df_nav.set_index("date").sort_index()[["close"]].dropna()
     plot_cumulative_nav_with_predictions(
         df_nav,
         start=start,

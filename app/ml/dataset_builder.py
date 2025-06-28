@@ -15,7 +15,10 @@ from app.features.feature_assembler import FeatureAssembler
 from app.ml.preprocess import select_features_vif
 
 class DatasetBuilder:
-    def __init__(self):
+    def __init__(self, additional_factor_df: pd.DataFrame = None, additional_map: dict[str, pd.DataFrame] = None):
+        self.factor_data_reader = FactorDataReader(additional_factor_df)
+        self.csi_index_data_fetcher = CSIIndexDataFetcher(additional_map)
+        self.gold_data_fetcher = GoldDataFetcher(additional_map)
         self.macro_plan = {
             # "社融": [
             #     {"func": MacroFeatureBuilder.yoy_growth, "suffix": "yoy"},
@@ -153,7 +156,7 @@ class DatasetBuilder:
         return df_X, df_Y
 
     def build_mkt_tri_class(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
-        df = FactorDataReader.read_factor_nav(start, end)
+        df = self.factor_data_reader.read_factor_nav(start, end)
         ma5 = df['MKT_NAV'].rolling(10).mean()
         future_ret = ma5.shift(-20) / ma5 - 1
         future_ret = future_ret.dropna()
@@ -165,7 +168,7 @@ class DatasetBuilder:
         return X, Y, label_to_ret
 
     def build_smb_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
-        df = FactorDataReader.read_factor_nav(start, end)
+        df = self.factor_data_reader.read_factor_nav(start, end)
         ma10 = df['SMB_NAV'].rolling(10).mean()
         future_ret = ma10.shift(-20) / ma10 - 1
         future_ret = future_ret.dropna()
@@ -177,7 +180,7 @@ class DatasetBuilder:
         return X, Y, label_to_ret
 
     def build_hml_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
-        df = FactorDataReader.read_factor_nav(start, end)
+        df = self.factor_data_reader.read_factor_nav(start, end)
         ma10 = df['HML_NAV'].rolling(10).mean()
         future_ret = ma10.shift(-20) / ma10 - 1
         future_ret = future_ret.dropna()
@@ -189,7 +192,7 @@ class DatasetBuilder:
         return X, Y, label_to_ret
 
     def build_qmj_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
-        df = FactorDataReader.read_factor_nav(start, end)
+        df = self.factor_data_reader.read_factor_nav(start, end)
         ma10 = df['QMJ_NAV'].rolling(10).mean()
         future_ret = ma10.shift(-20) / ma10 - 1
         future_ret = future_ret.dropna()
@@ -201,7 +204,7 @@ class DatasetBuilder:
         return X, Y, label_to_ret
     
     def build_10Ybond_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
-        df = CSIIndexDataFetcher.get_data_by_code_and_date("H11004.CSI", start, end)
+        df = self.csi_index_data_fetcher.get_data_by_code_and_date("H11004.CSI", start, end)
         df = df.set_index("date").sort_index()
         ma10 = df['close'].rolling(10).mean()
         future_ret = ma10.shift(-20) / ma10 - 1
@@ -214,7 +217,7 @@ class DatasetBuilder:
         return X, Y, label_to_ret
     
     def build_gold_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
-        df = GoldDataFetcher.get_data_by_code_and_date("Au99.99.SGE", start, end)
+        df = self.gold_data_fetcher.get_data_by_code_and_date("Au99.99.SGE", start, end)
         df = df.set_index("date").sort_index()
         ma10 = df['close'].rolling(10).mean()
         future_ret = ma10.shift(-20) / ma10 - 1

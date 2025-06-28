@@ -10,13 +10,24 @@ from app.database import get_db
 tspro = ts.pro_api()
 
 GOLD_INDEX_CODES = [
-    "Au99.95", #黄金9995
-    "Au99.99", #黄金9999
-    "iAu99.99" #国际板黄金9999
-    # 可扩展更多
+    "Au99.95",  # 黄金9995
+    "Au99.99",  # 黄金9999
+    "iAu99.99"  # 国际板黄金9999
 ]
 
+
 class GoldDataFetcher:
+    """
+    支持从 Tushare 获取黄金指数历史数据，并从数据库查询本地存储的历史数据。
+    支持传入 index_code -> DataFrame 的映射用于补充盘中估算值。
+    """
+
+    def __init__(self, additional_map: dict[str, pd.DataFrame] = None):
+        """
+        :param additional_map: 可选的 index_code -> DataFrame 映射
+        """
+        self.additional_map = additional_map or {}
+
     @staticmethod
     def fetch_sge_index_data(symbol: str, start_date: str, end_date: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         all_chunks = []
@@ -80,10 +91,9 @@ class GoldDataFetcher:
                 BaseFetcher.write_to_db_no_date(df_info, IndexInfo, db)
                 BaseFetcher.write_to_db(df_hist, IndexHist, db, drop_na_row=False)
 
-    @staticmethod
-    def get_data_by_code_and_date(code: str = None, start: str = None, end: str = None) -> pd.DataFrame:
+    def get_data_by_code_and_date(self, code: str = None, start: str = None, end: str = None) -> pd.DataFrame:
         """
-        从数据库中读取指定指数代码和日期范围的数据。
+        从数据库中读取指定指数代码和日期范围的数据，并合并该 code 对应的补充数据。
 
         :param code: 指数代码，如 "Au99.99.SGE"。若为 None，则不过滤。
         :param start: 开始日期，字符串格式 "YYYY-MM-DD"。若为 None，则不过滤。
@@ -103,4 +113,10 @@ class GoldDataFetcher:
                 query = query.filter(IndexHist.date <= end_date)
 
             df = pd.read_sql(query.statement, db.bind)
-            return df
+
+        if code and code in self.additional_map:
+            df_extra = self.additional_map[code]
+            if not df_extra.empty:
+                df = pd.concat([df, df_extra], axis=0)
+
+        return df.sort_values("date").dropna(how="all")

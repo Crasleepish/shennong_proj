@@ -786,8 +786,12 @@ def update_all_fin_data():
 
         suspend_data_synchronizer.sync_by_date(start_date=start, end_date=end)
         index_hist_synchronizer.sync_by_trade_date(start, end, ["000985.CSI", "000300.SH", "000001.SH", "399006.SZ", "000699.SH", "000905.SH", "000852.SH", "932000.CSI", "000922.CSI"])
-        CSIIndexDataFetcher.fetch_and_store_csi_index_data(start_date=start, end_date=end)
-        GoldDataFetcher.fetch_and_store_sge_index_data(start_date=start, end_date=end)
+
+        csi_index_fetcher = CSIIndexDataFetcher()
+        csi_index_fetcher.fetch_and_store_csi_index_data(start_date=start, end_date=end)
+
+        gold_data_fetcher = GoldDataFetcher()
+        gold_data_fetcher.fetch_and_store_sge_index_data(start_date=start, end_date=end)
 
         fund_info_synchronizer.sync()
         fund_hist_synchronizer.sync_by_trade_date(start_date=start, end_date=end)

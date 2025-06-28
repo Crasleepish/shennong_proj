@@ -13,7 +13,18 @@ CSI_INDEX_CODES = [
     # 可扩展更多
 ]
 
+
 class CSIIndexDataFetcher:
+    """
+    支持从 AkShare 获取中证指数历史数据，并从数据库查询本地存储的历史数据。
+    支持根据 index_code -> DataFrame 的形式传入补充数据（如盘中估算值）。
+    """
+
+    def __init__(self, additional_map: dict[str, pd.DataFrame] = None):
+        """
+        :param additional_map: 可选补充数据映射，如 { "H11001.CSI": df }
+        """
+        self.additional_map = additional_map or {}
 
     @staticmethod
     def fetch_csi_index_data(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
@@ -36,16 +47,14 @@ class CSIIndexDataFetcher:
 
         df_info = df[["index_code", "index_name"]].copy()
         df_info["market"] = "CSI"
-        df_info["index_code"] = df_info["index_code"].astype(str)
-        df_info["index_code"] = df_info["index_code"] + ".CSI"
+        df_info["index_code"] = df_info["index_code"].astype(str) + ".CSI"
         df_info = df_info.drop_duplicates()
 
         df_hist = df[["index_code", "date", "open", "close", "high", "low", "volume", "amount", "change_percent", "change"]].copy()
         df_hist = BaseFetcher.standardize_dates(df_hist, "date", "%Y-%m-%d")
         df_hist["volume"] = df_hist["volume"] * 10000     # 万手 → 股
         df_hist["amount"] = df_hist["amount"] * 1e8       # 亿元 → 元
-        df_hist["index_code"] = df_hist["index_code"].astype(str)
-        df_hist["index_code"] = df_hist["index_code"] + ".CSI"
+        df_hist["index_code"] = df_hist["index_code"].astype(str) + ".CSI"
         df_hist = df_hist.sort_values("date")
         return df_info, df_hist
 
@@ -56,11 +65,10 @@ class CSIIndexDataFetcher:
             with get_db() as db:
                 BaseFetcher.write_to_db_no_date(df_info, IndexInfo, db)
                 BaseFetcher.write_to_db(df_hist, IndexHist, db, drop_na_row=False)
-            
-    @staticmethod
-    def get_data_by_code_and_date(code: str = None, start: str = None, end: str = None) -> pd.DataFrame:
+
+    def get_data_by_code_and_date(self, code: str = None, start: str = None, end: str = None) -> pd.DataFrame:
         """
-        从数据库中读取指定指数代码和日期范围的数据。
+        从数据库中读取指定指数代码和日期范围的数据，并合并该 code 对应的补充数据。
 
         :param code: 指数代码，如 "H11001.CSI"。若为 None，则不过滤。
         :param start: 开始日期，字符串格式 "YYYY-MM-DD"。若为 None，则不过滤。
@@ -80,4 +88,10 @@ class CSIIndexDataFetcher:
                 query = query.filter(IndexHist.date <= end_date)
 
             df = pd.read_sql(query.statement, db.bind)
-            return df
+
+        if code and code in self.additional_map:
+            df_extra = self.additional_map[code]
+            if not df_extra.empty:
+                df = pd.concat([df, df_extra], axis=0)
+
+        return df.sort_values("date").dropna(how="all")

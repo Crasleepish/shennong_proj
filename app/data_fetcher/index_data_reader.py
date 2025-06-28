@@ -29,6 +29,7 @@ class IndexDataReader:
             row = db.query(IndexHist).filter(IndexHist.index_code == index_code, IndexHist.date == latest_date).first()
             return pd.DataFrame([{
                 "index_code": row.index_code,
+                "date": row.date,
                 "close": row.close,
                 "vol": row.volume,
                 "amount": row.amount

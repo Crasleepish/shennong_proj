@@ -11,14 +11,19 @@ def optimize_portfolio_realtime():
     # Step 3: 计算实时因子收益率（MKT, SMB, HML, QMJ）
     realtime_factors = calculate_intraday_factors(portfolio_returns, index_rt)
 
-    # Step 4: 读取历史因子收益率（用于特征构造）
-    historical_factors = load_historical_factor_returns()
+    # Step 4: 估算实时指数数据
+    index_to_etf = {
+        "H11001.CSI": "511010.SH",  # 中证综合债 → 国债ETF
+        "H11004.CSI": "511260.SH",  # 中证10债 → 十年国债ETF
+        "Au99.99.SGE": "518880.SH",  # 黄金 → 黄金ETF
+    }
+    est_index_values = estimate_intraday_index_value(index_to_etf)
 
-    # Step 5: 拼接特征，执行预测（模型推理）
-    predicted_returns = predict_future_returns(realtime_factors, historical_factors)
+    # Step 5: 读取历史因子收益率（用于特征构造）
+    additonal_factor_df, additonal_map = build_real_time_date(realtime_factors, est_index_values)
 
     # Step 6: 执行组合优化，输出最优资产权重
-    optimal_weights = optimize_allocation(predicted_returns)
+    optimal_weights = optimize_allocation(additonal_factor_df, additonal_map)
 
     # 输出或保存优化结果
     output_optimized_portfolio(optimal_weights)
@@ -139,15 +144,84 @@ def calculate_intraday_factors(portfolio_returns, index_rt):
 
     return pd.Series(factors)
 
-def load_historical_factor_returns():
-    """读取历史因子收益率数据，用于补充模型预测特征"""
-    # TODO: 从数据库中读取因子历史收益率（或净值），格式与因子预测模型输入一致
-    pass
 
-def predict_future_returns(realtime_factors, historical_factors):
-    """拼接历史与实时因子数据，调用模型预测未来因子收益"""
-    # TODO: 拼接特征，加载模型，执行推理，输出未来收益预测值
-    pass
+def estimate_intraday_index_value(index_to_etf: dict[str, str]) -> dict[str, float]:
+    """
+    根据ETF价格推估盘中指数点数。
+
+    :param index_to_etf: 映射字典 {index_code: etf_code}
+    :return: {index_code: estimated_intraday_value}
+    """
+    from app.data_fetcher.index_data_reader import IndexDataReader
+    from app.data_fetcher.etf_data_reader import EtfDataReader
+    from app.data_fetcher.trade_calender_reader import TradeCalendarReader
+    import pandas as pd
+    from datetime import datetime
+
+    result = {}
+    index_reader = IndexDataReader()
+    etf_reader = EtfDataReader()
+    current_trade_date = TradeCalendarReader.get_trade_dates(end=datetime.strftime(datetime.today(), "%Y%m%d"))[-1]
+
+    for index_code, etf_code in index_to_etf.items():
+        # 读取指数昨日收盘点数
+        idx_df = index_reader.fetch_latest_close_prices_from_cache(index_code)
+        if idx_df.empty:
+            continue
+        idx_close = idx_df.loc[0, "close"]
+        idx_date = pd.to_datetime(idx_df.loc[0, "date"])
+
+        # 读取ETF昨日收盘价
+        etf_df = etf_reader.fetch_latest_close_prices_from_cache(etf_code)
+        if etf_df.empty:
+            continue
+        etf_close = etf_df.loc[0, "close"]
+        etf_date = pd.to_datetime(etf_df.loc[0, "date"])
+
+        # 获取ETF实时价和日期
+        etf_rt = etf_reader.fetch_realtime_prices(etf_code)
+        if etf_rt.empty:
+            continue
+        rt_price = etf_rt.loc[0, "close"]
+        rt_date = pd.to_datetime(etf_rt.loc[0, "date"]) if "date" in etf_rt.columns else current_trade_date
+
+        # 判断是否为同一交易日：若是则说明指数尚未更新，直接返回昨日指数
+        if rt_date.date() == idx_date.date():
+            result[index_code] = idx_close
+        else:
+            ratio = rt_price / etf_close if etf_close else float("nan")
+            result[index_code] = idx_close * ratio
+
+    return result
+
+def build_real_time_date(intraday_factors, est_index_values):
+    """
+    根据实时行情构造出实时因子与估算的实时指数的数据，用于后续模型预测
+    
+    返回:
+    - additional_factor_df: 根据当前日盘中因子收益率构造的 DataFrame
+    - additional_map: dict[index_code, DataFrame] 包含估算盘中点的指数数据
+    """
+    import pandas as pd
+    from datetime import datetime
+    from app.service.portfolio_opt import calculate_intraday_factors, compute_portfolio_returns, fetch_realtime_market_data
+    from app.data_fetcher.trade_calender_reader import TradeCalendarReader
+
+    current_trade_date = TradeCalendarReader.get_trade_dates(end=datetime.strftime(datetime.today(), "%Y%m%d"))[-1]
+    additional_factor_df = pd.DataFrame([intraday_factors.values], columns=intraday_factors.index, index=[current_trade_date])
+    additional_factor_df.index.name = "date"
+
+    additional_map = {}
+    for index_code, value in est_index_values.items():
+        df = pd.DataFrame({
+            "index_code": [index_code],
+            "date": [current_trade_date],
+            "close": [value]
+        })
+        additional_map[index_code] = df
+
+    return additional_factor_df, additional_map
+
 
 def optimize_allocation(predicted_returns):
     """根据预测收益执行组合优化，输出最优权重"""

@@ -1,9 +1,6 @@
 import pandas as pd
 from app.features.macro_feature_pipeline import MacroFeaturePipeline
 from app.features.factor_feature_pipeline import FactorFeaturePipeline
-from app.features.macro_feature_builder import MacroFeatureBuilder
-from app.data_fetcher.macro_data_reader import MacroDataReader
-from app.data_fetcher.factor_data_reader import FactorDataReader
 
 class FeatureAssembler:
     """
@@ -23,10 +20,8 @@ class FeatureAssembler:
         if self.macro_pipeline:
             macro_features =  pd.DataFrame()
         else:
-            # macro_df = MacroDataReader.read_all_macro_data(start, end)
             macro_features = self.macro_pipeline.transform(macro_df)
 
-        # factor_df = FactorDataReader.read_factor_nav(start, end)
         factor_features = self.factor_pipeline.transform(data_df)
         
         if not macro_features.empty:

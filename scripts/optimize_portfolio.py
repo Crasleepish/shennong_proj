@@ -74,6 +74,70 @@ def build_bl_views(
     )
     return P, q, omega, code_list
 
+def ewma_cov(
+    ret: pd.DataFrame,
+    lambda_: float = 0.975,
+    adaptive: bool = True,
+    lambda_min: float = 0.95,
+    lambda_max: float = 0.99,
+    gamma: float = 0.025
+) -> np.ndarray:
+    """
+    自适应 EWMA 协方差估计
+
+    参数：
+        ret: 收益率 DataFrame（行=时间，列=资产）
+        lambda_: 默认衰减因子
+        adaptive: 是否启用自适应 λ
+        lambda_min/max: λ 的上下限
+        gamma: λ对短期波动的响应强度
+
+    返回：
+        协方差矩阵 ndarray
+    """
+    ret = ret.dropna(how="any")
+
+    if adaptive:
+        # 计算市场整体的短期 / 长期波动比率
+        vol_short = ret.rolling(10).std().mean(axis=1).dropna()
+        vol_long = ret.rolling(250).std().mean(axis=1).dropna()
+        common_idx = vol_short.index.intersection(vol_long.index)
+        ratio_series = (vol_short[common_idx] / vol_long[common_idx]).dropna()
+
+        if not ratio_series.empty:
+            ratio = ratio_series.iloc[-1]  # 使用最新一日的波动比
+            lambda_adapted = 1 - gamma * ratio
+            lambda_ = float(np.clip(lambda_adapted, lambda_min, lambda_max))
+
+    weights = np.array([lambda_**i for i in range(len(ret) - 1, -1, -1)])
+    weights /= weights.sum()
+
+    demeaned = ret - ret.mean()
+    weighted_outer_products = np.zeros((ret.shape[1], ret.shape[1]))
+    for i in range(len(ret)):
+        x = demeaned.iloc[i].values.reshape(-1, 1)
+        weighted_outer_products += weights[i] * (x @ x.T)
+
+    return weighted_outer_products
+
+def hybrid_cov(
+    ret: pd.DataFrame,
+    lambda_: float = 0.975,
+    alpha: float = 0.8,
+    adaptive: bool = True,
+    lambda_min: float = 0.95,
+    lambda_max: float = 0.99,
+    gamma: float = 0.025
+) -> np.ndarray:
+    """
+    混合型协方差估计器：EWMA + 历史等权协方差融合
+    参数同 ewma_cov，新增 alpha：短期占比
+    """
+    ret = ret.dropna(how="any")
+    Sigma_ewma = ewma_cov(ret, lambda_, adaptive, lambda_min, lambda_max, gamma)
+    Sigma_hist = ret.cov().values  # 长期等权
+    return alpha * Sigma_ewma + (1 - alpha) * Sigma_hist
+
 def compute_prior_mu_sigma(
     price_df: pd.DataFrame,
     window: int = 20,
@@ -100,9 +164,9 @@ def compute_prior_mu_sigma(
 
     ret = ret.dropna(how="any")
     mu_series = ret.mean()
-    Sigma = ret.cov()
+    Sigma = hybrid_cov(ret, lambda_=0.975, alpha=0.8)
     codes = mu_series.index.tolist()
-    return mu_series.values, Sigma.values, codes
+    return mu_series.values, Sigma, codes
 
 
 def compute_bl_posterior(
@@ -189,6 +253,8 @@ def optimize_mean_variance(mu: np.ndarray, cov: np.ndarray, max_variance: float)
     return weights, expected_return, expected_vol
 
 def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str, window: int = 20, view_codes: List[str] = None):
+    factor_data_reader = FactorDataReader()
+    csi_index_data_fetcher = CSIIndexDataFetcher()
     # 1. 根据不同数据来源构造资产净值矩阵
     factor_codes = [code for code, src in asset_source_map.items() if src == "factor"]
     index_codes = [code for code, src in asset_source_map.items() if src == "index"]
@@ -198,14 +264,14 @@ def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str, wi
 
     if factor_codes:
         df_beta = load_fund_betas(factor_codes).set_index("code")[["MKT", "SMB", "HML", "QMJ"]]
-        df_factors = FactorDataReader.read_daily_factors()[["MKT", "SMB", "HML", "QMJ"]].dropna()
+        df_factors = factor_data_reader.read_daily_factors()[["MKT", "SMB", "HML", "QMJ"]].dropna()
         for code in factor_codes:
             beta = df_beta.loc[code].values
             cumret = df_factors.values @ beta
             net_value_df[code] = (1 + pd.Series(cumret, index=df_factors.index)).cumprod()
 
     for code in index_codes:
-        df = CSIIndexDataFetcher.get_data_by_code_and_date(code=code)
+        df = csi_index_data_fetcher.get_data_by_code_and_date(code=code)
         df = df[["date", "close"]].dropna().set_index("date")
         df = df.sort_index()
         net_value_df[code] = df["close"]
@@ -303,7 +369,7 @@ if __name__ == '__main__':
             '020466.OF': ["MKT", "SMB", "HML", "QMJ"],
             '018732.OF': ["MKT", "SMB", "HML", "QMJ"],
         }
-        trade_date = '2025-06-24'
+        trade_date = '2025-06-20'
         window = 20
         # view_codes = ['H11004.CSI', 'Au99.99.SGE', '008114.OF', '020602.OF', '019918.OF', '002236.OF', '019311.OF', '006712.OF', '011041.OF', '110003.OF', '019702.OF', '006342.OF']
         portfolio_plan = optimize(asset_source_map, code_factors_map, trade_date, window, None)

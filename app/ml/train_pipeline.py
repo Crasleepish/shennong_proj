@@ -15,7 +15,6 @@ from sklearn.metrics import (
 )
 from sklearn.utils.class_weight import compute_sample_weight
 from app.ml.dataset_builder import DatasetBuilder
-from app.data_fetcher.factor_data_reader import FactorDataReader
 
 logger = logging.getLogger(__name__)
 
