@@ -1,6 +1,3 @@
----
-
-```markdown
 # 📈 shennong_proj: 非CAPM市场组合优化系统
 
 **shennong_proj** 是一个面向 A 股等非有效市场的组合优化系统，融合了贝叶斯推理、机器学习 α 预测、Kalman Filter 时间加权、CVaR 风控等先进方法，旨在构建稳健、可解释、实盘可部署的投资组合。
