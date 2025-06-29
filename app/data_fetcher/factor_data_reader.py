@@ -53,7 +53,7 @@ class FactorDataReader:
             else:
                 df_merged = pd.concat(dfs, axis=1).sort_index()
 
-            if self.additional_df is not None and not self.additional_df.empty:
+            if self.additional_df is not None and not self.additional_df.empty and not self.additional_df.index[-1] in df_merged.index:
                 df_merged = pd.concat([df_merged, self.additional_df], axis=0)
 
             df_merged = df_merged.sort_index()

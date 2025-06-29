@@ -36,11 +36,11 @@ def optimize_portfolio_realtime():
     #     "HML": 0.006,
     #     "QMJ": -0.001
     # }], index=[today])
-    # additonal_factor_df.index.name = "date"
     # additonal_factor_df.index = pd.to_datetime(additonal_factor_df.index, format='%Y-%m-%d').date
+    # additonal_factor_df.index.name = "date"
 
     # additonal_df = pd.DataFrame([{
-    #     "index_code": "H11001.CSI",
+    #     "index_code": "H11004.CSI",
     #     "date": today,
     #     "open": 105.55,
     #     "close": 105.55,
@@ -50,7 +50,7 @@ def optimize_portfolio_realtime():
     #     "change": 10
     # }])
     # additonal_df["date"] = pd.to_datetime(additonal_df["date"], format='%Y-%m-%d').dt.date
-    # additonal_map = {"H11001.CSI": additonal_df}
+    # additonal_map = {"H11004.CSI": additonal_df}
 
     # Step 6: 执行组合优化，输出最优资产权重
     asset_source_map = {

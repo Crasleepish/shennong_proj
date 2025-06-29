@@ -91,9 +91,9 @@ class CSIIndexDataFetcher:
 
         if code and code in self.additional_map:
             df_extra = self.additional_map[code]
-            if not df_extra.empty:
+            if not df_extra.empty and not df_extra["date"].values[0] in df["date"].values:
                 df = pd.concat([df, df_extra], axis=0)
                 df = df.reset_index(drop=True)
-                
+
 
         return df.sort_values("date").dropna(how="all")
