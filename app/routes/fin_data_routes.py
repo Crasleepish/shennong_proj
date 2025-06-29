@@ -811,4 +811,3 @@ def update_all_fin_data():
     except Exception as e:
         logger.exception(str(e))
         return jsonify({"status": "error", "message": str(e)}), 500
-    

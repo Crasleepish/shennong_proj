@@ -30,7 +30,8 @@ def predict_softprob(
     start: str,
     end: str,
     model_path: str,
-    data_start_before: int = 3100
+    data_start_before: int = 3100,
+    dataset_builder: DatasetBuilder = None
 ) -> pd.DataFrame:
     """
     对指定任务进行推理，返回 softprob 预测结果。
@@ -49,7 +50,10 @@ def predict_softprob(
         等按 task 决定。
     每行的概率和为 1，对应三分类预测的置信度分布。
     """
-    builder = DatasetBuilder()
+    if dataset_builder is None:
+        builder = DatasetBuilder()
+    else:
+        builder = dataset_builder
     build_fn_map = {
         "mkt_tri": builder.build_mkt_tri_class,
         "smb_tri": builder.build_smb_tri,
@@ -76,7 +80,7 @@ def predict_softprob(
     )
     return df_proba
 
-def get_softprob_dict(trade_date: str, horizon_days: int = 10) -> Dict[str, np.ndarray]:
+def get_softprob_dict(trade_date: str, dataset_builder: DatasetBuilder = None, horizon_days: int = 10) -> Dict[str, np.ndarray]:
     """
     返回指定交易日对应的 softprob_dict 结构，格式如下：
     {
@@ -92,7 +96,7 @@ def get_softprob_dict(trade_date: str, horizon_days: int = 10) -> Dict[str, np.n
 
     for task, path_template in TASK_MODEL_PATHS.items():
         model_path = path_template.format(MODEL_DATE)
-        df_proba = predict_softprob(task, start=start, end=end, model_path=model_path)
+        df_proba = predict_softprob(task, start=start, end=end, model_path=model_path, dataset_builder=dataset_builder)
         if df_proba.empty:
             raise ValueError(f"Softprob为空: {task} @ {trade_date}")
         last_row = df_proba.iloc[-1]
