@@ -1,4 +1,5 @@
 import os
+from api_key import LOCAL_DB_URI
 
 basedir = os.path.abspath(os.path.dirname(__file__))
 
@@ -6,6 +7,7 @@ class Config:
     # Use an environment variable if set, otherwise fall back to a default URI.
     SQLALCHEMY_DATABASE_URI = os.environ.get(
         'DATABASE_URI',
+        LOCAL_DB_URI
     )
     # Set echo to True if you want to log SQL statements (helpful in development)
     SQLALCHEMY_ECHO = False
@@ -55,6 +57,7 @@ class TestConfig(Config):
     # Use an in-memory SQLite database for tests.
     SQLALCHEMY_DATABASE_URI = os.environ.get(
         'DATABASE_URI',
+        LOCAL_DB_URI
     )
     SQLALCHEMY_ECHO = True
     LOGGING_CONFIG = {
