@@ -1,0 +1,15 @@
+services:
+  shennong:
+    image: shennong-proj:1.0.0
+    container_name: shennong-proj
+    ports:
+      - "80:5000"
+    volumes:
+      - ./bt_result:/app/bt_result
+      - ./ml_results:/app/ml_results
+      - ./models:/app/models
+      - ./output:/app/output
+      - ./.cache:/app/.cache
+      - ./api_key.py:/app/api_key.py
+      - ./app:/app/app
+    restart: always

@@ -1,5 +1,6 @@
 import os
 from api_key import LOCAL_DB_URI
+from api_key import LOG_LEVEL, SQLALCHEMY_LOG_LEVEL
 
 basedir = os.path.abspath(os.path.dirname(__file__))
 
@@ -29,24 +30,27 @@ class Config:
             'console': {
                 'class': 'logging.StreamHandler',
                 'formatter': 'default',
-                'level': 'DEBUG'
+                'level': LOG_LEVEL
             },
             'file': {
-                'class': 'logging.FileHandler',
-                'filename': os.path.join(basedir, 'app.log'),
+                'class': 'logging.handlers.TimedRotatingFileHandler',
+                'filename': os.path.join(basedir, 'log', 'app.log'),
+                'when': 'midnight',
+                'backupCount': 7,
+                'encoding': 'utf-8',
                 'formatter': 'default',
-                'level': 'DEBUG'
+                'level': LOG_LEVEL
             }
         },
         'root': {
             'handlers': ['console', 'file'],
-            'level': 'DEBUG'
+            'level': LOG_LEVEL
         },
         'loggers': {
             # For SQLAlchemy engine logging, set a higher log level to avoid verbose output.
             'sqlalchemy.engine': {
                 'handlers': ['console', 'file'],
-                'level': 'INFO',
+                'level': SQLALCHEMY_LOG_LEVEL,
                 'propagate': False
             }
         }
