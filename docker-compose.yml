@@ -1,7 +1,9 @@
 services:
   shennong:
-    image: shennong-proj:1.0.0
+    image: 127.0.0.1:15000/shennong-proj:1.0.0
     container_name: shennong-proj
+    networks:
+      - shennong-net
     ports:
       - "80:5000"
     volumes:
@@ -11,5 +13,9 @@ services:
       - ./output:/app/output
       - ./.cache:/app/.cache
       - ./api_key.py:/app/api_key.py
-      - ./app:/app/app
+      - ./app/log:/app/app/log
     restart: always
+
+networks:
+  shennong-net:
+    external: true

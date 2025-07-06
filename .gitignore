@@ -1,8 +1,6 @@
 .pytest_cache
 **/__pycache__/
-/app/*.log
-result/*.*
-result/*.*
+/app/log/*.*
 .cache
 result
 output

@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+bt_result/
+ml_results/
+models/
+output/
+.cache/
+tests/__pycache__/
+*.log
+*.pkl
+.idea/
+.vscode/

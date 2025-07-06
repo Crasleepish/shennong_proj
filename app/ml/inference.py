@@ -6,6 +6,13 @@ import pandas as pd
 from typing import Literal, Dict
 from app.ml.dataset_builder import DatasetBuilder
 from datetime import datetime
+from datetime import date as date_cls
+import calendar
+import os
+from app.ml.train_pipeline import run_all_models
+import logging
+
+logger = logging.getLogger(__name__)
 
 # 模型路径模板常量
 TASK_MODEL_PATHS = {
@@ -17,7 +24,18 @@ TASK_MODEL_PATHS = {
     "gold_tri": "./models/gold_tri/model_{0}.pkl",
 }
 
-MODEL_DATE = "2024-06-30"
+def get_last_day_of_prev_month(date: date_cls) -> date_cls:
+    """
+    输入一个 datetime.date 对象，返回该日期的上一个自然月的最后一天。
+    例如：2024-07-06 → 2024-06-30
+    """
+    # 如果当前月是1月，则上一个月是上一年的12月
+    year = date.year if date.month > 1 else date.year - 1
+    month = date.month - 1 if date.month > 1 else 12
+
+    # 获取上一个月的最后一天
+    last_day = calendar.monthrange(year, month)[1]
+    return date_cls(year, month, last_day)
 
 def load_model_and_features(model_path: str):
     model_bundle = joblib.load(model_path)
@@ -94,8 +112,13 @@ def get_softprob_dict(trade_date: str, dataset_builder: DatasetBuilder = None, h
     start = horizon_start.strftime("%Y-%m-%d")
     end = trade_date
 
+    model_date = get_last_day_of_prev_month(datetime.today()).strftime("%Y-%m-%d")
+
     for task, path_template in TASK_MODEL_PATHS.items():
-        model_path = path_template.format(MODEL_DATE)
+        model_path = path_template.format(model_date)
+        if os.path.exists(model_path) == False:
+            logging.warning(f"模型文件不存在: {model_path}, 先进行训练...")
+            run_all_models(start="2007-12-01", split_date=None, end=model_date, need_test=False)
         df_proba = predict_softprob(task, start=start, end=end, model_path=model_path, dataset_builder=dataset_builder)
         if df_proba.empty:
             raise ValueError(f"Softprob为空: {task} @ {trade_date}")
@@ -111,8 +134,12 @@ def get_label_to_ret() -> Dict[str, tuple]:
     返回结构：{ 'MKT': (ret0, ret1, ret2), ... }
     """
     label_to_ret = {}
+    model_date = get_last_day_of_prev_month(datetime.today()).strftime("%Y-%m-%d")
     for task, path_template in TASK_MODEL_PATHS.items():
-        model_path = path_template.format(MODEL_DATE)
+        model_path = path_template.format(model_date)
+        if os.path.exists(model_path) == False:
+            logging.warning(f"模型文件不存在: {model_path}, 先进行训练...")
+            run_all_models(start="2007-12-01", split_date=None, end=model_date, need_test=False)
         bundle = joblib.load(model_path)
         if "label_to_ret" not in bundle:
             raise ValueError(f"模型文件缺失 label_to_ret: {model_path}")
