@@ -9,6 +9,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.font_manager import FontProperties
 from app.data_fetcher.factor_data_reader import FactorDataReader
+from app.data_fetcher.csi_index_data_fetcher import CSIIndexDataFetcher
 from app.ml.inference import predict_softprob
 import joblib
 
@@ -18,6 +19,7 @@ app = create_app()
 logger = logging.getLogger(__name__)
 
 factor_data_reader = FactorDataReader()
+csi_index_data_fetcher = CSIIndexDataFetcher()
 
 # 设置字体路径
 font_path = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
@@ -202,13 +204,13 @@ def plot_nav_ratio_with_predictions(
         plt.show()
 
 def run_predict_and_export():
-    start="2024-01-01"
-    end="2025-06-17"
+    start="2017-11-01"
+    end="2018-12-31"
     df_prob = predict_softprob(
         task="smb_tri",
         start=start,
         end=end,
-        model_path="./models/smb_tri/model_2024-06-30.pkl"
+        model_path="./models/smb_tri/model_2017-10-31.pkl"
     )
 
     df_prob.index.name = "date"
@@ -230,6 +232,8 @@ def run_predict_and_export():
     # )
     df_ret = factor_data_reader.read_daily_factors(start, end)[["SMB"]].dropna()
     df_nav = (df_ret + 1).cumprod()
+    # df_nav = csi_index_data_fetcher.get_data_by_code_and_date("H11004.CSI", start, end)
+    # df_nav = df_nav.set_index("date").sort_index()[["close"]].dropna()
     plot_cumulative_nav_with_predictions(
         df_nav,
         start=start,
@@ -237,7 +241,7 @@ def run_predict_and_export():
         factor="SMB",
         pred_df=df_out,
         mean=5,
-        title="SMB 累计净值曲线(预测类别点标注)",
+        title="smb 累计净值曲线(预测类别点标注)",
         save_path="./ml_results/smb_nav_plot_with_preds.png"
     )
 

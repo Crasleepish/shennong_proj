@@ -112,7 +112,7 @@ def get_softprob_dict(trade_date: str, dataset_builder: DatasetBuilder = None, h
     start = horizon_start.strftime("%Y-%m-%d")
     end = trade_date
 
-    model_date = get_last_day_of_prev_month(datetime.today()).strftime("%Y-%m-%d")
+    model_date = get_last_day_of_prev_month(datetime.strptime(end, "%Y-%m-%d")).strftime("%Y-%m-%d")
 
     for task, path_template in TASK_MODEL_PATHS.items():
         model_path = path_template.format(model_date)
@@ -128,13 +128,13 @@ def get_softprob_dict(trade_date: str, dataset_builder: DatasetBuilder = None, h
 
     return softprob_dict
 
-def get_label_to_ret() -> Dict[str, tuple]:
+def get_label_to_ret(trade_date: str) -> Dict[str, tuple]:
     """
     加载每个三分类模型的 label_to_ret（用于观点收益映射）
     返回结构：{ 'MKT': (ret0, ret1, ret2), ... }
     """
     label_to_ret = {}
-    model_date = get_last_day_of_prev_month(datetime.today()).strftime("%Y-%m-%d")
+    model_date = get_last_day_of_prev_month(datetime.strptime(trade_date, "%Y-%m-%d")).strftime("%Y-%m-%d")
     for task, path_template in TASK_MODEL_PATHS.items():
         model_path = path_template.format(model_date)
         if os.path.exists(model_path) == False:

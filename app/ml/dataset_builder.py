@@ -2,6 +2,7 @@
 
 import pandas as pd
 import numpy as np
+from scipy.stats import norm
 from typing import Tuple
 from app.features.macro_feature_pipeline import MacroFeaturePipeline
 from app.features.factor_feature_pipeline import FactorFeaturePipeline
@@ -119,11 +120,44 @@ class DatasetBuilder:
         q01, q99 = series.quantile(0.01), series.quantile(0.99)
         return series[(series >= q01) & (series <= q99)].mean()
 
-    def compute_label_to_ret(self, future_ret: pd.Series, lower: float, upper: float) -> Tuple[float, float, float]:
-        ret0 = self.safe_mean(future_ret[future_ret < lower])
-        ret1 = self.safe_mean(future_ret[(future_ret >= lower) & (future_ret <= upper)])
-        ret2 = self.safe_mean(future_ret[future_ret > upper])
-        return (ret0, ret1, ret2)
+    def compute_label_to_ret(self, future_ret: pd.Series, alpha: float) -> Tuple[float, float, float]:
+        """
+        基于整体收益率服从正态分布的假设，计算三分类标签对应的理论期望值（label_to_ret）。
+
+        参数：
+        - future_ret: pd.Series，未来收益率序列
+        - alpha: float，用于分界（μ ± alpha × σ）
+
+        返回：
+        - ret0: 标签0（下跌）对应的期望收益
+        - ret1: 标签1（中性）对应的期望收益
+        - ret2: 标签2（上涨）对应的期望收益
+        """
+        mu = future_ret.mean()
+        sigma = future_ret.std()
+        if sigma == 0 or not pd.notna(sigma):
+            return mu, mu, mu  # 防止除零或NaN传播
+
+        # 下跌区间：E[X | X < μ - ασ]
+        z0 = -alpha
+        phi0 = norm.pdf(z0)
+        Phi0 = norm.cdf(z0)
+        E0 = mu + sigma * (-phi0 / Phi0)
+
+        # 中性区间：E[X | μ - ασ ≤ X ≤ μ + ασ]
+        z1, z2 = -alpha, alpha
+        phi1, phi2 = norm.pdf(z1), norm.pdf(z2)
+        Phi1, Phi2 = norm.cdf(z1), norm.cdf(z2)
+        middle_weight = Phi2 - Phi1
+        E1 = mu + sigma * (phi1 - phi2) / middle_weight
+
+        # 上涨区间：E[X | X > μ + ασ]
+        z3 = alpha
+        phi3 = norm.pdf(z3)
+        Phi3 = norm.cdf(z3)
+        E2 = mu + sigma * (phi3 / (1 - Phi3))
+
+        return E0, E1, E2
 
     def _build_dataset(self, data_df, factor_plan: dict, target_series: pd.Series, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
         assembler = FeatureAssembler(macro_feature_plan=self.macro_plan, data_feature_plan=factor_plan)
@@ -163,7 +197,7 @@ class DatasetBuilder:
         lower = future_ret.mean() - 0.67 * future_ret.std()
         upper = future_ret.mean() + 0.67 * future_ret.std()
         target = self.label_three_class(future_ret, lower=lower, upper=upper)
-        label_to_ret = self.compute_label_to_ret(future_ret, lower, upper)
+        label_to_ret = self.compute_label_to_ret(future_ret, alpha=0.67)
         X, Y = self._build_dataset(df, self.mkt_plan, target, start, end, vif, inference)
         return X, Y, label_to_ret
 
@@ -175,7 +209,7 @@ class DatasetBuilder:
         lower = future_ret.mean() - 0.67 * future_ret.std()
         upper = future_ret.mean() + 0.67 * future_ret.std()
         target = self.label_three_class(future_ret, lower=lower, upper=upper)
-        label_to_ret = self.compute_label_to_ret(future_ret, lower, upper)
+        label_to_ret = self.compute_label_to_ret(future_ret, alpha=0.67)
         X, Y = self._build_dataset(df, self.smb_plan, target, start, end, vif, inference)
         return X, Y, label_to_ret
 
@@ -187,7 +221,7 @@ class DatasetBuilder:
         lower = future_ret.mean() - 0.67 * future_ret.std()
         upper = future_ret.mean() + 0.67 * future_ret.std()
         target = self.label_three_class(future_ret, lower=lower, upper=upper)
-        label_to_ret = self.compute_label_to_ret(future_ret, lower, upper)
+        label_to_ret = self.compute_label_to_ret(future_ret, alpha=0.67)
         X, Y = self._build_dataset(df, self.smb_plan, target, start, end, vif, inference)
         return X, Y, label_to_ret
 
@@ -199,7 +233,7 @@ class DatasetBuilder:
         lower = future_ret.mean() - 0.67 * future_ret.std()
         upper = future_ret.mean() + 0.67 * future_ret.std()
         target = self.label_three_class(future_ret, lower=lower, upper=upper)
-        label_to_ret = self.compute_label_to_ret(future_ret, lower, upper)
+        label_to_ret = self.compute_label_to_ret(future_ret, alpha=0.67)
         X, Y = self._build_dataset(df, self.qmj_plan, target, start, end, vif, inference)
         return X, Y, label_to_ret
     
@@ -212,7 +246,7 @@ class DatasetBuilder:
         lower = future_ret.mean() - 0.67 * future_ret.std()
         upper = future_ret.mean() + 0.67 * future_ret.std()
         target = self.label_three_class(future_ret, lower=lower, upper=upper)
-        label_to_ret = self.compute_label_to_ret(future_ret, lower, upper)
+        label_to_ret = self.compute_label_to_ret(future_ret, alpha=0.67)
         X, Y = self._build_dataset(df, self.bond_plan, target, start, end, vif, inference)
         return X, Y, label_to_ret
     
@@ -225,7 +259,7 @@ class DatasetBuilder:
         lower = future_ret.mean() - 0.67 * future_ret.std()
         upper = future_ret.mean() + 0.67 * future_ret.std()
         target = self.label_three_class(future_ret, lower=lower, upper=upper)
-        label_to_ret = self.compute_label_to_ret(future_ret, lower, upper)
+        label_to_ret = self.compute_label_to_ret(future_ret, alpha=0.67)
         X, Y = self._build_dataset(df, self.gold_plan, target, start, end, vif, inference)
         return X, Y, label_to_ret
 

@@ -9,12 +9,14 @@ from app.ml.inference import get_softprob_dict, get_label_to_ret
 from scipy.optimize import minimize
 from app.ml.dataset_builder import DatasetBuilder
 
+FUND_BETA_PATH = "output/fund_factors.csv"
+
 def load_fund_betas(codes: List[str]) -> pd.DataFrame:
     """
     从 output/fund_factors.csv 中读取指定 code 的因子暴露数据。
     返回包含 ['code', 'MKT', 'SMB', 'HML', 'QMJ'] 的 DataFrame。
     """
-    df = pd.read_csv("output/fund_factors.csv")
+    df = pd.read_csv(FUND_BETA_PATH)
     df = df[df["code"].isin(codes)].reset_index(drop=True)
     return df[["code", "MKT", "SMB", "HML", "QMJ"]]
 
@@ -22,14 +24,16 @@ def build_bl_views(
     code_type_map: dict,
     code_factors_map: dict,
     trade_date: str,
+    mu_prior: dict,
     dataset_builder: DatasetBuilder = None
 ) -> Tuple:
     """
     构造 Black-Litterman 所需的观点：P, q, omega, code_list。
     """
     softprob_dict = get_softprob_dict(trade_date, dataset_builder=dataset_builder)
-    label_to_ret = get_label_to_ret()
-    df_beta_all = load_fund_betas(list(code_type_map.keys()))
+    label_to_ret = get_label_to_ret(trade_date)
+    factor_type_keys = [k for k, v in code_type_map.items() if v == "factor"]
+    df_beta_all = load_fund_betas(factor_type_keys)
 
     # 收集所有出现过的因子，并排序统一列顺序
     all_factors = sorted({f for fs in code_factors_map.values() for f in fs})
@@ -60,8 +64,8 @@ def build_bl_views(
         df_beta=df_beta,
         softprob_dict=softprob_dict,
         label_to_ret=label_to_ret,
-        asset_codes=list(code_type_map.keys()),
-        top_k=min(20, len(code_type_map))
+        mu_prior=mu_prior,
+        asset_codes=list(code_type_map.keys())
     )
     return P, q, omega, code_list
 
@@ -125,6 +129,8 @@ def hybrid_cov(
     参数同 ewma_cov，新增 alpha：短期占比
     """
     ret = ret.dropna(how="any")
+    if alpha == 0:
+        return ret.cov().values
     Sigma_ewma = ewma_cov(ret, lambda_, adaptive, lambda_min, lambda_max, gamma)
     Sigma_hist = ret.cov().values  # 长期等权
     return alpha * Sigma_ewma + (1 - alpha) * Sigma_hist
@@ -155,10 +161,56 @@ def compute_prior_mu_sigma(
 
     ret = ret.dropna(how="any")
     mu_series = ret.mean()
-    Sigma = hybrid_cov(ret, lambda_=0.975, alpha=0.8)
+    Sigma = hybrid_cov(ret, lambda_=0.975, alpha=0.0, adaptive=False)
     codes = mu_series.index.tolist()
     return mu_series.values, Sigma, codes
 
+def compute_prior_mu_fixed_window(
+    price_df: pd.DataFrame,
+    window: int = 20,
+    lookback_days: int = 252,
+    method: str = "linear"
+) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+    """
+    基于最近一整年的滑动收益率样本构造先验期望收益
+    支持冷启动：若历史不足一年则用所有可用数据
+
+    参数：
+        price_df: 行为日期，列为资产，值为价格（建议为daily close）
+        window: 每段收益期的天数（如20）
+        lookback_days: 向前回溯的自然日长度（如252个自然日）
+        method: 'log' or 'linear'，收益率计算方式
+
+    返回：
+        mu_series: 先验期望收益
+    """
+    required_len = lookback_days + window
+    n_obs = len(price_df)
+
+    if n_obs < window + 5:
+        raise ValueError(f"数据太少，无法构造有效滚动收益样本（至少 {window + 5} 行）")
+
+    # 冷启动：若不足一年则用全部数据；否则截取最近一年
+    if n_obs >= required_len:
+        recent_prices = price_df.iloc[-required_len:].copy()
+    else:
+        recent_prices = price_df.copy()
+
+    # 计算滚动收益率
+    if method == "log":
+        log_price = np.log(recent_prices)
+        ret = log_price.diff(periods=window)
+    elif method == "linear":
+        ret = recent_prices.pct_change(periods=window)
+    else:
+        raise ValueError("method must be 'log' or 'linear'")
+
+    ret = ret.dropna(how="any")
+
+    # 均值和协方差
+    mu_series = ret.mean()
+
+    return mu_series
 
 def compute_bl_posterior(
     mu_prior: np.ndarray,
