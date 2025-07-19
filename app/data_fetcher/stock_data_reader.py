@@ -24,20 +24,19 @@ class StockDataReader:
         self._last_cache_filter_key = None
         self._ts_pro = ts.pro_api()
 
-    def _get_current_trade_date(self) -> pd.Timestamp:
+    def _get_current_trade_date(self, offset = 0) -> pd.Timestamp:
         today = pd.Timestamp.today().normalize()
         trade_dates = TradeCalendarReader.get_trade_dates(end=today.strftime("%Y-%m-%d"))
-        return trade_dates[-1] if today not in trade_dates else today
+        return trade_dates[-1 + offset]
 
     def _get_adj_factors(self, trade_date: pd.Timestamp) -> pd.DataFrame:
         trade_date_str = trade_date.strftime("%Y%m%d")
         return self._ts_pro.adj_factor(trade_date=trade_date_str)
     
-    def fetch_latest_close_prices(self, exchange_filter=None, list_status_filter=None) -> pd.DataFrame:
+    def fetch_latest_close_prices(self, exchange_filter=None, list_status_filter=None, latest_trade_date = None) -> pd.DataFrame:
+        if latest_trade_date is None:
+            latest_trade_date = self._get_current_trade_date()
         with get_db() as db:
-            # 获取当前交易日 T 日
-            trade_date = self._get_current_trade_date()
-
             shu = aliased(StockHistUnadj)
             si = aliased(StockInfo)
             af = aliased(AdjFactor)
@@ -52,8 +51,13 @@ class StockDataReader:
                 .where(shu.stock_code == si.stock_code)
                 .order_by(desc(shu.date))
                 .limit(1)
-                .lateral()
+                .correlate(si)
             )
+
+            if latest_trade_date:
+                latest_hist_subq = latest_hist_subq.where(shu.date <= latest_trade_date)
+
+            latest_hist_subq = latest_hist_subq.lateral()
 
             # 子查询 2：该日复权因子（stock_code + date）
             adj_factor_subq = (
@@ -87,7 +91,7 @@ class StockDataReader:
                 stmt = stmt.where(si.exchange.in_(exchange_filter))
             if list_status_filter:
                 stmt = stmt.where(si.list_status.in_(list_status_filter))
-
+            
             # PostgreSQL 需要字面量 SQL 来完全复制 psql 逻辑（可选）
             compiled = stmt.compile(dialect=dialect(), compile_kwargs={"literal_binds": True})
             sql_str = str(compiled)
@@ -100,7 +104,7 @@ class StockDataReader:
             return df
         
         # 拉取 T 日复权因子
-        adj_factor_T_df = self._get_adj_factors(trade_date)
+        adj_factor_T_df = self._get_adj_factors(latest_trade_date)
         adj_T_map = dict(zip(adj_factor_T_df.ts_code, adj_factor_T_df.adj_factor))
 
         missing_codes = []
@@ -123,7 +127,7 @@ class StockDataReader:
 
         self._last_df_cache = df
         self._last_cache_time = pd.Timestamp.now()
-        self._last_cache_trade_date = trade_date
+        self._last_cache_trade_date = latest_trade_date
         self._last_cache_filter_key = (tuple(exchange_filter or []), tuple(list_status_filter or []))
 
         return df[[
@@ -131,17 +135,18 @@ class StockDataReader:
             "adj_close", "total_shares"
         ]].rename(columns={"adj_close": "close"}).dropna(subset=["stock_code", "close"])
     
-    def fetch_latest_close_prices_from_cache(self, exchange_filter=None, list_status_filter=None) -> pd.DataFrame:
-        trade_date = self._get_current_trade_date()
+    def fetch_latest_close_prices_from_cache(self, exchange_filter=None, list_status_filter=None, latest_trade_date=None) -> pd.DataFrame:
+        if latest_trade_date is None:
+            latest_trade_date = self._get_current_trade_date()
         current_key = (tuple(exchange_filter or []), tuple(list_status_filter or []))
 
         if (
             self._last_df_cache is None or
-            self._last_cache_trade_date != trade_date or
+            self._last_cache_trade_date != latest_trade_date or
             self._last_cache_filter_key != current_key
         ):
             logger.warning("缓存未命中，重新获取数据...")
-            return self.fetch_latest_close_prices(exchange_filter, list_status_filter)
+            return self.fetch_latest_close_prices(exchange_filter, list_status_filter, latest_trade_date)
 
         return self._last_df_cache
 

@@ -4,6 +4,16 @@ import os
 import pandas as pd
 from app.data_fetcher.trade_calender_reader import TradeCalendarReader
 from datetime import datetime
+from app.models.service_models import PortfolioWeights
+from app.database import get_db
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+POST_VIEW_TAU = 0.07
+alpha = 0.1  # EWMA 平滑因子，可调
+portfolio_id = 1
 
 def optimize_portfolio_realtime():
     """
@@ -68,6 +78,7 @@ def optimize_portfolio_realtime():
         '006342.OF': 'factor',
         '020466.OF': 'factor',
         '018732.OF': 'factor',
+        '270004.OF': 'cash',
     }
     code_factors_map = {
         "H11004.CSI": ["10YBOND"], 
@@ -85,13 +96,14 @@ def optimize_portfolio_realtime():
         '020466.OF': ["MKT", "SMB", "HML", "QMJ"],
         '018732.OF': ["MKT", "SMB", "HML", "QMJ"],
     }
+    view_codes = ["H11004.CSI", "Au99.99.SGE", "008114.OF", "020602.OF", "019918.OF", "002236.OF", "019311.OF", "006712.OF", "011041.OF", "110003.OF", "019702.OF", "006342.OF", "020466.OF", "018732.OF"]
     trade_date = datetime.strftime(TradeCalendarReader.get_trade_dates(end=datetime.strftime(datetime.today(), "%Y%m%d"))[-1], "%Y-%m-%d")
-    portfolio_plan = optimize_allocation(additonal_factor_df, additonal_map, asset_source_map, code_factors_map, trade_date)
+    portfolio_plan = optimize_allocation(additonal_factor_df, additonal_map, asset_source_map, code_factors_map, trade_date, view_codes)
 
     # 输出或保存优化结果
-    output_optimized_portfolio(portfolio_plan)
+    w_smooth = output_optimized_portfolio(portfolio_plan)
 
-    return portfolio_plan
+    return w_smooth
 
 # --- 各子函数定义区域 ---
 
@@ -143,9 +155,16 @@ def compute_portfolio_returns(market_data):
     price_map_rt = market_data.set_index("stock_code")["close"].to_dict()
 
     # 获取昨日收盘价（缓存数据）
+    today = datetime.now().date()
+    latest_trade_date = TradeCalendarReader.get_trade_dates(end=today.strftime("%Y-%m-%d"))[-2]  #T-1日期
     stock_reader = StockDataReader()
-    price_df_yesterday = stock_reader.fetch_latest_close_prices_from_cache()
+    price_df_yesterday = stock_reader.fetch_latest_close_prices_from_cache(latest_trade_date=latest_trade_date)
     price_map_yesterday = price_df_yesterday.set_index("stock_code")["close"].to_dict()
+
+    # 实时数据中不包含停牌退市数据，根据历史数据补充
+    for yesterday_key in price_map_yesterday:
+        if yesterday_key not in price_map_rt:
+            price_map_rt[yesterday_key] = price_map_yesterday[yesterday_key]
 
     result = {}
 
@@ -184,8 +203,10 @@ def calculate_intraday_factors(portfolio_returns, index_rt):
         return g1.mean() - g2.mean() if not g1.empty and not g2.empty else float("nan")
 
     # 获取中证全指昨日收盘价
+    today = datetime.now().date()
+    latest_trade_date = TradeCalendarReader.get_trade_dates(end=today.strftime("%Y-%m-%d"))[-2]  #T-1日期
     index_reader = IndexDataReader()
-    index_close_df = index_reader.fetch_latest_close_prices_from_cache("000985.CSI")
+    index_close_df = index_reader.fetch_latest_close_prices_from_cache("000985.CSI", latest_trade_date=latest_trade_date)
     pre_close = index_close_df.loc[0, "close"]
     today_close = index_rt.loc[0, "close"]
 
@@ -219,20 +240,22 @@ def estimate_intraday_index_value(index_to_etf: dict[str, str]) -> dict[str, flo
     from app.data_fetcher.etf_data_reader import EtfDataReader
 
     result = {}
+    today = datetime.now().date()
+    latest_trade_date = TradeCalendarReader.get_trade_dates(end=today.strftime("%Y-%m-%d"))[-2]  #T-1日期
     index_reader = IndexDataReader()
     etf_reader = EtfDataReader()
     current_trade_date = TradeCalendarReader.get_trade_dates(end=datetime.strftime(datetime.today(), "%Y%m%d"))[-1]
 
     for index_code, etf_code in index_to_etf.items():
         # 读取指数昨日收盘点数
-        idx_df = index_reader.fetch_latest_close_prices_from_cache(index_code)
+        idx_df = index_reader.fetch_latest_close_prices_from_cache(index_code, latest_trade_date=latest_trade_date)
         if idx_df.empty:
             continue
         idx_close = idx_df.loc[0, "close"]
         idx_date = pd.to_datetime(idx_df.loc[0, "date"])
 
         # 读取ETF昨日收盘价
-        etf_df = etf_reader.fetch_latest_close_prices_from_cache(etf_code)
+        etf_df = etf_reader.fetch_latest_close_prices_from_cache(etf_code, latest_trade_date=latest_trade_date)
         if etf_df.empty:
             continue
         etf_close = etf_df.loc[0, "close"]
@@ -246,7 +269,11 @@ def estimate_intraday_index_value(index_to_etf: dict[str, str]) -> dict[str, flo
         rt_date = pd.to_datetime(etf_rt.loc[0, "date"]) if "date" in etf_rt.columns else current_trade_date
 
         # 判断是否为同一交易日：若是则说明指数尚未更新，直接返回昨日指数
+        if idx_date.date() != etf_date.date():
+            logging.error(f"指数和ETF数据未同步，请确保二者最新数据更新到同一日期")
+            raise Exception("指数和ETF数据未同步")
         if rt_date.date() == idx_date.date():
+            # 若是同一交易日则说明实时行情已收盘，直接返回最新指数
             result[index_code] = (idx_close, idx_close)
         else:
             ratio = rt_price / etf_close if etf_close else float("nan")
@@ -303,7 +330,7 @@ def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict
     from app.data_fetcher.csi_index_data_fetcher import CSIIndexDataFetcher
     from app.ml.dataset_builder import DatasetBuilder
     from app.dao.fund_info_dao import FundHistDao
-    from app.ml.black_litterman_opt_util import load_fund_betas, compute_prior_mu_sigma, build_bl_views, compute_bl_posterior, optimize_mean_variance
+    from app.ml.black_litterman_opt_util import load_fund_betas, compute_prior_mu_sigma, compute_prior_mu_fixed_window, build_bl_views, compute_bl_posterior, optimize_mean_variance
 
     factor_data_reader = FactorDataReader(additional_df=additional_factor_df)
     csi_index_data_fetcher = CSIIndexDataFetcher(additional_map=additional_map)
@@ -312,12 +339,13 @@ def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict
     factor_codes = [code for code, src in asset_source_map.items() if src == "factor"]
     index_codes = [code for code, src in asset_source_map.items() if src == "index"]
     hist_codes = [code for code, src in asset_source_map.items() if src == "hist"]
+    cash_codes = [code for code, src in asset_source_map.items() if src == "cash"]
 
     net_value_df = pd.DataFrame()
 
     if factor_codes:
         df_beta = load_fund_betas(factor_codes).set_index("code")[["MKT", "SMB", "HML", "QMJ"]]
-        df_factors = factor_data_reader.read_daily_factors()[["MKT", "SMB", "HML", "QMJ"]].dropna()
+        df_factors = factor_data_reader.read_daily_factors(end=trade_date)[["MKT", "SMB", "HML", "QMJ"]].dropna()
         for code in factor_codes:
             beta = df_beta.loc[code].values
             cumret = df_factors.values @ beta
@@ -334,21 +362,25 @@ def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict
         df = dao.select_dataframe_by_code(code)
         df = df[["date", "net_value"]].dropna().set_index("date").sort_index()
         net_value_df[code] = df["net_value"]
+    
+    for code in cash_codes:
+        df = dao.select_dataframe_by_code(code)
+        df = df[["date", "net_value"]].dropna().set_index("date").sort_index()
+        net_value_df[code] = df["net_value"]
 
-    net_value_df = net_value_df.dropna(how="any").sort_index()
-    fund_codes = list(asset_source_map.keys())
+    net_value_df = net_value_df.ffill().sort_index()
 
     # 2. 构造先验收益与协方差矩阵（使用净值曲线）
     mu_prior, Sigma, code_list_mu = compute_prior_mu_sigma(net_value_df, window=20, method="linear")
 
-    # 3. 构造观点（P, q, omega）（仅使用 view_codes 子集）
-    if not view_codes:
-        view_asset_source_map = asset_source_map
-        view_code_factors_map = code_factors_map
-    else:
-        view_asset_source_map = {code: asset_source_map[code] for code in view_codes if code in asset_source_map}
-        view_code_factors_map = {code: code_factors_map[code] for code in view_codes if code in code_factors_map}
-    P, q, omega, code_list_view = build_bl_views(view_asset_source_map, view_code_factors_map, trade_date, dataset_builder)
+    # 计算现金类资产的平均收益仅用滚动最近一年的数据进行计算，由于计算方式与其它资产不同，这里单独处理
+    cash_net_value_df = net_value_df[cash_codes]
+    cash_mu_series = compute_prior_mu_fixed_window(cash_net_value_df, window=20, lookback_days=252, method="linear")
+    cash_mu_idx = [code_list_mu.index(x) for x in cash_codes]
+    for cash_code_idx, fund_code_idx in enumerate(cash_mu_idx):
+        mu_prior[fund_code_idx] = cash_mu_series[cash_codes[cash_code_idx]]
+    
+    fund_codes = list(asset_source_map.keys())
 
     # 对齐 mu_prior 和 Sigma 的顺序与 fund_codes 保持一致
     # code_index_map = {code: i for i, code in enumerate(code_list_mu)}
@@ -356,25 +388,38 @@ def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict
     mu_prior_full = mu_prior[fund_indices]
     Sigma_full = Sigma[np.ix_(fund_indices, fund_indices)]
 
-    # 提取观点相关子集，将先验mu和Sigma调整与顺序与code_list_view一致
-    view_indices = [fund_codes.index(code) for code in code_list_view]
-    mu_prior_view = mu_prior_full[view_indices]
-    Sigma_view = Sigma_full[np.ix_(view_indices, view_indices)]
+    if POST_VIEW_TAU > 0:
+        # 3. 构造观点（P, q, omega）（仅使用 view_codes 子集）
+        if not view_codes:
+            view_asset_source_map = asset_source_map
+            view_code_factors_map = code_factors_map
+        else:
+            view_asset_source_map = {code: asset_source_map[code] for code in view_codes if code in asset_source_map}
+            view_code_factors_map = {code: code_factors_map[code] for code in view_codes if code in code_factors_map}
+        P, q, omega, code_list_view = build_bl_views(view_asset_source_map, view_code_factors_map, trade_date, dict(zip(code_list_mu, mu_prior)), dataset_builder)
 
-    # 计算后验收益率（仅观点子集）
-    mu_post_view = compute_bl_posterior(
-        mu_prior=mu_prior_view,
-        Sigma=Sigma_view,
-        P=P,
-        q=q,
-        omega=omega,
-        tau=0.2
-    )
+        # 提取观点相关子集，将先验mu和Sigma调整与顺序与code_list_view一致
+        view_indices = [fund_codes.index(code) for code in code_list_view]
+        mu_prior_view = mu_prior_full[view_indices]
+        Sigma_view = Sigma_full[np.ix_(view_indices, view_indices)]
 
-    # 将后验结果更新到完整序列中，顺序与fund_codes保持一致
-    mu_post_full = mu_prior_full.copy()
-    for i, idx in enumerate(view_indices):
-        mu_post_full[idx] = mu_post_view[i]
+        # 计算后验收益率（仅观点子集）
+        mu_post_view = compute_bl_posterior(
+            mu_prior=mu_prior_view,
+            Sigma=Sigma_view,
+            P=P,
+            q=q,
+            omega=omega,
+            tau=POST_VIEW_TAU
+        )
+
+        # 将后验结果更新到完整序列中，顺序与fund_codes保持一致
+        mu_post_full = mu_prior_full.copy()
+        for i, idx in enumerate(view_indices):
+            mu_post_full[idx] = mu_post_view[i]
+    else:
+        mu_post_full = mu_prior_full
+        Sigma_full = Sigma_full
 
     # 4. Max Sharpe 组合优化
     # weights, expected_return, expected_vol = optimize_max_sharpe(mu_post_full, Sigma_full)
@@ -388,6 +433,43 @@ def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict
     }
 
 def output_optimized_portfolio(portfolio_plan):
-    """保存或打印最终最优组合权重"""
-    print("最优组合方案: %s" % portfolio_plan)
-    return
+    """保存或打印最终最优组合权重，并将 ewma 平滑后的结果写入数据库"""
+    with get_db() as db:
+        # 获取当前和前一交易日
+        trade_dates = TradeCalendarReader.get_trade_dates(end=datetime.today().strftime("%Y%m%d"))
+        if len(trade_dates) < 2:
+            raise ValueError("交易日不足，无法执行权重平滑")
+
+        prev_date = trade_dates[-2]
+        today_date = trade_dates[-1]
+
+        # 查询昨日权重
+        prev_row = db.query(PortfolioWeights).filter_by(portfolio_id=portfolio_id, date=prev_date).first()
+        if not prev_row:
+            raise ValueError("前一交易日权重不存在，无法执行权重平滑")
+        w_prev = json.loads(prev_row.weights_ewma) if prev_row and prev_row.weights_ewma else {}
+
+        # 当前权重
+        w_today = portfolio_plan["weights"]
+
+        # 合并资产列表
+        all_assets = set(w_today.keys()).union(w_prev.keys())
+
+        # 计算平滑权重
+        w_smooth = {
+            code: round(alpha * w_today.get(code, 0.0) + (1 - alpha) * w_prev.get(code, 0.0), 8)
+            for code in all_assets
+        }
+
+        # 入库
+        new_row = PortfolioWeights(
+            portfolio_id=portfolio_id,
+            date=pd.Timestamp(today_date),
+            weights=json.dumps(w_today),
+            weights_ewma=json.dumps(w_smooth),
+        )
+        db.merge(new_row)
+        db.commit()
+
+        print(f"✅ 已写入平滑后组合权重，日期: {today_date.strftime('%Y-%m-%d')}")
+        return w_smooth

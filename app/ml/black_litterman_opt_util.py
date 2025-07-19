@@ -161,7 +161,7 @@ def compute_prior_mu_sigma(
 
     ret = ret.dropna(how="any")
     mu_series = ret.mean()
-    Sigma = hybrid_cov(ret, lambda_=0.975, alpha=0.0, adaptive=False)
+    Sigma = hybrid_cov(ret, lambda_=0.975, alpha=0.2, adaptive=True)
     codes = mu_series.index.tolist()
     return mu_series.values, Sigma, codes
 

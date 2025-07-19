@@ -18,6 +18,10 @@ from app.dao.fund_info_dao import FundHistDao
 from numba import njit
 from vectorbt.portfolio.enums import Direction, OrderStatus, NoOrder, CallSeqType, SizeType
 from vectorbt.portfolio import nb
+from app.database import get_db
+from app.models.service_models import PortfolioWeights
+import json
+from app.data_fetcher.trade_calender_reader import TradeCalendarReader
 
 app = create_app()
 logger = logging.getLogger(__name__)
@@ -25,6 +29,8 @@ factor_data_reader = FactorDataReader()
 csi_index_data_fetcher = CSIIndexDataFetcher()
 fee_rate = 0.00025
 slippage_rate = 0.0
+portfolio_id = 1
+alpha = 0.1
 
 # 资产配置
 asset_source_map = {
@@ -98,43 +104,70 @@ def build_price_df(asset_source_map: dict, start: str, end: str) -> pd.DataFrame
     return net_value_df.ffill()
 
 
-def run_backtest(start="2016-09-01", end="2018-09-01", window=20):
-    out_dir = f"./bt_result/{datetime.today().strftime('%Y%m%d_%H%M%S')}"
+def run_backtest(start="2025-07-15", end="2025-07-17", window=20):
+    out_dir = f"./fund_portfolio_bt_result/{datetime.today().strftime('%Y%m%d_%H%M%S')}"
     os.makedirs(out_dir, exist_ok=True)
-    with app.app_context():
+    with app.app_context(), get_db() as db:
         print("🔁 开始构建价格数据")
         price_df = build_price_df(asset_source_map, start, end)
         all_dates = price_df.index
         assets = list(asset_source_map.keys())
         weights_df = pd.DataFrame(index=all_dates, columns=assets)
 
-        print("📊 开始每日调用 optimize(...)")
+        prev_weights = None  # 上一日的平滑权重
+
+        print("📊 开始每日 optimize + ewma 平滑 + 入库")
         for dt in tqdm(all_dates):
             try:
-                w = optimize(
+                w_today = optimize(
                     asset_source_map=asset_source_map,
                     code_factors_map=code_factors_map,
                     trade_date=dt.strftime('%Y-%m-%d'),
                     window=window,
                     view_codes=view_codes
+                )["weights"]
+
+                # 如果第一天，从数据库尝试读取前一日平滑值
+                if prev_weights is None:
+                    trade_dates = TradeCalendarReader.get_trade_dates(end=dt.strftime("%Y-%m-%d"))
+                    if len(trade_dates) >= 2:
+                        prev_trade_date = trade_dates[-2]
+                    else:
+                        raise ValueError("交易日不足，无法执行权重平滑")
+                    prev_row = db.query(PortfolioWeights).filter_by(
+                        portfolio_id=portfolio_id,
+                        date=prev_trade_date
+                    ).first()
+                    prev_weights = json.loads(prev_row.weights_ewma) if prev_row else w_today
+
+                all_codes = set(w_today.keys()).union(prev_weights.keys())
+                w_ewma = {
+                    code: round(alpha * w_today.get(code, 0.0) + (1 - alpha) * prev_weights.get(code, 0.0), 8)
+                    for code in all_codes
+                }
+
+                weights_df.loc[dt] = pd.Series(w_ewma)
+                prev_weights = w_ewma.copy()
+
+                # 入库
+                pw = PortfolioWeights(
+                    portfolio_id=portfolio_id,
+                    date=pd.Timestamp(dt),
+                    weights=json.dumps(w_today),
+                    weights_ewma=json.dumps(w_ewma)
                 )
-                if isinstance(w["weights"], dict):
-                    for k, v in w["weights"].items():
-                        weights_df.loc[dt, k] = v
+                db.merge(pw)
+
             except Exception as e:
                 logger.warning(f"⚠️ {dt.strftime('%Y-%m-%d')} 调仓失败: {e}")
                 continue
+        db.commit()  # ✅ 提交所有权重记录
 
-        weights_df = weights_df.dropna(how='all').fillna(0)
+        weights_df = weights_df.infer_objects(copy=False).dropna(how='all').fillna(0)
         price_df = price_df.loc[weights_df.index]
 
         # === 处理权重序列 ===
-        # 1. 使用滑动指数平均对 weights_df 平滑（alpha 越小越平滑）
-        alpha = 0.1  # 可调参数
-        weights_df = weights_df.ewm(alpha=alpha, adjust=False).mean()
-
-        # 2. 构造调仓日期列表（基于平均偏差阈值 d）
-        d = 0.2  # 偏差百分比阈值
+        d = 0.12  # 偏差百分比阈值
         rebalance_dates = [weights_df.index[0]]
         prev_weight = weights_df.iloc[0]
 

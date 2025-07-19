@@ -19,9 +19,14 @@ class EtfDataReader:
         trade_dates = TradeCalendarReader.get_trade_dates(end=today.strftime("%Y-%m-%d"))
         return trade_dates[-1] if today not in trade_dates else today
 
-    def fetch_latest_close_prices(self, etf_code: str) -> pd.DataFrame:
+    def fetch_latest_close_prices(self, etf_code: str, latest_trade_date=None) -> pd.DataFrame:
+        if latest_trade_date is None:
+            latest_trade_date = self._get_current_trade_date()
         with get_db() as db:
-            latest_date = db.query(EtfHist.date).filter(EtfHist.etf_code == etf_code).order_by(EtfHist.date.desc()).limit(1).scalar()
+            query = db.query(EtfHist.date).filter(EtfHist.etf_code == etf_code)
+            if latest_trade_date:
+                query = query.filter(EtfHist.date <= latest_trade_date)
+            latest_date = query.order_by(EtfHist.date.desc()).limit(1).scalar()
             if not latest_date:
                 logger.warning(f"未获取到ETF {etf_code} 的历史数据")
                 return pd.DataFrame(columns=["etf_code", "close", "vol", "amount"])
@@ -35,17 +40,18 @@ class EtfDataReader:
                 "amount": row.amount
             }])
 
-    def fetch_latest_close_prices_from_cache(self, etf_code: str) -> pd.DataFrame:
-        trade_date = self._get_current_trade_date()
+    def fetch_latest_close_prices_from_cache(self, etf_code: str, latest_trade_date=None) -> pd.DataFrame:
+        if latest_trade_date is None:
+            latest_trade_date = self._get_current_trade_date()
         if (
             self._last_df_cache is None or
-            self._last_cache_trade_date != trade_date or
+            self._last_cache_trade_date != latest_trade_date or
             self._last_cache_etf_code != etf_code
         ):
             logger.info("缓存未命中，重新加载最新ETF行情")
-            df = self.fetch_latest_close_prices(etf_code)
+            df = self.fetch_latest_close_prices(etf_code, latest_trade_date)
             self._last_df_cache = df
-            self._last_cache_trade_date = trade_date
+            self._last_cache_trade_date = latest_trade_date
             self._last_cache_etf_code = etf_code
         return self._last_df_cache
 

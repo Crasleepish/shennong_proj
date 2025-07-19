@@ -32,6 +32,11 @@ def init_db():
     from app.models import stock_models
     from app.models import task_record
     from app.models import etf_model
+    from app.models import index_models
+    from app.models import fund_models
+    from app.models import calendar_model
+    from app.models import macro_models
+    from app.models import service_models
     Base.metadata.create_all(bind=engine)
 
 @contextmanager

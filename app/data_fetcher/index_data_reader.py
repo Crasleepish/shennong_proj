@@ -19,9 +19,14 @@ class IndexDataReader:
         trade_dates = TradeCalendarReader.get_trade_dates(end=today.strftime("%Y-%m-%d"))
         return trade_dates[-1] if today not in trade_dates else today
 
-    def fetch_latest_close_prices(self, index_code) -> pd.DataFrame:
+    def fetch_latest_close_prices(self, index_code, latest_trade_date=None) -> pd.DataFrame:
+        if latest_trade_date is None:
+            latest_trade_date = self._get_current_trade_date()
         with get_db() as db:
-            latest_date = db.query(IndexHist.date).filter(IndexHist.index_code == index_code).order_by(IndexHist.date.desc()).limit(1).scalar()
+            query = db.query(IndexHist.date).filter(IndexHist.index_code == index_code)
+            if latest_trade_date:
+                query = query.filter(IndexHist.date <= latest_trade_date)
+            latest_date = query.order_by(IndexHist.date.desc()).limit(1).scalar()
             if not latest_date:
                 logger.warning(f"未获取到指数 {index_code} 的历史数据")
                 return pd.DataFrame(columns=["index_code", "close", "vol", "amount"])
@@ -35,17 +40,18 @@ class IndexDataReader:
                 "amount": row.amount
             }])
 
-    def fetch_latest_close_prices_from_cache(self, index_code) -> pd.DataFrame:
-        trade_date = self._get_current_trade_date()
+    def fetch_latest_close_prices_from_cache(self, index_code, latest_trade_date=None) -> pd.DataFrame:
+        if latest_trade_date is None:
+            latest_trade_date = self._get_current_trade_date()
         if (
             self._last_df_cache is None
-            or self._last_cache_trade_date != trade_date
+            or self._last_cache_trade_date != latest_trade_date
             or self._last_cache_index_code != index_code
         ):
             logger.info("缓存未命中，重新加载最新指数行情")
-            df = self.fetch_latest_close_prices(index_code)
+            df = self.fetch_latest_close_prices(index_code, latest_trade_date)
             self._last_df_cache = df
-            self._last_cache_trade_date = trade_date
+            self._last_cache_trade_date = latest_trade_date
             self._last_cache_index_code = index_code
         return self._last_df_cache
 

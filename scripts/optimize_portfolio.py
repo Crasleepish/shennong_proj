@@ -51,7 +51,7 @@ def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str, wi
         df = df[["date", "net_value"]].dropna().set_index("date").sort_index()
         net_value_df[code] = df["net_value"]
 
-    net_value_df = net_value_df.dropna(how="any").sort_index()
+    net_value_df = net_value_df.ffill().sort_index()
 
     # 2. 构造先验收益与协方差矩阵（使用净值曲线）
     mu_prior, Sigma, code_list_mu = compute_prior_mu_sigma(net_value_df, window=window, method="linear")
@@ -152,7 +152,7 @@ if __name__ == '__main__':
             '018732.OF': ["MKT", "SMB", "HML", "QMJ"],
         }
         view_codes = ["H11004.CSI", "Au99.99.SGE", "008114.OF", "020602.OF", "019918.OF", "002236.OF", "019311.OF", "006712.OF", "011041.OF", "110003.OF", "019702.OF", "006342.OF", "020466.OF", "018732.OF"]
-        trade_date = '2025-07-04'
+        trade_date = '2025-07-17'
         window = 20
         # view_codes = ['H11004.CSI', 'Au99.99.SGE', '008114.OF', '020602.OF', '019918.OF', '002236.OF', '019311.OF', '006712.OF', '011041.OF', '110003.OF', '019702.OF', '006342.OF']
         portfolio_plan = optimize(asset_source_map, code_factors_map, trade_date, window, view_codes)
