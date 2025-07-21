@@ -436,7 +436,7 @@ def get_fund_prices_by_code_list(code_list: list, start_date: str, end_date: str
         df = fund_hist_dao.select_dataframe_by_code(fund_code)
         df['date'] = pd.to_datetime(df['date'], errors="coerce")
         df = df.sort_values('date')
-        df = df[(df['date'] >= start_date) & (df['date'] < end_date) ]
+        df = df[(df['date'] >= start_date) & (df['date'] <= end_date) ]
         df = df.reset_index(drop=True)
         df_list.append(df)
     
@@ -446,6 +446,41 @@ def get_fund_prices_by_code_list(code_list: list, start_date: str, end_date: str
     pivot_df = pivot_df.ffill()
     pivot_df = pivot_df.dropna()
     return pivot_df
+
+def get_fund_current_prices_by_code_list(code_list: list, start_date: str, end_date: str) -> pd.DataFrame:
+    """
+    返回基金的历史净值数据。
+    
+    DataFrame 格式要求：
+      - 索引为交易日期（datetime64[ns]）
+      - 列为基金代码
+      - 值为基金净值（或其它价格，根据需求）
+      
+    样例输出：
+                600012   600016   600018
+    Date                                
+    2021-01-04   10.20    15.30    8.45
+    2021-01-05   10.40    15.50    8.50
+    2021-01-06   10.35    15.40    8.55
+    ...
+    """
+    fund_hist_dao = FundHistDao._instance
+    df_list = []
+    for fund_code in code_list:
+        df = fund_hist_dao.select_dataframe_by_code(fund_code)
+        df['date'] = pd.to_datetime(df['date'], errors="coerce")
+        df = df.sort_values('date')
+        df = df[(df['date'] >= start_date) & (df['date'] <= end_date) ]
+        df = df.reset_index(drop=True)
+        df_list.append(df)
+    
+    df_all = pd.concat(df_list, axis=0)
+    df_all = df_all.reset_index(drop=True)
+    pivot_df = df_all.pivot(index="date", columns="fund_code", values="value")
+    pivot_df = pivot_df.ffill()
+    pivot_df = pivot_df.dropna()
+    return pivot_df
+
 
 def get_fund_fees_by_code_list(code_list: list):
     """
@@ -457,7 +492,7 @@ def get_fund_fees_by_code_list(code_list: list):
     fees_dict = {}
     fund_info_dao = FundInfoDao._instance
     for fund_code in code_list:
-        fund_info_df = fund_info_dao.select_dataframe_by_code(fund_code)
+        fund_info_df = fund_info_dao.select_dataframe_by_code([fund_code])
         fund_info_dict = fund_info_df.iloc[0].to_dict()
         fees_dict[fund_code] = fund_info_dict['fee_rate'] / 100.0
     return fees_dict

@@ -71,11 +71,11 @@ class FundInfoDao:
         except Exception as e:
             return pd.DataFrame()
         
-    def select_dataframe_by_code(self, fund_code: str) -> pd.DataFrame:
+    def select_dataframe_by_code(self, fund_codes: List) -> pd.DataFrame:
         try:
             with get_db() as db:
                 # 构造查询条件
-                query = db.query(FundInfo).filter(FundInfo.fund_code == fund_code)
+                query = db.query(FundInfo).filter(FundInfo.fund_code.in_(fund_codes))
                 # 使用 pd.read_sql 将 SQLAlchemy 查询转换为 DataFrame
                 df = pd.read_sql(query.statement, db.bind)
             return df
