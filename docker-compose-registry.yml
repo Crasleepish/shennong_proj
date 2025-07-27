@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  registry:
+    image: registry:2
+    container_name: registry
+    ports:
+      - "15000:5000"
+    volumes:
+      - registry_data:/var/lib/registry
+    restart: always
+    entrypoint: ["/entrypoint.sh"]
+    command: ["/etc/docker/registry/config.yml"]
+
+volumes:
+  registry_data:
+    external: false

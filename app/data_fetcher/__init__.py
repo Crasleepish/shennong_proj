@@ -7,6 +7,7 @@ from .gold_data_fetcher import GoldDataFetcher
 from .stock_data_reader import StockDataReader
 from .index_data_reader import IndexDataReader
 from .etf_data_fetcher import EtfDataFetcher
+from .etf_data_reader import EtfDataReader
 
 __all__ = [
     "MacroDataFetcher",
@@ -17,5 +18,6 @@ __all__ = [
     "GoldDataFetcher",
     "StockDataReader",
     "IndexDataReader",
-    "EtfDataFetcher"
+    "EtfDataFetcher",
+    "EtfDataReader"
 ]

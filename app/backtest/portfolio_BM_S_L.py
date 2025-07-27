@@ -232,9 +232,11 @@ def backtest_strategy(start_date: str, end_date: str):
 
 
     # 输出当日持仓详情到 CSV
+    logging.info("Outputting daily portfolio details to CSV.")
     if not os.path.exists(os.path.join(output_dir, format_date(end_date))):
         os.makedirs(os.path.join(output_dir, format_date(end_date)))
     target_weights.loc[rb_dates].to_csv(os.path.join(output_dir, format_date(end_date), output_prefix + "_portfolio.csv"))
+    logging.info("Done.")
 
     prices = None
     volumes = None
@@ -265,14 +267,6 @@ def backtest_strategy(start_date: str, end_date: str):
     def order_func_nb(c, size, price, size_type, direction, fees, slippage):
         if nb.get_elem_nb(c, size) == 0:
             return nb.NoOrder
-        print(">>>generate order: idx=", c.i, 
-              ", col=", c.col, 
-              ", size=", nb.get_elem_nb(c, size),
-              ", price=", nb.get_elem_nb(c, price), 
-              ", size_type=", nb.get_elem_nb(c, size_type),
-              ", direction=", nb.get_elem_nb(c, direction),
-              ", fees=", nb.get_elem_nb(c, fees),
-              ", slippage=", nb.get_elem_nb(c, slippage))
         return nb.order_nb(
             size=nb.get_elem_nb(c, size),
             price=nb.get_elem_nb(c, price),

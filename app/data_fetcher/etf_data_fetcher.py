@@ -7,6 +7,7 @@ from app.models.etf_model import EtfInfo, EtfHist
 from app.database import get_db
 import logging
 from app.data_fetcher.trade_calender_reader import TradeCalendarReader
+from sqlalchemy import or_
 
 logger = logging.getLogger(__name__)
 

@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:latest
+    container_name: postgres-server
+    restart: "no"
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=myuser
+      - POSTGRES_PASSWORD=xjqxz214
+      - POSTGRES_DB=mydb
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - shennong-net
+
+volumes:
+  postgres-data:
+    name: postgres-data
+
+networks:
+  shennong-net:
+    external: true

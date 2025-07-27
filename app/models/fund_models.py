@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Float, Date, BigInteger, Index, Integer, Numeric, Sequence
+from sqlalchemy import Column, String, Float, Date, BigInteger, Index, Integer, Numeric, Sequence, Text
 from app.database import Base
 
 
@@ -29,3 +29,28 @@ class FundHist(Base):
 
     def __repr__(self):
         return f"<FundHist(fund_code='{self.fund_code}', date='{self.date}')>"
+
+class FundBeta(Base):
+    __tablename__ = "fund_beta"
+
+    # 联合主键：code + date
+    code = Column("code", String(20), primary_key=True)  # 基金/ETF 代码
+    date = Column("date", Date, primary_key=True)        # 回归结果对应的交易日
+
+    # 五因子暴露
+    MKT = Column("MKT", Float, nullable=True)   # 市场因子暴露
+    SMB = Column("SMB", Float, nullable=True)   # 市值因子暴露
+    HML = Column("HML", Float, nullable=True)   # 价值因子暴露
+    QMJ = Column("QMJ", Float, nullable=True)   # 质量因子暴露
+
+    # 常数项（alpha）
+    const = Column("const", Float, nullable=True)
+
+    P_json = Column("P_json", Text, nullable=True)
+
+    __table_args__ = (
+        Index("idx_fund_beta_date", "date"),  # 新增索引
+    )
+
+    def __repr__(self):
+        return f"<FundBeta(code='{self.code}', date='{self.date}')>"

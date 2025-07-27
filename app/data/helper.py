@@ -124,9 +124,9 @@ class FundHistHolder:
             self.fund_hist_all["date"] = pd.to_datetime(self.fund_hist_all["date"], errors="coerce")
         return self.fund_hist_all
     
-    def get_fund_hist_by_code(self, fund_code: str) -> pd.DataFrame:
+    def get_fund_hist_by_code(self, fund_code: str, start_date: str = None, end_date: str = None) -> pd.DataFrame:
         fund_hist_dao = FundHistDao._instance
-        return fund_hist_dao.select_dataframe_by_code(fund_code)
+        return fund_hist_dao.select_dataframe_by_code(fund_code, start_date, end_date)
 
 fund_hist_holder = FundHistHolder()
 
@@ -402,12 +402,12 @@ def get_index_daily_return(index_code: str) -> pd.DataFrame:
     df = df.set_index('date', drop=True)
     return df
 
-def get_fund_daily_return(fund_code: str) -> pd.DataFrame:
+def get_fund_daily_return(fund_code: str, start_date: str = None, end_date: str = None) -> pd.DataFrame:
     """
     返回基金历史每日回报率：
     包含字段：date, daily_return
     """
-    df = fund_hist_holder.get_fund_hist_by_code(fund_code)
+    df = fund_hist_holder.get_fund_hist_by_code(fund_code, start_date, end_date)
     df['date'] = pd.to_datetime(df['date'], errors="coerce")
     df = df.sort_values('date')
     df = df.set_index('date', drop=False)
@@ -420,7 +420,7 @@ def get_fund_prices_by_code_list(code_list: list, start_date: str, end_date: str
     DataFrame 格式要求：
       - 索引为交易日期（datetime64[ns]）
       - 列为基金代码
-      - 值为基金净值（或其它价格，根据需求）
+      - 值为基金净值
       
     样例输出：
                 600012   600016   600018
@@ -449,12 +449,12 @@ def get_fund_prices_by_code_list(code_list: list, start_date: str, end_date: str
 
 def get_fund_current_prices_by_code_list(code_list: list, start_date: str, end_date: str) -> pd.DataFrame:
     """
-    返回基金的历史净值数据。
+    返回基金的当前价格数据。
     
     DataFrame 格式要求：
       - 索引为交易日期（datetime64[ns]）
       - 列为基金代码
-      - 值为基金净值（或其它价格，根据需求）
+      - 值为基金价格
       
     样例输出：
                 600012   600016   600018
@@ -515,3 +515,65 @@ def get_stock_status_map() -> pd.DataFrame:
             return pd.DataFrame(columns=["list_status"])
     except Exception as e:
         return pd.DataFrame(columns=["list_status"])
+    
+
+from app.data_fetcher import EtfDataReader
+
+
+def get_fund_daily_return_for_beta_regression(fund_code: str, start_date: str = None, end_date: str = None) -> pd.DataFrame:
+    """
+    返回基金历史每日回报率：
+    包含字段：date, daily_return
+    """
+    df = fund_hist_holder.get_fund_hist_by_code(fund_code, start_date, end_date)
+    df['date'] = pd.to_datetime(df['date'], errors="coerce")
+    df = df.sort_values('date')
+    df = df.set_index('date', drop=True)
+    df = df[["change_percent"]].rename(columns={"change_percent": "daily_return"})
+    return df
+
+def get_etf_daily_return_for_beta_regression(etf_code: str, start_date: str = None, end_date: str = None) -> pd.DataFrame:
+    """
+    返回ETF历史每日回报率：
+    包含字段：date, daily_return
+    """
+    df = EtfDataReader(etf_code, start_date, end_date)
+    df['date'] = pd.to_datetime(df['date'], errors="coerce")
+    df = df.sort_values('date')
+    df = df.set_index('date', drop=False)
+    df = df[["change_percent"]].rename(columns={"change_percent": "daily_return"})
+    return df
+
+
+from app.dao.fund_info_dao import FundInfoDao
+from app.data_fetcher.etf_data_fetcher import EtfDataFetcher
+
+def get_all_fund_codes_with_source() -> pd.DataFrame:
+    """
+    合并 FundInfo 和 EtfInfo，输出所有基金代码及其来源。
+    返回：
+        DataFrame，包含字段：
+        - fund_code: 基金代码（如 510300.SH）
+        - source: "fund_info" 或 "etf_info"
+    """
+    try:
+        # 从 FundInfo 表提取
+        df1 = FundInfoDao().select_dataframe_all()
+        df1 = df1[["fund_code"]].dropna().copy()
+        df1["fund_code"] = df1["fund_code"].astype(str).str.strip()
+        df1["source"] = "fund_info"
+
+        # 从 EtfInfo 表提取
+        df2 = EtfDataFetcher.get_etf_info()
+        df2 = df2[["ts_code"]].rename(columns={"ts_code": "fund_code"}).dropna().copy()
+        df2["fund_code"] = df2["fund_code"].astype(str).str.strip()
+        df2["source"] = "etf_info"
+
+        # 合并 & 去重
+        df_all = pd.concat([df1, df2], ignore_index=True)
+        df_all = df_all.drop_duplicates(subset=["fund_code"]).reset_index(drop=True)
+
+        return df_all
+
+    except Exception as e:
+        return pd.DataFrame(columns=["fund_code", "source"])

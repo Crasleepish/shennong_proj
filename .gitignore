@@ -9,3 +9,4 @@ ml_results
 models
 /api_key.py
 fund_portfolio_bt_result
+log

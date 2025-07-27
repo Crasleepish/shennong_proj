@@ -1,7 +1,7 @@
 import pandas as pd
 import tushare as ts
 from datetime import datetime
-from app.models.etf_model import EtfHist
+from app.models.etf_model import EtfInfo, EtfHist
 from app.database import get_db
 from app.data_fetcher.trade_calender_reader import TradeCalendarReader
 import logging
@@ -76,3 +76,24 @@ class EtfDataReader:
             "vol": row["VOLUME"] * 100.0,      # 成交量（单位：份）
             "amount": row["AMOUNT"]    # 成交额（单位：元）
         }])
+    
+    
+    @staticmethod
+    def get_etf_info_for_beta_regression() -> pd.DataFrame:
+        with get_db() as db:
+            query = db.query(EtfInfo).filter(
+                (EtfInfo.invest_type.in_(["被动指数型", "增强指数型"]))
+            )
+            df = pd.read_sql(query.statement, db.bind)
+        return df
+    
+    @staticmethod
+    def get_etf_hist_by_code(etf_code: str, start_date: str = None, end_date: str = None):
+        with get_db() as db:
+            query = db.query(EtfHist).filter(EtfHist.etf_code == etf_code)
+            if start_date:
+                query = query.filter(EtfHist.date >= start_date)
+            if end_date:
+                query = query.filter(EtfHist.date <= end_date)
+            df = pd.read_sql(query.statement, db.bind)
+        return df

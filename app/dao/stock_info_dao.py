@@ -415,45 +415,6 @@ class StockHistUnadjDao:
             db.rollback()
             raise e
         
-    def select_dataframe_by_date_range(self, stock_code: str, start_date, end_date):
-        try:
-            with get_db() as db:
-                # 指定需要查询的字段
-                selected_columns = [
-                    StockHistUnadj.stock_code,
-                    StockHistUnadj.date,
-                    StockHistUnadj.close,
-                    StockHistUnadj.volume,
-                    StockHistUnadj.amount,
-                    StockHistUnadj.pre_close,
-                    StockHistUnadj.change_percent,
-                    StockHistUnadj.change,
-                    StockHistUnadj.mkt_cap,
-                    StockHistUnadj.circ_mv,
-                    StockInfo.exchange
-                ]
-                query = db.query(*selected_columns).join(
-                    StockInfo, StockHistUnadj.stock_code == StockInfo.stock_code
-                ).filter(
-                    StockInfo.exchange.in_(["SSE", "SZSE"])
-                )
-
-                if stock_code:
-                    query = query.filter(StockHistUnadj.stock_code == stock_code)
-                if start_date:
-                    query = query.filter(StockHistUnadj.date >= start_date)
-                if end_date:
-                    query = query.filter(StockHistUnadj.date <= end_date)
-
-                query = query.order_by(StockHistUnadj.date.asc())
-
-                # ✅ 使用 join 查询的分块读取工具
-                return chunked_query_to_dataframe(query, table_name="stock_hist_unadj + stock_info")
-
-        except Exception as e:
-            logger.error("Error querying stock_hist_unadj by date range with join: %s", e)
-            return pd.DataFrame()
-        
     def select_dataframe_by_code(self, stock_code: str):
         """
         查询指定股票的所有前复权历史数据，并返回为 Pandas DataFrame。
