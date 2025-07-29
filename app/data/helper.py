@@ -17,8 +17,7 @@ class StockHistHolder:
 
     def get_stock_hist(self, start_date, end_date):
         if self.stock_hist_all is None:
-            stock_hist_dao = StockHistUnadjDao._instance
-            self.stock_hist_all = stock_hist_dao.select_dataframe_by_date_range(stock_code=None, start_date=start_date, end_date=end_date)
+            self.stock_hist_all = StockHistUnadjDao.select_dataframe_by_date_range(stock_code=None, start_date=start_date, end_date=end_date)
             self.stock_hist_all["date"] = pd.to_datetime(self.stock_hist_all["date"], errors="coerce")
         return self.stock_hist_all
     
@@ -49,8 +48,7 @@ class StockInfoHolder:
 
     def get_stock_info_all(self):
         if self.stock_info_all is None:
-            stock_info_dao = StockInfoDao._instance
-            self.stock_info_all = stock_info_dao.select_dataframe_all()
+            self.stock_info_all = StockInfoDao.select_dataframe_all()
             self.stock_info_all["listing_date"] = pd.to_datetime(self.stock_info_all["listing_date"], errors="coerce")
         return self.stock_info_all
     
@@ -64,8 +62,7 @@ class FundamentalDataHolder:
 
     def get_fundamental_data_all(self):
         if self.fundamental_data_all is None:
-            fundamental_data_dao = FundamentalDataDao._instance
-            self.fundamental_data_all = fundamental_data_dao.select_dataframe_all()
+            self.fundamental_data_all = FundamentalDataDao.select_dataframe_all()
             self.fundamental_data_all["report_date"] = pd.to_datetime(self.fundamental_data_all["report_date"], errors="coerce")
         return self.fundamental_data_all
     
@@ -180,9 +177,8 @@ def get_qfq_price_by_code(stock_code: str, start_date: str, end_date: str) -> pd
     """
     返回指定股票的每日价格数据(前复权)。
     """
-    stock_hist_dao = StockHistUnadjDao._instance
     adj_factor_dao = AdjFactorDao._instance
-    hist = stock_hist_dao.select_dataframe_by_date_range(stock_code, start_date, end_date)
+    hist = StockHistUnadjDao.select_dataframe_by_date_range(stock_code, start_date, end_date)
     adjf = adj_factor_dao.get_adj_factor_dataframe(stock_code, start_date, end_date)
     adj_hist = to_adjusted_hist(hist, adjf, ["open", "high", "low", "close"], "adj_factor", "date")
     adjf["pre_adj_factor"] = adjf["adj_factor"].shift(1)
@@ -503,8 +499,7 @@ def get_stock_status_map() -> pd.DataFrame:
     获取所有股票的上市状态列表，返回 DataFrame，索引为 stock_code，值为 list_status（'L' 或 'D'）
     """
     try:
-        stock_info_dao = StockInfoDao._instance
-        df = stock_info_dao.select_dataframe_all()
+        df = StockInfoDao.select_dataframe_all()
 
         # 只保留必要列并设置索引
         if not df.empty:

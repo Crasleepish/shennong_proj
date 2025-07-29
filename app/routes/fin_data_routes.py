@@ -3,7 +3,7 @@ from flask import Blueprint, request, jsonify
 import logging
 
 # 导入各同步器（注意根据实际项目的模块路径调整）
-from app.data.fetcher import stock_info_synchronizer, stock_hist_synchronizer, adj_factor_synchronizer, stock_adj_hist_synchronizer, company_action_synchronizer, fundamental_data_synchronizer, suspend_data_synchronizer
+from app.data.fetcher import stock_info_synchronizer, stock_hist_synchronizer, adj_factor_synchronizer, company_action_synchronizer, fundamental_data_synchronizer, suspend_data_synchronizer
 from app.data.index_fetcher import index_info_synchronizer, index_hist_synchronizer
 from app.data.fund_fetcher import fund_info_synchronizer, fund_hist_synchronizer
 from app.data.cninfo_fetcher import cninfo_stock_share_change_fetcher

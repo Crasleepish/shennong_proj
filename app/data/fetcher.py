@@ -14,6 +14,7 @@ from typing import Union
 from .custom_api import fetch_stock_equity_changes
 import re
 import time
+from .fundamental_filler import fill_fundamental_fields
 
 import logging
 
@@ -38,7 +39,6 @@ class StockInfoSynchronizer:
       4. 将新增记录插入数据库（仅新增，不更新或删除）
     """
     def __init__(self):
-        self.stock_info_dao = StockInfoDao._instance
         self.update_flag_dao = UpdateFlagDao._instance
         self.future_task_dao = FutureTaskDao._instance
 
@@ -80,7 +80,7 @@ class StockInfoSynchronizer:
                 try:
                     members_df = tspro.index_member_all(l1_code=index_code, fields='ts_code')
                     stock_codes = members_df['ts_code'].dropna().tolist()
-                    self.stock_info_dao.update_industry_by_mapping(stock_codes, industry_name)
+                    StockInfoDao.update_industry_by_mapping(stock_codes, industry_name)
                 except Exception as e:
                     logger.warning(f"[跳过] 获取行业 {industry_name} 成分股失败: {e}")
             
@@ -120,7 +120,7 @@ class StockInfoSynchronizer:
                         progress_callback(idx, len(new_records))
             
             # 批量插入新增记录
-            self.stock_info_dao.batch_upsert(new_records)
+            StockInfoDao.batch_upsert(new_records)
 
             # 更新行业信息
             self.update_industry()
@@ -151,8 +151,6 @@ class StockHistSynchronizer:
     """
     def __init__(self):
         self.tspro = tspro  # Tushare API client
-        self.stock_info_dao = StockInfoDao._instance
-        self.stock_hist_unadj_dao = StockHistUnadjDao._instance
         self.update_flag_dao = UpdateFlagDao._instance
         self.loop = asyncio.get_event_loop()
         self.stock_list_size = 0
@@ -333,7 +331,7 @@ class StockHistSynchronizer:
             # 5. 批量插入新增记录到数据库
             if new_records:
                 try:
-                    result_records = self.stock_hist_unadj_dao.batch_insert(new_records)
+                    result_records = StockHistUnadjDao.batch_insert(new_records)
                     logger.info("Inserted %d new historical records for stock %s.", len(result_records), stock_code)
                     self.update_flag_dao.update_action_flag(stock_code, "1")
                 except Exception as e:
@@ -404,7 +402,7 @@ class StockHistSynchronizer:
         self.initialize()
         try:
             logger.info("Starting stock historical data synchronization.")
-            stock_list = self.stock_info_dao.load_stock_info()
+            stock_list = StockInfoDao.load_stock_info()
             self.stock_list_size = len(stock_list)
             logger.info("Found %d stocks to synchronize.", len(stock_list))
 
@@ -415,7 +413,7 @@ class StockHistSynchronizer:
                     stock_code = stock.stock_code
                     logger.info("Synchronizing stock %s", stock_code)
 
-                    latest_date = self.stock_hist_unadj_dao.get_latest_date(stock_code)
+                    latest_date = StockHistUnadjDao.get_latest_date(stock_code)
                     if latest_date is None:
                         start_date_dt = datetime.date(1990, 1, 1)
                     else:
@@ -525,281 +523,13 @@ class StockHistSynchronizer:
                     logger.error(f"Error processing row {row.to_dict()}: {e}")
 
             if new_records:
-                self.stock_hist_unadj_dao.batch_upsert(new_records)
+                StockHistUnadjDao.batch_upsert(new_records)
                 logger.info(f"Upserted {len(new_records)} records for trade_date {trade_date}")
             else:
                 logger.info(f"No valid records to upsert for trade_date {trade_date}")
 
         except Exception as e:
             logger.error(f"Error syncing daily + daily_basic data for {trade_date}: {e}")
-            
-class StockAdjHistSynchronizer:
-    """
-        同步前复权历史行情数据。
-        
-        主要流程：
-        1. 判断是否存在 UPDATE_ADJ 任务：通过 FutureTaskDao.select_by_code_date_type(stock_code, today, "UPDATE_ADJ")
-            如果存在且状态为 INIT，则更新该股票的所有前复权数据（先删除，再重新计算）；否则，直接复制最新的无复权数据到前复权数据表。
-        2. 对于更新情形，更新步骤：
-            a. 获取该股票所有的无复权历史数据（stock_hist_unadj），按日期升序排列。
-            b. 获取该股票所有的公司行动记录（company_action），按 ex_dividend_date 升序排列。
-            c. 对于无复权数据中每个交易日 i，查找所有 ex_date 大于 i 的公司行动记录，按顺序计算复权因子 F_j，
-                其中每个 F_j 的计算依赖于事件前一交易日的无复权收盘价 P_ref：
-                    F_j = (P_ref * (1 + bonus + conversion + rights_issue)) / (P_ref - dividend + (rights_issue * rights_issue_price))
-                注意：bonus, conversion, rights_issue, dividend 均为“每股”数据（原接口数据除以10）。
-            d. 将无复权数据中的开盘、收盘、最高、最低乘以累计复权因子，生成前复权数据记录。
-            e. 批量插入前复权数据到 stock_hist_adj 表，并更新 FutureTask 状态为 DONE。
-        3. 如果没有 UPDATE_ADJ 任务，则直接复制最新的无复权数据到 stock_hist_adj 表。
-        """
-
-    def __init__(self):
-        self.stock_info_dao = StockInfoDao._instance
-        self.stock_hist_unadj_dao = StockHistUnadjDao._instance
-        self.update_flag_dao = UpdateFlagDao._instance
-        self.company_action_dao = CompanyActionDao._instance
-        self.stock_hist_adj_dao = StockHistAdjDao()
-        self.future_task_dao = FutureTaskDao._instance
-        self.stock_share_change_dao = StockShareChangeCNInfoDao._instance
-        self.loop = asyncio.get_event_loop()
-        self.stock_list_size = 0
-        self.completed_num = 0
-        self.is_running = False
-        self.lock = asyncio.Lock()
-        self.semaphore = asyncio.Semaphore(6)
-
-    def initialize(self):
-        self.stock_list_size = 0
-        self.completed_num = 0
-        self.is_running = True
-
-    def terminate(self):
-        self.stock_list_size = 0
-        self.completed_num = 0
-        self.is_running = False
-
-    async def process_data_adj(self, stock_code: str, progress_callback=None):
-        try:
-            async with self.semaphore:
-                today = datetime.date.today()
-                # 检查未来任务是否存在 UPDATE_ADJ 任务，状态为 INIT
-                future_tasks = await asyncio.to_thread(self.future_task_dao.select_by_code_date_type, stock_code, today, TaskType.UPDATE_ADJ.name, "INIT")
-                if future_tasks is not None and len(future_tasks) != 0:
-                    logger.info("Found UPDATE_ADJ task for %s, updating forward-adjusted history.", stock_code)
-                    
-                    # 获取所有无复权数据，按日期升序排列
-                    df_unadj = await asyncio.to_thread(self.stock_hist_unadj_dao.select_dataframe_by_code, stock_code)
-                    if df_unadj is None or df_unadj.empty:
-                        logger.info("No non-adjusted data for stock %s, skipping.", stock_code)
-                        return
-                    # 遍历无复权记录，确保按交易日期升序排列
-                    df_unadj = df_unadj.sort_values(by="date")
-                    earliest_date = df_unadj.iloc[0]['date']
-                    # 获取所有公司行动记录（已转换为每股数据），按 ex_dividend_date 升序排列
-                    df_action = await asyncio.to_thread(self.company_action_dao.select_dataframe_by_code, stock_code)
-                    if df_action is None or df_action.empty:
-                        logger.info("No company action data for stock %s.", stock_code)
-                        await self.fetch_data_from_unadj_data(stock_code)
-                        return
-                    #仅过滤有意义的行动数据
-                    df_action = df_action[df_action['ex_dividend_date'] >= earliest_date]
-                    # 获取交易日期列表和对应的收盘价列表
-                    trade_dates = df_unadj["date"].tolist()
-                    close_prices = df_unadj["close"].tolist()
-                    # 预处理公司行动数据
-                    df_action = df_action.sort_values(by="ex_dividend_date")
-                    # 转换为字典列表，方便后续处理
-                    actions = df_action.to_dict(orient="records")
-                    # 预先计算参考价格字典：对于每个 action，参考价格为无复权数据中最后一个交易日期 < action.ex_dividend_date 的收盘价
-                    ref_prices = {}
-                    for action in actions:
-                        ex_date = action["ex_dividend_date"]
-                        idx = bisect_left(trade_dates, ex_date)
-                        if idx == 0:
-                            ref_prices[ex_date] = None
-                        else:
-                            ref_prices[ex_date] = close_prices[idx - 1]
-
-                    # 预先计算每个 action 的单独复权因子 F_j
-                    action_factors = {}
-                    for action in actions:
-                        ex_date = action["ex_dividend_date"]
-                        P_ref = ref_prices.get(ex_date)
-                        if not P_ref or P_ref == 0:
-                            F = 1.0
-                        else:
-                            bonus = safe_get(action.get("bonus_ratio")) or 0.0
-                            conversion = safe_get(action.get("conversion_ratio")) or 0.0
-                            rights_issue = safe_get(action.get("rights_issue_ratio")) or 0.0
-                            dividend = safe_get(action.get("dividend_per_share")) or 0.0
-                            rights_issue_price = safe_get(action.get("rights_issue_price")) or 0.0 
-                            try:
-                                F = (P_ref - dividend + (rights_issue * rights_issue_price)) / (P_ref * (1 + bonus + conversion + rights_issue))
-                            except Exception as e:
-                                logger.error("Error computing factor for stock %s on action date %s: %s", stock_code, ex_date, e)
-                                F = 1.0
-                        action_factors[ex_date] = F
-
-                    # 计算累计复权因子。先取出所有 action 的 ex_dividend_date 并排序（升序）
-                    sorted_action_dates = sorted(action_factors.keys())
-                    cum_factors = {}
-                    cum = 1.0
-                    # 从最晚的日期开始反向累乘
-                    for ex_date in reversed(sorted_action_dates):
-                        cum *= action_factors[ex_date]
-                        cum_factors[ex_date] = cum
-
-                    # 定义一个辅助函数，根据交易日查找累计复权因子
-                    def get_cum_factor_for_trade(trade_date):
-                        """
-                        返回所有 ex_dividend_date 大于 trade_date 的累计复权因子，
-                        如果没有，则返回 1.0。
-                        """
-                        # 在 sorted_action_dates 中查找第一个严格大于 trade_date 的日期
-                        idx = bisect_left(sorted_action_dates, trade_date)
-                        # 如果找到的日期不大于 trade_date，则继续移动指针
-                        while idx < len(sorted_action_dates) and sorted_action_dates[idx] <= trade_date:
-                            idx += 1
-                        if idx < len(sorted_action_dates):
-                            return cum_factors[sorted_action_dates[idx]]
-                        else:
-                            return 1.0
-
-                    # 计算前复权数据：对每一条无复权记录，累计后续所有复权因子
-                    adj_records = []
-                    # 用于保存前一交易日的前复权收盘价，用于计算涨跌相关指标
-                    previous_adj_close = None
-                    # 对每条记录
-                    for _, row in df_unadj.iterrows():
-                        trade_date = row["date"]
-                        # 查找累计复权因子
-                        cumulative_factor = get_cum_factor_for_trade(trade_date)
-                        # 计算前复权价格
-                        row_open = safe_value(row["open"])
-                        row_close = safe_value(row["close"])
-                        row_high = safe_value(row["high"])
-                        row_low = safe_value(row["low"])
-                        row_volume = safe_value(row["volume"])
-                        adj_open = row_open * cumulative_factor if row_open is not None else None
-                        adj_close = row_close * cumulative_factor if row_close is not None else None
-                        adj_high = row_high * cumulative_factor if row_high is not None else None
-                        adj_low = row_low * cumulative_factor if row_low is not None else None
-                        adj_volume = row_volume / cumulative_factor if row_volume is not None else None
-                        adj_amount = adj_volume * adj_close if adj_volume is not None and adj_close is not None else None
-                        # 重新计算涨跌指标：若存在前一交易日的前复权收盘价，则计算差值和百分比变化
-                        if previous_adj_close is None:
-                            adj_change = None
-                            adj_change_percent = None
-                            adj_amplitude = None
-                        else:
-                            adj_change = adj_close - previous_adj_close
-                            # 避免除零错误
-                            if previous_adj_close != 0:
-                                adj_change_percent = (adj_change / previous_adj_close) * 100
-                                adj_amplitude = ((adj_high - adj_low) / previous_adj_close) * 100
-                            else:
-                                adj_change_percent = None
-                                adj_amplitude = None
-
-                        # 更新 previous_adj_close 为当前前复权收盘价，供下一条记录计算使用
-                        previous_adj_close = adj_close
-
-                        # 构造前复权数据记录，其他字段直接复制无复权记录
-                        record = StockHistAdj(
-                            stock_code = stock_code,
-                            date = trade_date,
-                            open = adj_open,
-                            close = adj_close,
-                            high = adj_high,
-                            low = adj_low,
-                            volume = adj_volume,
-                            amount = adj_amount,
-                            amplitude = adj_amplitude,
-                            change_percent = adj_change_percent,
-                            change = adj_change,
-                            turnover_rate = safe_value(row.get("turnover_rate")),
-                            mkt_cap = safe_value(row.get("mkt_cap")),
-                            total_shares = safe_value(row.get("total_shares"))
-                        )
-                        adj_records.append(record)
-                    # 批量插入前复权数据
-                    if adj_records:
-                        # 更新模式：删除该股票所有前复权数据
-                        await asyncio.to_thread(self.stock_hist_adj_dao.delete_by_stock_code, stock_code)
-                        await asyncio.to_thread(self.stock_hist_adj_dao.batch_insert, adj_records)
-                        logger.info("Updated forward-adjusted data for stock %s: %d records inserted.", stock_code, len(adj_records))
-                    else:
-                        logger.info("No forward-adjusted records computed for stock %s.", stock_code)
-                    # 更新未来任务状态为 DONE
-                    for future_task in future_tasks:
-                        self.future_task_dao.update_status_by_id(future_task.task_id, "DONE")
-                    # 一支股票只执行一次UPDATE_ADJ任务，会完成所有日期数据的复权计算
-                else:
-                    await self.fetch_data_from_unadj_data(stock_code)
-        except Exception as e:
-            logger.error("Error executing stock hist adj task for %s: %s", stock_code, e)
-            return
-        finally:
-            async with self.lock:
-                self.completed_num = self.completed_num + 1
-                if progress_callback:
-                    progress_callback(self.completed_num, self.stock_list_size)
-                
-    async def fetch_data_from_unadj_data(self, stock_code):
-        # 无更新任务时：直接复制无复权数据表中，日期在前复权数据表最新日期之后的所有数据到前复权数据表
-        latest_adj_date = await asyncio.to_thread(self.stock_hist_adj_dao.get_latest_date, stock_code)
-        if latest_adj_date is None:
-            # 如果前复权数据表无记录，则设置为极早日期
-            latest_adj_date = datetime.date(1900, 1, 1)
-        # 查询无复权数据中日期大于最新前复权日期的所有记录
-        df_new = await asyncio.to_thread(self.stock_hist_unadj_dao.select_after_date_as_dataframe, stock_code, latest_adj_date + datetime.timedelta(days=1))
-        if df_new is None or df_new.empty:
-            logger.info("No new non-adjusted records to copy for stock %s.", stock_code)
-        else:
-            new_adj_records = []
-            for _, row in df_new.iterrows():
-                record = StockHistAdj(
-                    stock_code = stock_code,
-                    date = row["date"],
-                    open = safe_value(row["open"]),
-                    close = safe_value(row["close"]),
-                    high = safe_value(row["high"]),
-                    low = safe_value(row["low"]),
-                    volume = safe_value(row["volume"]),
-                    amount = safe_value(row["amount"]),
-                    amplitude = safe_value(row["amplitude"]),
-                    change_percent = safe_value(row["change_percent"]),
-                    change = safe_value(row["change"]),
-                    turnover_rate = safe_value(row["turnover_rate"]),
-                    mkt_cap = safe_value(row.get("mkt_cap")),
-                    total_shares = safe_value(row.get("total_shares"))
-                )
-                new_adj_records.append(record)
-            await asyncio.to_thread(self.stock_hist_adj_dao.batch_insert, new_adj_records)
-            logger.info("Copied %d new non-adjusted records for stock %s to adjusted table.", len(new_adj_records), stock_code)
-
-    def sync(self, progress_callback=None):
-        self.initialize()
-        try:
-            # 获取股票列表（此处采用 stock_info 表中的股票）
-            stock_list = self.stock_info_dao.load_stock_info()
-            self.stock_list_size = len(stock_list)
-            logger.info("Processing forward-adjusted data for %d stocks.", len(stock_list))
-            
-            batch_size = 20
-            for i in range(0, len(stock_list), batch_size):
-                batch = stock_list[i : i + batch_size]
-                tasks = []
-                for stock in batch:
-                    stock_code = stock.stock_code
-                    logger.info("Processing stock %s", stock_code)
-                    tasks.append(self.loop.create_task(self.process_data_adj(stock_code, progress_callback)))
-                if tasks:
-                    self.loop.run_until_complete(asyncio.gather(*tasks))
-
-            if progress_callback:
-                progress_callback(len(stock_list), len(stock_list))
-        finally:
-            self.terminate()
 
 
 class AdjFactorSynchronizer:
@@ -818,7 +548,6 @@ class AdjFactorSynchronizer:
 
     def __init__(self):
         self.tspro = tspro
-        self.stock_info_dao = StockInfoDao._instance
         self.adj_factor_dao = AdjFactorDao._instance
         self.loop = asyncio.get_event_loop()
         self.semaphore = asyncio.Semaphore(6)  # 限制同时6个任务
@@ -916,7 +645,7 @@ class AdjFactorSynchronizer:
         self.initialize()
         try:
             logger.info("Starting adj factor synchronization.")
-            stock_list = self.stock_info_dao.load_stock_info()
+            stock_list = StockInfoDao.load_stock_info()
             self.stock_list_size = len(stock_list)
             logger.info(f"Found {len(stock_list)} stocks to synchronize.")
 
@@ -1021,7 +750,6 @@ class CompanyActionSynchronizer:
       5. 将合并后的数据转换为统一格式的 CompanyAction 对象，并调用 DAO 插入数据库。
     '''
     def __init__(self):
-        self.stock_info_dao = StockInfoDao._instance
         self.company_action_dao = CompanyActionDao._instance
         self.update_flag_dao = UpdateFlagDao._instance
         self.future_task_dao = FutureTaskDao._instance
@@ -1225,7 +953,7 @@ class CompanyActionSynchronizer:
         try:
             logger.info("Starting company action synchronization.")
             # 1. 获取当前股票列表
-            stock_list: List[StockInfo] = self.stock_info_dao.load_stock_info()
+            stock_list: List[StockInfo] = StockInfoDao.load_stock_info()
             self.stock_list_size = len(stock_list)
             logger.info("Found %d stocks to process.", len(stock_list))
 
@@ -1252,8 +980,6 @@ class CompanyActionSynchronizer:
 
 class FundamentalDataSynchronizer:
     def __init__(self):
-        self.stock_info_dao = StockInfoDao._instance  # 单例
-        self.fundamental_dao = FundamentalDataDao._instance
         self.update_flag_dao = UpdateFlagDao._instance
         self.loop = asyncio.get_event_loop()
         self.stock_list_size = 0
@@ -1355,7 +1081,8 @@ class FundamentalDataSynchronizer:
 
             if fundamental_records:
                 logger.info(f"Batch upserting {len(fundamental_records)} fundamental records for period {period}...")
-                await asyncio.to_thread(self.fundamental_dao.batch_upsert, fundamental_records)
+                await asyncio.to_thread(FundamentalDataDao.batch_upsert, fundamental_records)
+                fill_fundamental_fields(overwrite=False)
                 logger.info(f"Batch upsert successful for period {period}.")
             else:
                 logger.warning(f"No fundamental records to insert for period {period}.")
@@ -1461,7 +1188,7 @@ class FundamentalDataSynchronizer:
             # 7. 批量插入 fundamental_records 到数据库
             if fundamental_records:
                 try:
-                    await asyncio.to_thread(self.fundamental_dao.batch_upsert, fundamental_records)
+                    await asyncio.to_thread(FundamentalDataDao.batch_upsert, fundamental_records)
                     logger.info("Inserted %d new fundamental records for stock %s.", len(fundamental_records), full_stock_code)
                 except Exception as e:
                     logger.error("Error inserting fundamental records for stock %s: %s", full_stock_code, e)
@@ -1482,41 +1209,41 @@ class FundamentalDataSynchronizer:
         try:
             logger.info("Starting fundamental data synchronization.")
             # 1. 获取股票列表
-            stock_list = self.stock_info_dao.load_stock_info()
-            stock_list_codes = [x.stock_code for x in stock_list]
-            self.stock_list_size = len(stock_list_codes)
-            logger.info("Found %d stocks to process.", len(stock_list_codes))
+            # stock_list = StockInfoDao.load_stock_info()
+            # stock_list_codes = [x.stock_code for x in stock_list]
+            # self.stock_list_size = len(stock_list_codes)
+            # logger.info("Found %d stocks to process.", len(stock_list_codes))
 
-            batch_size = 20
-            def run_tasks(stock_list_codes, batch_size, progress_callback):
-                for i in range(0, len(stock_list_codes), batch_size):
-                    batch = stock_list_codes[i : i + batch_size]
-                    tasks = []
-                    for full_stock_code in batch:
-                        short_stock_code = full_stock_code[:full_stock_code.index(".")] #去掉股票市场标识，如600519.SH -> 600519
-                        logger.info("Processing fundamental data for stock %s", full_stock_code)
+            # batch_size = 20
+            # def run_tasks(stock_list_codes, batch_size, progress_callback):
+            #     for i in range(0, len(stock_list_codes), batch_size):
+            #         batch = stock_list_codes[i : i + batch_size]
+            #         tasks = []
+            #         for full_stock_code in batch:
+            #             short_stock_code = full_stock_code[:full_stock_code.index(".")] #去掉股票市场标识，如600519.SH -> 600519
+            #             logger.info("Processing fundamental data for stock %s", full_stock_code)
 
-                        # 2. 查询 update_flag表中，当前股票代码是否允许更新基本面数据
-                        update_flags = self.update_flag_dao.select_one_by_code(full_stock_code)
-                        if update_flags and update_flags["fundamental_update_flag"] == "0":
-                            logger.info("Fundamental data update for stock %s is disabled.", full_stock_code)
-                            self.completed_num = self.completed_num + 1
-                            if progress_callback:
-                                progress_callback(self.completed_num, self.stock_list_size)
-                            continue
-                        elif not update_flags:
-                            continue
+            #             # 2. 查询 update_flag表中，当前股票代码是否允许更新基本面数据
+            #             update_flags = self.update_flag_dao.select_one_by_code(full_stock_code)
+            #             if update_flags and update_flags["fundamental_update_flag"] == "0":
+            #                 logger.info("Fundamental data update for stock %s is disabled.", full_stock_code)
+            #                 self.completed_num = self.completed_num + 1
+            #                 if progress_callback:
+            #                     progress_callback(self.completed_num, self.stock_list_size)
+            #                 continue
+            #             elif not update_flags:
+            #                 continue
 
-                        tasks.append(self.loop.create_task(self.process_data(short_stock_code, full_stock_code, progress_callback)))
-                    if tasks:
-                        self.loop.run_until_complete(asyncio.gather(*tasks))
+            #             tasks.append(self.loop.create_task(self.process_data(short_stock_code, full_stock_code, progress_callback)))
+            #         if tasks:
+            #             self.loop.run_until_complete(asyncio.gather(*tasks))
 
-            run_tasks(stock_list_codes, batch_size, progress_callback)
-            # 重试 failed_stocks 列表
-            failed_stocks_to_try = self.failed_stocks.copy()
-            self.failed_stocks.clear()
-            run_tasks(failed_stocks_to_try, batch_size, None)  #重试期间不更新进度
-
+            # run_tasks(stock_list_codes, batch_size, progress_callback)
+            # # 重试 failed_stocks 列表
+            # failed_stocks_to_try = self.failed_stocks.copy()
+            # self.failed_stocks.clear()
+            # run_tasks(failed_stocks_to_try, batch_size, None)  #重试期间不更新进度
+            fill_fundamental_fields(overwrite=True)
         finally:
             if self.failed_stocks:
                 logger.error("Failed stocks: %s", self.failed_stocks)
@@ -1631,7 +1358,6 @@ def parse_amount(s: Union[str, float, None]) -> Union[float, None]:
 stock_info_synchronizer = StockInfoSynchronizer()
 stock_hist_synchronizer = StockHistSynchronizer()
 adj_factor_synchronizer = AdjFactorSynchronizer()
-stock_adj_hist_synchronizer = StockAdjHistSynchronizer()
 company_action_synchronizer = CompanyActionSynchronizer()
 fundamental_data_synchronizer = FundamentalDataSynchronizer()
 suspend_data_synchronizer = SuspendDataSynchronizer()

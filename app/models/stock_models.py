@@ -112,6 +112,16 @@ class AdjFactor(Base):
     date = Column("date", Date, primary_key=True)
     adj_factor = Column("adj_factor", Float)
 
+    __table_args__ = (
+        Index('adj_factor_date_idx', 'date', postgresql_include=['adj_factor']),
+        Index(
+            'adj_factor_stock_code_date_idx',
+            stock_code,
+            desc(date),
+            postgresql_include=['adj_factor']
+        ),
+    )
+
     def __repr__(self):
         return f"<AdjFactor(stock_code='{self.stock_code}', date='{self.date}')>"
 
@@ -155,6 +165,8 @@ class FundamentalData(Base):
     total_cost = Column(Float, nullable=True)                  # 营业总成本
     net_cash_from_operating = Column(Float, nullable=True)     # 经营活动产生的现金流量净额
     cash_for_fixed_assets = Column(Float, nullable=True)        # 购建固定资产、无形资产和其他长期资产支付的现金
+    operating_profit_ttm = Column(Float, nullable=True)         # 营业利润TTM
+    total_liabilities = Column(Float, nullable=True)            # 总负债
 
     def __repr__(self):
         return f"<FundamentalData(stock_code='{self.stock_code}', report_date='{self.report_date}')>"

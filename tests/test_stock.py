@@ -31,8 +31,7 @@ def test_StockInfoSynchronizer(app):
         stock_info_synchronizer = StockInfoSynchronizer()
         stock_info_synchronizer.sync()
     finally:
-        stock_info_dao = StockInfoDao._instance
-        stock_info_dao.delete_all()
+        StockInfoDao.delete_all()
 
 @pytest.fixture
 def dummy_stock_list():
@@ -79,11 +78,10 @@ def test_StockHistSynchronizer(app, monkeypatch, dummy_stock_list):
     synchronizer = StockHistSynchronizer()
     synchronizer.sync()
 
-    stock_hist_unadj_dao = StockHistUnadjDao._instance
-    df0 = stock_hist_unadj_dao.select_dataframe_by_code("600655")
+    df0 = StockHistUnadjDao.select_dataframe_by_code("600655")
     print(df0)
 
-    stock_hist_unadj_dao.delete_all()
+    StockHistUnadjDao.delete_all()
 
 def test_CompanyActionSynchronizer(app, init_update_flag_data, monkeypatch, dummy_stock_list):
     def fake_load_stock_info(self):
@@ -99,8 +97,7 @@ def test_CompanyActionSynchronizer(app, init_update_flag_data, monkeypatch, dumm
     finally:
         company_action_dao = CompanyActionDao._instance
         company_action_dao.delete_all()
-        stock_hist_unadj_dao = StockHistUnadjDao._instance
-        stock_hist_unadj_dao.delete_all()
+        StockHistUnadjDao.delete_all()
         
 def test_AdjFactorSynchronizer(app, monkeypatch, dummy_stock_list):
     def fake_load_stock_info(self):
@@ -127,8 +124,7 @@ def test_AdjSynchronizer(app, init_update_flag_data, monkeypatch, dummy_stock_li
         synchronizer.sync()
         stock_adj_hist_synchronizer.sync()
 
-        stock_hist_unadj_dao = StockHistUnadjDao._instance
-        df0 = stock_hist_unadj_dao.select_dataframe_by_code("600655")
+        df0 = StockHistUnadjDao.select_dataframe_by_code("600655")
         print(df0)
 
         stock_hist_adj_dao = StockHistAdjDao._instance
@@ -144,11 +140,10 @@ def test_AdjSynchronizer(app, init_update_flag_data, monkeypatch, dummy_stock_li
 
         assert df2.equals(df)
     finally:
-        stock_hist_unadj_dao = StockHistUnadjDao._instance
         stock_hist_adj_dao = StockHistAdjDao._instance
         company_action_dao = CompanyActionDao._instance
         future_task_dao = FutureTaskDao._instance
-        stock_hist_unadj_dao.delete_all()
+        StockHistUnadjDao.delete_all()
         stock_hist_adj_dao.delete_all()
         company_action_dao.delete_all()
         future_task_dao.delete_all()
@@ -164,11 +159,10 @@ def test_FundamentalDataSynchronizer(app, init_update_flag_data, monkeypatch, du
         fundatmental_data_synchronizer.sync()
         fundatmental_data_synchronizer.sync()
 
-        fundamental_data_dao = FundamentalDataDao._instance
-        df = fundamental_data_dao.select_dataframe_all()
+        df = FundamentalDataDao.select_dataframe_all()
         print(df)
     finally:
-        fundamental_data_dao.delete_all()
+        FundamentalDataDao.delete_all()
 
 def test_SuspendDataSynchronizer(app):
     suspend_data_synchronizer = SuspendDataSynchronizer()
@@ -193,8 +187,7 @@ def test_CninfoStockShareChangeFetcher(app, monkeypatch, dummy_stock_list):
     stock_share_change_cninfo_dao.delete_all()
     
 def test_update_industry(app):
-	stock_info_dao = StockInfoDao._instance
-	stock_info_dao.update_all_industry()
+	StockInfoDao.update_all_industry()
     
 def test_get_fund_prices_by_code_list(app):
     code_list = ['008115', '019919', '018733']

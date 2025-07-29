@@ -14,18 +14,8 @@ logger = logging.getLogger(__name__)
 
 class StockInfoDao:
 
-    _instance = None  # 用于保存单例对象
-
-    def __new__(cls, *args, **kwargs):
-        # 始终返回已经创建好的 _instance
-        return cls._instance
-    
-    def __init__(self):
-        # __init__ 可能会被多次调用，因此通过 _initialized 标识确保只初始化一次
-        if not hasattr(self, '_initialized'):
-            self._initialized = True
-
-    def load_stock_info(self) -> List[StockInfo]:
+    @staticmethod
+    def load_stock_info() -> List[StockInfo]:
         try:
             with get_db() as db:
                 stock_info_lst = db.query(StockInfo).all()
@@ -33,7 +23,8 @@ class StockInfoDao:
         except Exception as e:
             logger.error(e)
         
-    def batch_insert(self, stock_info_lst: List[StockInfo]):
+    @staticmethod
+    def batch_insert(stock_info_lst: List[StockInfo]):
         try:
             with get_db() as db:
                 db.add_all(stock_info_lst)
@@ -44,7 +35,8 @@ class StockInfoDao:
             db.rollback()
             raise e
         
-    def batch_upsert(self, stock_info_lst: List[StockInfo]):
+    @staticmethod
+    def batch_upsert(stock_info_lst: List[StockInfo]):
         """
         批量 upsert（存在则更新，不存在则插入）StockInfo 记录
         """
@@ -86,7 +78,8 @@ class StockInfoDao:
             db.rollback()
             raise e
     
-    def select_dataframe_all(self) -> pd.DataFrame:
+    @staticmethod
+    def select_dataframe_all() -> pd.DataFrame:
         try:
             with get_db() as db:
                 # 构造查询条件
@@ -97,7 +90,8 @@ class StockInfoDao:
         except Exception as e:
             return pd.DataFrame()
         
-    def update_industry_by_mapping(self, stock_codes: List[str], industry_name: str):
+    @staticmethod
+    def update_industry_by_mapping(stock_codes: List[str], industry_name: str):
         """
         将指定的一组股票代码的行业字段统一更新为 industry_name
         """
@@ -117,7 +111,8 @@ class StockInfoDao:
             logger.error("更新行业信息失败: %s", e)
             raise e
 
-    def delete_all(self):
+    @staticmethod
+    def delete_all():
         try:
             with get_db() as db:
                 db.query(StockInfo).delete()
@@ -298,18 +293,8 @@ class FutureTaskDao:
 
 class StockHistUnadjDao:
 
-    _instance = None  # 用于保存单例对象
-
-    def __new__(cls, *args, **kwargs):
-        # 始终返回已经创建好的 _instance
-        return cls._instance
-    
-    def __init__(self):
-        # __init__ 可能会被多次调用，因此通过 _initialized 标识确保只初始化一次
-        if not hasattr(self, '_initialized'):
-            self._initialized = True
-
-    def get_latest_date(self, stock_code: str):
+    @staticmethod
+    def get_latest_date(stock_code: str):
         """
         查询指定股票在历史行情表中的最新日期，如果没有数据则返回 None。
         """
@@ -325,7 +310,8 @@ class StockHistUnadjDao:
             logger.error("Error querying latest date for %s: %s", stock_code, e)
             return None
 
-    def batch_insert(self, records: List[StockHistUnadj]):
+    @staticmethod
+    def batch_insert(records: List[StockHistUnadj]):
         """
         批量插入历史数据记录到数据库。
         """
@@ -344,7 +330,8 @@ class StockHistUnadjDao:
             db.rollback()
             raise e
         
-    def batch_upsert(self, records: List[StockHistUnadj]):
+    @staticmethod
+    def batch_upsert(records: List[StockHistUnadj]):
         if not records:
             return []
 
@@ -414,8 +401,9 @@ class StockHistUnadjDao:
             logger.error("Error during batch upsert: %s", e)
             db.rollback()
             raise e
-        
-    def select_dataframe_by_code(self, stock_code: str):
+    
+    @staticmethod
+    def select_dataframe_by_code(stock_code: str):
         """
         查询指定股票的所有前复权历史数据，并返回为 Pandas DataFrame。
         
@@ -432,7 +420,8 @@ class StockHistUnadjDao:
         except Exception as e:
             return pd.DataFrame()
     
-    def select_dataframe_by_date_range(self, stock_code: str, start_date, end_date):
+    @staticmethod
+    def select_dataframe_by_date_range(stock_code: str, start_date, end_date):
         try:
             with get_db() as db:
                 selected_columns = [
@@ -470,7 +459,8 @@ class StockHistUnadjDao:
             logger.error("Error querying stock_hist_unadj with filters: %s", e)
             return pd.DataFrame()
     
-    def delete_all(self):
+    @staticmethod
+    def delete_all():
         try:
             with get_db() as db:
                 db.query(StockHistUnadj).delete()
@@ -878,18 +868,8 @@ class StockHistAdjDao:
 
 class FundamentalDataDao:
 
-    _instance = None  # 用于保存单例对象
-
-    def __new__(cls, *args, **kwargs):
-        # 始终返回已经创建好的 _instance
-        return cls._instance
-    
-    def __init__(self):
-        # __init__ 可能会被多次调用，因此通过 _initialized 标识确保只初始化一次
-        if not hasattr(self, '_initialized'):
-            self._initialized = True
-
-    def get_latest_report_date(self, stock_code: str):
+    @staticmethod
+    def get_latest_report_date(stock_code: str):
         try:
             with get_db() as db:
                 result = db.query(FundamentalData.report_date).filter(FundamentalData.stock_code == stock_code).order_by(FundamentalData.report_date.desc()).first()
@@ -901,7 +881,8 @@ class FundamentalDataDao:
             logger.error("Error querying latest report date for %s: %s", stock_code, e)
             return None
 
-    def batch_upsert(self, records: List[FundamentalData]) -> List[FundamentalData]:
+    @staticmethod
+    def batch_upsert(records: List[FundamentalData]) -> List[FundamentalData]:
         """
         批量 upsert 基本面数据记录到数据库：
         根据 stock_code 和 report_date 查询，如果存在则更新，否则插入。
@@ -946,8 +927,9 @@ class FundamentalDataDao:
             logger.error("Error during batch upsert: %s", e)
             db.rollback()
             raise e
-        
-    def select_dataframe_by_code(self, stock_code: str):
+
+    @staticmethod   
+    def select_dataframe_by_code(stock_code: str):
         with get_db() as db:
             # 构造查询条件
             query = db.query(FundamentalData).filter(FundamentalData.stock_code == stock_code)
@@ -955,7 +937,8 @@ class FundamentalDataDao:
             df = pd.read_sql(query.statement, db.bind)
         return df
     
-    def select_dataframe_all(self):
+    @staticmethod
+    def select_dataframe_all():
         """
         分块读取所有 exchange ∈ {'SSE', 'SZSE'} 的 FundamentalData 数据，返回 DataFrame。
         """
@@ -979,7 +962,8 @@ class FundamentalDataDao:
             logger.error("Error selecting fundamental data with exchange filter: %s", e)
             return pd.DataFrame()
     
-    def delete_all(self):
+    @staticmethod
+    def delete_all():
         try:
             with get_db() as db:
                 db.query(FundamentalData).delete()
@@ -1184,22 +1168,16 @@ class MarketFactorsDao:
         
         
 
-StockInfoDao._instance = object.__new__(StockInfoDao)
-StockInfoDao._instance.__init__()
 UpdateFlagDao._instance = object.__new__(UpdateFlagDao)
 UpdateFlagDao._instance.__init__()
 FutureTaskDao._instance = object.__new__(FutureTaskDao)
 FutureTaskDao._instance.__init__()
-StockHistUnadjDao._instance = object.__new__(StockHistUnadjDao)
-StockHistUnadjDao._instance.__init__()
 AdjFactorDao._instance = object.__new__(AdjFactorDao)
 AdjFactorDao._instance.__init__()
 CompanyActionDao._instance = object.__new__(CompanyActionDao)
 CompanyActionDao._instance.__init__()
 StockHistAdjDao._instance = object.__new__(StockHistAdjDao)
 StockHistAdjDao._instance.__init__()
-FundamentalDataDao._instance = object.__new__(FundamentalDataDao)
-FundamentalDataDao._instance.__init__()
 SuspendDataDao._instance = object.__new__(SuspendDataDao)
 SuspendDataDao._instance.__init__()
 StockShareChangeCNInfoDao._instance = object.__new__(StockShareChangeCNInfoDao)

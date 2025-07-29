@@ -46,7 +46,6 @@ class CninfoStockShareChangeFetcher:
 
     def __init__(self):
         global CNINFO_API_KEY, CNINFO_API_SECRET
-        self.stock_info_dao = StockInfoDao._instance
         self.stock_share_change_data_dao = StockShareChangeCNInfoDao._instance
         self.cninfo_api_key = CNINFO_API_KEY
         self.cninfo_api_secret = CNINFO_API_SECRET
@@ -118,7 +117,7 @@ class CninfoStockShareChangeFetcher:
         # 获取token（如果需要的话）
         token = self.get_token_if_needed()
         
-        stock_info_lst = self.stock_info_dao.load_stock_info()
+        stock_info_lst = StockInfoDao.load_stock_info()
         
         # 控制调用频率：每分钟最多5次
         call_interval = 60  # 每次调用的间隔，单位秒

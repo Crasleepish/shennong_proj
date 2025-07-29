@@ -102,9 +102,7 @@ class AdjFactorHolder:
 
 # 设置模拟的DAO单例实例
 StockHistUnadjDao = MagicMock()
-StockHistUnadjDao._instance = TestStockHistUnadjDao()
 AdjFactorDao = MagicMock()
-AdjFactorDao._instance = TestAdjFactorDao()
 
 # 设置数据持有者实例
 stock_hist_holder = StockHistHolder()
@@ -146,7 +144,7 @@ def test_to_adjusted_hist(setup_test_data):
     assert 'adj_factor' not in result_df.columns
     assert 'adj_ratio' not in result_df.columns
 
-@patch('app.dao.stock_info_dao.StockHistUnadjDao._instance.select_dataframe_by_date_range')
+@patch('app.dao.stock_info_dao.StockHistUnadjDao.select_dataframe_by_date_range')
 @patch('app.dao.stock_info_dao.AdjFactorDao._instance.get_adj_factors')
 def test_get_qfq_price_by_code(mock_get_adj_factors, mock_select_dataframe, setup_test_data):
     """测试获取单个股票前复权价格的函数"""
