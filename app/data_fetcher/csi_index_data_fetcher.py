@@ -3,6 +3,7 @@
 import pandas as pd
 import akshare as ak
 import datetime
+from typing import List, Optional
 from app.data_fetcher.base_fetcher import BaseFetcher
 from app.models.index_models import IndexInfo, IndexHist
 from app.database import get_db
@@ -66,7 +67,7 @@ class CSIIndexDataFetcher:
                 BaseFetcher.write_to_db_no_date(df_info, IndexInfo, db)
                 BaseFetcher.write_to_db(df_hist, IndexHist, db, drop_na_row=False)
 
-    def get_data_by_code_and_date(self, code: str = None, start: str = None, end: str = None) -> pd.DataFrame:
+    def get_data_by_code_and_date(self, code: str = None, start: str = None, end: str = None, fields: List[str] = None) -> pd.DataFrame:
         """
         从数据库中读取指定指数代码和日期范围的数据，并合并该 code 对应的补充数据。
 
@@ -76,7 +77,18 @@ class CSIIndexDataFetcher:
         :return: 满足条件的 DataFrame。
         """
         with get_db() as db:
-            query = db.query(IndexHist)
+            # 确定要查询的字段
+            if fields:
+                # 确保字段名有效并存在于模型中
+                valid_fields = []
+                for field in fields:
+                    if hasattr(IndexHist, field):
+                        valid_fields.append(getattr(IndexHist, field))
+                    else:
+                        raise ValueError(f"Field '{field}' does not exist in IndexHist model")
+                query = db.query(*valid_fields)
+            else:
+                query = db.query(IndexHist)
 
             if code:
                 query = query.filter(IndexHist.index_code == code)

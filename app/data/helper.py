@@ -127,16 +127,6 @@ class FundHistHolder:
 
 fund_hist_holder = FundHistHolder()
 
-def refresh_holders():
-    global stock_hist_holder, adj_factor_holder, stock_info_holder, fundamental_data_holder, suspend_data_holder, index_hist_holder, fund_hist_holder
-    stock_hist_holder = StockHistHolder()
-    adj_factor_holder = AdjFactorHolder()
-    stock_info_holder = StockInfoHolder()
-    fundamental_data_holder = FundamentalDataHolder()
-    suspend_data_holder = SuspendDataHolder()
-    index_hist_holder = IndexHistHolder()
-    fund_hist_holder = FundHistHolder()
-
 def to_adjusted_hist(unadj_df: pd.DataFrame, adj_factor_df: pd.DataFrame, hist_columns: List[str], adj_factor_column: str, date_column: str):
     """
     将未复权的历史数据转换为复权后的历史数据。

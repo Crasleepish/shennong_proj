@@ -368,7 +368,7 @@ class StockHistSynchronizer:
                     high=safe_value(row["最高"]),
                     low=safe_value(row["最低"]),
                     volume=safe_value(row["成交量"]) * 100 if safe_value(row["成交量"]) is not None else None,  # Tushare volume is in 100s of shares
-                    amount=safe_value(row["成交额"]),
+                    amount=safe_value(row["成交额"]) * 1000,
                     change_percent=safe_value(row["涨跌幅"]),
                     change=safe_value(row["涨跌额"]),
                     turnover_rate=safe_value(row.get("turnover_rate")),

@@ -104,7 +104,7 @@ def build_price_df(asset_source_map: dict, start: str, end: str) -> pd.DataFrame
     return net_value_df.ffill()
 
 
-def run_backtest(start="2025-07-15", end="2025-07-17", window=20):
+def run_backtest(start="2025-07-24", end="2025-07-31", window=20):
     out_dir = f"./fund_portfolio_bt_result/{datetime.today().strftime('%Y%m%d_%H%M%S')}"
     os.makedirs(out_dir, exist_ok=True)
     with app.app_context(), get_db() as db:

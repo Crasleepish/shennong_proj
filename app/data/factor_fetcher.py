@@ -1,39 +1,16 @@
-from app.models.stock_models import MarketFactors
-from app.dao.stock_info_dao import MarketFactorsDao
-from app.backtest.portfolio_BM_S_L import backtest_strategy as portfolio_BM_S_L
-from app.backtest.portfolio_BM_B_L import backtest_strategy as portfolio_BM_B_L
-from app.backtest.portfolio_BM_S_M import backtest_strategy as portfolio_BM_S_M
-from app.backtest.portfolio_BM_B_M import backtest_strategy as portfolio_BM_B_M
-from app.backtest.portfolio_BM_S_H import backtest_strategy as portfolio_BM_S_H
-from app.backtest.portfolio_BM_B_H import backtest_strategy as portfolio_BM_B_H
-from app.backtest.portfolio_OP_S_L import backtest_strategy as portfolio_OP_S_L
-from app.backtest.portfolio_OP_B_L import backtest_strategy as portfolio_OP_B_L
-from app.backtest.portfolio_OP_S_M import backtest_strategy as portfolio_OP_S_M
-from app.backtest.portfolio_OP_B_M import backtest_strategy as portfolio_OP_B_M
-from app.backtest.portfolio_OP_S_H import backtest_strategy as portfolio_OP_S_H
-from app.backtest.portfolio_OP_B_H import backtest_strategy as portfolio_OP_B_H
-from app.backtest.portfolio_VLT_S_L import backtest_strategy as portfolio_VLT_S_L
-from app.backtest.portfolio_VLT_B_L import backtest_strategy as portfolio_VLT_B_L
-from app.backtest.portfolio_VLT_S_H import backtest_strategy as portfolio_VLT_S_H
-from app.backtest.portfolio_VLT_B_H import backtest_strategy as portfolio_VLT_B_H
-from app.backtest.portfolio_LIQ_X_H import backtest_strategy as portfolio_LIQ_X_H
-from app.backtest.portfolio_LIQ_X_L import backtest_strategy as portfolio_LIQ_X_L
-from app.backtest.portfolio_ALL import backtest_strategy as portfolio_ALL
-from app.data.helper import get_index_daily_return, refresh_holders
 import os
-from datetime import datetime
 import pandas as pd
+from datetime import datetime
+from app.data_fetcher import CSIIndexDataFetcher
+from app.backtest.portfolio_driver import build_all_portfolios
+from app.dao.stock_info_dao import MarketFactorsDao
+from app.models.stock_models import MarketFactors
 
 import logging
 
 logger = logging.getLogger(__name__)
 
 output_dir = r"./bt_result"
-
-RET_DATE_COL = "date"
-RET_VAL_COL = "group"
-INDEX_FILE = "csi_index_zzqz.csv"
-INDEX_COL = "daily_return"
 
 def format_date(date_str):
     """
@@ -60,87 +37,91 @@ def safe_value(val):
 def safe_get(val):
     return 0.0 if val is None or pd.isna(val) else val
 
-def csi_index_zzqz(start_date: str, end_date: str):
-    df = get_index_daily_return("000985.CSI")
-    df = df.sort_index()
-    df = df.loc[start_date:end_date]
-    if not os.path.exists(os.path.join(output_dir, format_date(end_date))):
-        os.makedirs(os.path.join(output_dir, format_date(end_date)))
-    df.to_csv(os.path.join(output_dir, format_date(end_date), "csi_index_zzqz.csv"), index=True)
-    return df
-
 class FactorFetcher:
     def __init__(self):
         self.market_factors_dao = MarketFactorsDao._instance
 
-    def compute_and_store_daily_factors(self, end_date: str, base_dir: str, append:  bool = False):
-        folder = os.path.join(base_dir, end_date.replace('-', ''))
-        if not os.path.exists(folder):
-            logger.warn("目录不存在: %s， 创建", folder)
-            os.makedirs(folder)
-            return
+    def compute_and_store_daily_factors(self, start_date: str, end_date: str, output_dir: str):
+        logger.info("开始读取回测组合数据目录: %s", output_dir)
 
-        logger.info("开始处理目录: %s", folder)
-
-        # 收集所有组合数据
         returns_dict = {}
-        for file in os.listdir(folder):
-            if file.startswith("portfolio_") and file.endswith("_daily_returns.csv"):
-                path = os.path.join(folder, file)
-                df = pd.read_csv(path, usecols=[RET_DATE_COL, RET_VAL_COL], parse_dates=[RET_DATE_COL])
-                df = df.rename(columns={RET_VAL_COL: file.replace(".csv", "")})
-                returns_dict[file] = df.set_index(RET_DATE_COL)
+
+        # 加载 bm 组合
+        for size in ["S", "B"]:
+            for bm in ["L", "M", "H"]:
+                file = f"bm_{size}{bm}_daily_returns.csv"
+                path = os.path.join(output_dir, file)
+                if not os.path.exists(path):
+                    logger.warning("未找到文件: %s", file)
+                    continue
+                df = pd.read_csv(path, parse_dates=["date"])[["date", "value"]]
+                col_name = f"bm_{size}{bm}"
+                df = df.rename(columns={"value": col_name}).set_index("date")
+                returns_dict[col_name] = df
+
+        # 加载 qmj 组合
+        for size in ["S", "B"]:
+            for q in ["L", "M", "H"]:
+                file = f"qmj_{size}{q}_daily_returns.csv"
+                path = os.path.join(output_dir, file)
+                if not os.path.exists(path):
+                    logger.warning("未找到文件: %s", file)
+                    continue
+                df = pd.read_csv(path, parse_dates=["date"])[["date", "value"]]
+                col_name = f"qmj_{size}{q}"
+                df = df.rename(columns={"value": col_name}).set_index("date")
+                returns_dict[col_name] = df
 
         if not returns_dict:
-            logger.warning("未找到组合收益率文件")
+            logger.warning("未加载到任何组合数据")
             return
 
-        # 合并所有组合收益率数据
-        merged_df = pd.concat(returns_dict.values(), axis=1, join='inner')
+        # 合并组合收益率
+        merged_df = pd.concat(returns_dict.values(), axis=1).dropna()
+        merged_df = merged_df.sort_index()
         merged_df.index.name = "date"
 
-        # 加载中证全指
-        index_path = os.path.join(folder, INDEX_FILE)
-        index_df = pd.read_csv(index_path, usecols=["date", INDEX_COL], parse_dates=["date"])
-        index_df = index_df.set_index("date").rename(columns={INDEX_COL: "INDEX"})
+        # 加载中证全指收益率作为 MKT 因子
+        index_df = CSIIndexDataFetcher().get_data_by_code_and_date(
+            "000985.CSI", start=start_date, end=end_date, fields=["date", "change_percent"]
+        )
+        index_df = index_df.rename(columns={"change_percent": "MKT"})
+        index_df = index_df.set_index("date", drop=True)
+        merged_df = merged_df.join(index_df, how="inner")
 
-        # 合并指数
-        merged_df = merged_df.join(index_df, how='inner')
+        # SMB = 小盘 - 大盘（平均）
+        smb_bm = (
+            merged_df[["bm_SL", "bm_SM", "bm_SH"]].mean(axis=1) -
+            merged_df[["bm_BL", "bm_BM", "bm_BH"]].mean(axis=1)
+        )
+        smb_qmj = (
+            merged_df[["qmj_SL", "qmj_SM", "qmj_SH"]].mean(axis=1) -
+            merged_df[["qmj_BL", "qmj_BM", "qmj_BH"]].mean(axis=1)
+        )
+        smb = (smb_bm + smb_qmj) / 2
 
+        # HML = 高 BM - 低 BM（平均小盘和大盘）
+        hml = (
+            (merged_df["bm_SH"] + merged_df["bm_BH"]) / 2 -
+            (merged_df["bm_SL"] + merged_df["bm_BL"]) / 2
+        )
 
-        # 计算每日因子
-        def calc_smb(factor: str, merged_df: pd.DataFrame) -> pd.Series:
-            small = [col for col in merged_df.columns if col.startswith(f"portfolio_{factor}_S_")]
-            big = [col for col in merged_df.columns if col.startswith(f"portfolio_{factor}_B_")]
-            return merged_df[small].mean(axis=1) - merged_df[big].mean(axis=1)
+        # QMJ = 高质量 - 低质量（平均小盘和大盘）
+        qmj = (
+            (merged_df["qmj_SH"] + merged_df["qmj_BH"]) / 2 -
+            (merged_df["qmj_SL"] + merged_df["qmj_BL"]) / 2
+        )
 
-        high_bm = merged_df[[col for col in merged_df.columns if col.startswith("portfolio_BM_") and col.endswith("_H_daily_returns")]].mean(axis=1)
-        low_bm = merged_df[[col for col in merged_df.columns if col.startswith("portfolio_BM_") and col.endswith("_L_daily_returns")]].mean(axis=1)
+        factors_df = pd.DataFrame({
+            "MKT": merged_df["MKT"],
+            "SMB": smb,
+            "HML": hml,
+            "QMJ": qmj
+        }, index=merged_df.index)
 
-        high_op = merged_df[[col for col in merged_df.columns if col.startswith("portfolio_OP_") and col.endswith("_H_daily_returns")]].mean(axis=1)
-        low_op = merged_df[[col for col in merged_df.columns if col.startswith("portfolio_OP_") and col.endswith("_L_daily_returns")]].mean(axis=1)
+        logger.info("因子计算完成，共 %d 条记录", len(factors_df))
 
-        high_vol = merged_df[[col for col in merged_df.columns if col.startswith("portfolio_VLT_") and col.endswith("_H_daily_returns")]].mean(axis=1)
-        low_vol = merged_df[[col for col in merged_df.columns if col.startswith("portfolio_VLT_") and col.endswith("_L_daily_returns")]].mean(axis=1)
-
-        high_liq = merged_df[[col for col in merged_df.columns if col.startswith("portfolio_LIQ_") and col.endswith("_H_daily_returns")]].mean(axis=1)
-        low_liq = merged_df[[col for col in merged_df.columns if col.startswith("portfolio_LIQ_") and col.endswith("_L_daily_returns")]].mean(axis=1)
-
-        factors_df = pd.DataFrame(index=merged_df.index)
-        factors_df["MKT"] = merged_df["INDEX"]
-        factors_df["SMB"] = calc_smb("BM", merged_df) #SMB仅相对HML保持纯净
-        factors_df["HML"] = high_bm - low_bm
-        factors_df["QMJ"] = high_op - low_op
-        factors_df["VOL"] = low_vol - high_vol
-        factors_df["LIQ"] = low_liq - high_liq
-        
-        if append:
-            logger.info("共计算出 %d 条因子记录，入库最近 %d 条", len(factors_df), min(70, len(factors_df)-1))
-            factors_df = factors_df.iloc[-min(70, len(factors_df)-1):, :]
-        else:
-            logger.info("共计算出 %d 条因子记录，入库全部", len(factors_df))
-
-        # 入库
+        # 写入数据库
         for date, row in factors_df.iterrows():
             record = MarketFactors(
                 date=date,
@@ -148,138 +129,27 @@ class FactorFetcher:
                 SMB=safe_value(row["SMB"]),
                 HML=safe_value(row["HML"]),
                 QMJ=safe_value(row["QMJ"]),
-                VOL=safe_value(row["VOL"]),
-                LIQ=safe_value(row["LIQ"]),
+                VOL=None,  # 已弃用
+                LIQ=None   # 已弃用
             )
             self.market_factors_dao.upsert_one(record)
 
-        logger.info("入库完成: %d 条记录", len(factors_df))
+        logger.info("因子入库完成: %d 条记录", len(factors_df))
 
 
-    def fetch_all(self, start_date: str, end_date: str, append: bool = False, progress_callback=None):
+    def fetch_all(self, start_date: str, end_date: str, progress_callback=None):
         """
         Parameters:
         - start_date (str): The start date of the data to fetch, in 'YYYY-MM-DD' format.
         - end_date (str): The end date of the data to fetch, in 'YYYY-MM-DD' format.
-        - append (bool, optional): If True, appends the fetched data to an existing dataset. Defaults to False.
         - progress_callback (callable, optional): A callback function to report the progress of the fetch operation.
                                     The callback function should accept two float arguments: the current progress
                                     and the total progress. Defaults to None.
         """
-        refresh_holders()
         logger.info("Starting fetching market index from %s to %s", start_date, end_date)
-        csi_index_zzqz(start_date, end_date)
+        build_all_portfolios(start_date, end_date)
 
-        if progress_callback:
-            progress_callback(5.5, 100)
-
-        logger.info("Starting run BM_S_L strategy from %s to %s", start_date, end_date)
-        portfolio_BM_S_L(start_date, end_date)
-
-        if progress_callback:
-            progress_callback(11.1, 100)
-
-        logger.info("Starting run BM_B_L strategy from %s to %s", start_date, end_date)
-        portfolio_BM_B_L(start_date, end_date)
-
-        if progress_callback:
-            progress_callback(16.6, 100)
-
-        logger.info("Starting run BM_S_M strategy from %s to %s", start_date, end_date)
-        portfolio_BM_S_M(start_date, end_date)
-
-        if progress_callback:
-            progress_callback(22.2, 100)
-
-        logger.info("Starting run BM_B_M strategy from %s to %s", start_date, end_date)
-        portfolio_BM_B_M(start_date, end_date)
-
-        if progress_callback:
-            progress_callback(27.7, 100)
-
-        logger.info("Starting run BM_S_H strategy from %s to %s", start_date, end_date)
-        portfolio_BM_S_H(start_date, end_date)
-
-        if progress_callback:
-            progress_callback(33.3, 100)
-
-        logger.info("Starting run BM_B_H strategy from %s to %s", start_date, end_date)
-        portfolio_BM_B_H(start_date, end_date)
-
-        if progress_callback:
-            progress_callback(38.8, 100)
-
-        logger.info("Starting run OP_S_L strategy from %s to %s", start_date, end_date)
-        portfolio_OP_S_L(start_date, end_date)
-
-        if progress_callback:
-            progress_callback(44.4, 100)
-
-        logger.info("Starting run OP_B_L strategy from %s to %s", start_date, end_date)
-        portfolio_OP_B_L(start_date, end_date)
-
-        if progress_callback:
-            progress_callback(50.0, 100)
-
-        logger.info("Starting run OP_S_M strategy from %s to %s", start_date, end_date)
-        portfolio_OP_S_M(start_date, end_date)
-
-        if progress_callback:
-            progress_callback(55.5, 100)
-
-        logger.info("Starting run OP_B_M strategy from %s to %s", start_date, end_date)
-        portfolio_OP_B_M(start_date, end_date)
-
-        if progress_callback:
-            progress_callback(61.1, 100)
-
-        logger.info("Starting run OP_S_H strategy from %s to %s", start_date, end_date)
-        portfolio_OP_S_H(start_date, end_date)
-
-        if progress_callback:
-            progress_callback(66.6, 100)
-
-        logger.info("Starting run OP_B_H strategy from %s to %s", start_date, end_date)
-        portfolio_OP_B_H(start_date, end_date)
-
-        if progress_callback:
-            progress_callback(72.2, 100)
-
-        logger.info("Starting run VLT_S_L strategy from %s to %s", start_date, end_date)
-        portfolio_VLT_S_L(start_date, end_date)
-
-        if progress_callback:
-            progress_callback(77.7, 100)
-
-        logger.info("Starting run VLT_B_L strategy from %s to %s", start_date, end_date)
-        portfolio_VLT_B_L(start_date, end_date)
-
-        if progress_callback:
-            progress_callback(83.3, 100)
-
-        logger.info("Starting run VLT_S_H strategy from %s to %s", start_date, end_date)
-        portfolio_VLT_S_H(start_date, end_date)
-
-        if progress_callback:
-            progress_callback(88.8, 100)
-
-        logger.info("Starting run VLT_B_H strategy from %s to %s", start_date, end_date)
-        portfolio_VLT_B_H(start_date, end_date)
-
-        if progress_callback:
-            progress_callback(94.4, 100)
-
-        portfolio_LIQ_X_H(start_date, end_date)
-
-        if progress_callback:
-            progress_callback(95, 100)
-
-        portfolio_LIQ_X_L(start_date, end_date)
-
-        if progress_callback:
-            progress_callback(99.0, 100)
-
-        self.compute_and_store_daily_factors(end_date, output_dir, append=append)
+        self.compute_and_store_daily_factors(start_date=start_date, end_date=end_date, output_dir=output_dir)
 
         if progress_callback:
             progress_callback(100, 100)

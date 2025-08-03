@@ -37,7 +37,7 @@ class DataFetcher:
         df = StockInfoDao.select_dataframe_all()
         df["listing_date"] = pd.to_datetime(df["listing_date"], errors="coerce")
         df = df.set_index("stock_code", drop=True)
-        df = df[["exchange", "listing_date", "list_status"]]
+        df = df[["exchange", "listing_date", "list_status", "industry"]]
         return df
 
     def fetch_mkt_cap_on(self, stock_codes: List[str], date: str) -> pd.Series:

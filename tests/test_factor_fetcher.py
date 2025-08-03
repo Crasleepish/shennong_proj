@@ -4,9 +4,7 @@ import pytest
 import pandas as pd
 from app import create_app
 from app.config import TestConfig, Config
-from app.backtest.portfolio_driver import build_all_portfolios
-
-
+from app.data.factor_fetcher import FactorFetcher
 
 @pytest.fixture
 def app():
@@ -17,4 +15,4 @@ def app():
 
 
 def test_build_all_portfolios(app):
-    build_all_portfolios("2025-02-20", "2025-08-01")
+    FactorFetcher().fetch_all("2025-02-20", "2025-08-01")

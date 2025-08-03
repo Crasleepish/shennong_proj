@@ -5,7 +5,7 @@ from app.models.calendar_model import TradeCalendar
 from typing import List
 import logging
 from datetime import datetime
-from sqlalchemy import and_
+from sqlalchemy import and_, desc
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ class CalendarFetcher:
                 count += 1
             logger.info("交易日数据入库完成，共 %d 天", count)
 
-    def get_trade_date(self, start: str, end: str = None, format: str = "%Y%m%d") -> List[str]:
+    def get_trade_date(self, start: str, end: str = None, format: str = "%Y%m%d", limit: int = None, ascending: bool = True) -> List[str]:
         """
         获取指定日期范围内的交易日列表
         
@@ -62,21 +62,31 @@ class CalendarFetcher:
                     TradeCalendar.date >= start_date,
                     TradeCalendar.date <= end_date
                 )
-            ).order_by(TradeCalendar.date).all()
+            )
+
+            if ascending:
+                calendars = calendars.order_by(TradeCalendar.date)
+            else:
+                calendars = calendars.order_by(desc(TradeCalendar.date))
+
+            if limit is not None:
+                calendars = calendars.limit(limit)
+            calendars = calendars.all()
             
             # 将日期格式化为指定格式
             trade_dates = [cal.date.strftime(format) for cal in calendars]
         
         return trade_dates
     
-    def get_prev_trade_date(self, current_date: str) -> str:
+    def get_prev_trade_date(self, current_date: str, format: str = "%Y%m%d") -> str:
         """
         获取给定交易日的前一个交易日。
+        如果current_date不是交易日，则返回最后一个交易日。
         """
-        all_dates = self.get_trade_date("19900101", current_date, format="%Y%m%d")
-        if current_date not in all_dates:
-            return all_dates[-1]
-        idx = all_dates.index(current_date)
-        if idx == 0:
+        all_dates = self.get_trade_date("19900101", current_date, format=format, limit=2, ascending=False)
+        formated_current_date = datetime.strptime(current_date, '%Y%m%d').strftime(format)
+        if formated_current_date not in all_dates:
+            return all_dates[0]
+        if len(all_dates) < 2:
             return None  # 没有更早的交易日
-        return all_dates[idx - 1]
+        return all_dates[1]

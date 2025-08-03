@@ -1,168 +1,210 @@
 from abc import ABC, abstractmethod
 import pandas as pd
-from typing import List, Dict
+from typing import List, Dict, Set, Optional
 import logging
 
 logger = logging.getLogger(__name__)
 
-def get_latest_available_row(df: pd.DataFrame, asof_date: pd.Timestamp) -> pd.Series:
-    """
-    从 DataFrame 中获取不晚于 asof_date 的最新一行数据（按 index 作为日期处理）。
-    如果没有满足条件的数据，返回空 Series。
-    """
-    valid_dates = df.index[df.index <= asof_date]
-    if valid_dates.empty:
-        return pd.Series(dtype='float32')
-    latest_date = valid_dates.max()
-    return df.loc[latest_date]
+def get_latest_available_row(df: pd.DataFrame, asof_date: pd.Timestamp) -> pd.DataFrame:
+    # 筛选截至asof_date之前的所有报告
+    df = df.loc[df.index.get_level_values("report_date") <= asof_date]
 
-class StockSelector(ABC):
-    def __init__(self, stock_info_df: pd.DataFrame, blacklist: List[str]):
-        self.stock_info = stock_info_df
-        self.blacklist = blacklist
+    if df.empty:
+        return pd.DataFrame()
+
+    # 排序确保每个股票最后一条是最新的
+    df = df.sort_index(level="report_date")
+
+    # 保留每个股票最新一条记录
+    latest = df.groupby("stock_code").tail(1)
+    latest.index = latest.index.get_level_values("stock_code")
+    return latest
+
+class Selector(ABC):
+    def __init__(self, parents: Optional[List['Selector']] = None):
+        self.parents = parents or []
+
+    def select(self, universe: Optional[Set[str]] = None) -> List[str]:
+        for p in self.parents:
+            universe = set(p.select(universe))
+            if not universe:
+                return []
+        return self._select(universe)
 
     @abstractmethod
-    def select(self, data: Dict[str, pd.DataFrame], asof_date: pd.Timestamp, blacklist: List[str]) -> List[str]:
+    def _select(self, universe: Optional[Set[str]]) -> List[str]:
         pass
 
 
-class BasicStockSelector(StockSelector):
-    def select(self, data: Dict[str, pd.DataFrame], asof_date: pd.Timestamp) -> List[str]:
-        # 1. 过滤已上市
-        listed = self.stock_info[self.stock_info['listing_date'] <= asof_date].index.tolist()
+class AmountSelector(Selector):
+    # 根据成交量筛选，剃除最低的一部分的股票，剃除的比例为percentile
+    def __init__(self, amount: pd.DataFrame, asof_date: pd.Timestamp, percentile: float, parents: List[Selector] = None):
+        super().__init__(parents)
+        self.amount = amount
+        self.asof_date = asof_date
+        self.percentile = percentile
 
-        # 2. 过滤当日有价格数据的股票
-        price_df = data.get('price')
-        if price_df is None or asof_date not in price_df.index:
+    def _select(self, universe):
+        if self.amount is None or self.asof_date not in self.amount.index:
             return []
-        available = price_df.columns[price_df.loc[asof_date].notna()].tolist()
-
-        # 3. 排除黑名单
-        result = list(set(listed).intersection(available).difference(self.blacklist))
-        return sorted(result)
-    
-
-# === QualitySelector：质量三因子行业中性化选股 ===
-class QualitySelector(StockSelector):
-    def __init__(self, stock_info_df: pd.DataFrame, blacklist: List[str], size_percentile: tuple = (0.5, 1.0), score_percentile: tuple = (0.7, 1.0)):
-        super().__init__(stock_info_df, blacklist)
-        self.size_percentile = size_percentile  # e.g. (0.25, 0.75)
-        self.score_percentile = score_percentile  # e.g. (0.7, 1.0)
-
-    def select(self, data: Dict[str, pd.DataFrame], asof_date: pd.Timestamp) -> List[str]:
-        # 1. 初筛：上市满一年 & 有价格
-        listed = self.stock_info[self.stock_info['listing_date'] <= asof_date - pd.DateOffset(years=1)]
-        price_df = data.get("price")
-        if price_df is None or asof_date not in price_df.index:
+        amount_series = self.amount.loc[self.asof_date].dropna()
+        amount_series = amount_series[amount_series.index.isin(universe)]
+        if amount_series.empty:
             return []
-        available = price_df.columns[price_df.loc[asof_date].notna()]
-        universe = set(listed.index) & set(available) - set(self.blacklist)
+        amount_series = amount_series.sort_values(ascending=True)
+        n = len(amount_series)
+        cutoff = int(n * self.percentile)
+        return amount_series.iloc[cutoff:].index.tolist()
 
-        # 2. 市值分组（按百分位）
-        mkt_cap = data.get("mkt_cap")
-        if mkt_cap is None or asof_date not in mkt_cap.index:
-            return []
-        cap_series = mkt_cap.loc[asof_date].dropna()
-        cap_universe = list(universe & set(cap_series.index))
-        if not cap_universe:
-            return []
-        sorted_caps = cap_series[cap_universe].sort_values()
-        n_cap = len(sorted_caps)
-        lower_idx = int(n_cap * self.size_percentile[0])
-        upper_idx = int(n_cap * self.size_percentile[1])
-        cap_group = sorted_caps.iloc[lower_idx:upper_idx].index
 
-        # 3. 获取基本面数据
-        fundamental_df = data.get("fundamental")
-        if fundamental_df is None:
+class HSExchangeSelector(Selector):
+    def __init__(self, stock_info: pd.DataFrame, parents: Optional[List[Selector]] = None):
+        super().__init__(parents)
+        self.stock_info = stock_info
+
+    def _select(self, universe):
+        hs_exchange_stocks = set(self.stock_info[self.stock_info["exchange"].isin(["SSE", "SZSE"])].index)
+        return list(hs_exchange_stocks.intersection(universe))
+
+class ListedMoreThanOneYearSelector(Selector):
+    def __init__(self, stock_info: pd.DataFrame, asof_date: pd.Timestamp, parents: Optional[List[Selector]] = None):
+        super().__init__(parents)
+        self.stock_info = stock_info
+        self.asof_date = asof_date
+
+    def _select(self, universe):
+        listed = self.stock_info[self.stock_info['listing_date'] <= self.asof_date - pd.DateOffset(years=1)].index
+        return list(listed.intersection(universe))
+
+class HasPriceSelector(Selector):
+    def __init__(self, price_df: pd.DataFrame, asof_date: pd.Timestamp, parents: Optional[List[Selector]] = None):
+        super().__init__(parents)
+        self.price_df = price_df
+        self.asof_date = asof_date
+
+    def _select(self, universe):
+        if self.price_df is None or self.asof_date not in self.price_df.index:
             return []
-        lookback_date = asof_date - pd.Timedelta(days=120)
-        sub_df = get_latest_available_row(fundamental_df, lookback_date)
-        if sub_df.empty:
+        available = self.price_df.columns[self.price_df.loc[self.asof_date].notna()]
+        return list(set(available).intersection(universe))
+
+class ExcludeBlacklistSelector(Selector):
+    def __init__(self, blacklist: List[str], parents: Optional[List[Selector]] = None):
+        super().__init__(parents)
+        self.blacklist = set(blacklist)
+
+    def _select(self, universe):
+        if universe is None:
+            return []
+        return list(set(universe) - self.blacklist)
+
+class BasicSelector(Selector):
+    def __init__(self, stock_info: pd.DataFrame, blacklist: List[str], price_df: pd.DataFrame, asof_date: pd.Timestamp):
+        super().__init__(parents=[
+            ListedMoreThanOneYearSelector(stock_info, asof_date),
+            HSExchangeSelector(stock_info),
+            HasPriceSelector(price_df, asof_date),
+            ExcludeBlacklistSelector(blacklist)
+        ])
+
+    def _select(self, universe):
+        return list(universe) if universe else []
+
+class MktCapPercentileSelector(Selector):
+    def __init__(self, mkt_cap_df: pd.DataFrame, asof_date: pd.Timestamp, percentile: tuple, parents: Optional[List[Selector]] = None):
+        super().__init__(parents)
+        self.mkt_cap_df = mkt_cap_df
+        self.asof_date = asof_date
+        self.percentile = percentile
+
+    def _select(self, universe):
+        if self.mkt_cap_df is None or self.asof_date not in self.mkt_cap_df.index:
+            return []
+        cap_series = self.mkt_cap_df.loc[self.asof_date].dropna()
+        if universe is not None:
+            cap_series = cap_series[cap_series.index.isin(universe)]
+        sorted_caps = cap_series.sort_values(ascending=True)
+        n = len(sorted_caps)
+        if n == 0:
+            return []
+        lower, upper = int(n * self.percentile[0]), int(n * self.percentile[1])
+        return sorted_caps.iloc[lower:upper].index.tolist()
+
+class QualityScoreSelector(Selector):
+    def __init__(self, stock_info: pd.DataFrame, fundamental_df: pd.DataFrame, asof_date: pd.Timestamp,
+                 score_percentile: tuple = (0.7, 1.0), parents: Optional[List[Selector]] = None):
+        super().__init__(parents)
+        self.stock_info = stock_info
+        self.fundamental_df = fundamental_df
+        self.asof_date = asof_date
+        self.score_percentile = score_percentile
+
+    def _select(self, universe):
+        if self.fundamental_df is None:
             return []
 
-        sub_df = sub_df.loc[cap_group.intersection(sub_df.index)].copy()
-        sub_df = sub_df.dropna(subset=[
+        lookback_date = self.asof_date - pd.Timedelta(days=120)
+        fundamentals = get_latest_available_row(self.fundamental_df, lookback_date)
+        if fundamentals.empty:
+            return []
+
+        # if universe is not None:
+            # fundamentals = fundamentals.loc[fundamentals.index.intersection(universe)]
+        fundamentals = fundamentals.dropna(subset=[
             "operating_profit_ttm", "total_equity",
             "net_cash_from_operating", "net_profit",
-            "total_assets", "total_liabilities"
-        ])
-        if sub_df.empty:
+            "total_assets", "total_liabilities"])
+        if fundamentals.empty:
             return []
 
-        # 4. 构建因子
-        sub_df["profit"] = sub_df["operating_profit_ttm"] / sub_df["total_equity"]
-        sub_df["cfq"] = sub_df["net_cash_from_operating"] / sub_df["net_profit"]
-        sub_df["lev"] = sub_df["total_liabilities"] / sub_df["total_assets"]
+        fundamentals["profit"] = fundamentals["operating_profit_ttm"] / fundamentals["total_equity"]
+        fundamentals["cfq"] = fundamentals["net_cash_from_operating"] / fundamentals["net_profit"]
+        fundamentals["lev"] = fundamentals["total_liabilities"] / fundamentals["total_assets"]
 
-        # 5. 行业中性化 Z 分数
-        ind = self.stock_info["industry"].reindex(sub_df.index)
-        sub_df["industry"] = ind
-        zscore_df = sub_df.groupby("industry")[["profit", "cfq", "lev"]].transform(lambda x: (x - x.mean()) / x.std())
+        fundamentals["industry"] = self.stock_info.reindex(fundamentals.index)["industry"]
+        zscore_df = fundamentals.groupby("industry")[["profit", "cfq", "lev"]].transform(lambda x: (x - x.mean()) / x.std())
+        if universe is not None:
+            zscore_df = zscore_df.loc[zscore_df.index.intersection(universe)]
         score = zscore_df["profit"] + zscore_df["cfq"] - zscore_df["lev"]
-        score = score.dropna().sort_values(ascending=False)
-
-        # 6. 百分位筛选
+        score = score.dropna().sort_values(ascending=True)
         n = len(score)
         if n < 10:
             return []
         lower, upper = int(n * self.score_percentile[0]), int(n * self.score_percentile[1])
         return score.iloc[lower:upper].index.tolist()
 
-
-# === BMSelector：账面市值比因子选股 ===
-class BMSelector(StockSelector):
-    def __init__(self, stock_info_df: pd.DataFrame, blacklist: List[str], size_percentile: tuple = (0.5, 1.0), bm_percentile: tuple = (0.7, 1.0)):
-        super().__init__(stock_info_df, blacklist)
-        self.size_percentile = size_percentile
+class BMScoreSelector(Selector):
+    def __init__(self, fundamental_df: pd.DataFrame, mkt_cap_df: pd.DataFrame, 
+                 asof_date: pd.Timestamp, bm_percentile: tuple = (0.7, 1.0), parents: Optional[List[Selector]] = None):
+        super().__init__(parents)
+        self.fundamental_df = fundamental_df
+        self.mkt_cap_df = mkt_cap_df
+        self.asof_date = asof_date
         self.bm_percentile = bm_percentile
 
-    def select(self, data: Dict[str, pd.DataFrame], asof_date: pd.Timestamp) -> List[str]:
-        # 1. 初筛
-        listed = self.stock_info[self.stock_info['listing_date'] <= asof_date - pd.DateOffset(years=1)]
-        price_df = data.get("price")
-        if price_df is None or asof_date not in price_df.index:
-            return []
-        available = price_df.columns[price_df.loc[asof_date].notna()]
-        universe = set(listed.index) & set(available) - set(self.blacklist)
-
-        # 2. 市值过滤
-        mkt_cap = data.get("mkt_cap")
-        if mkt_cap is None or asof_date not in mkt_cap.index:
-            return []
-        cap_series = mkt_cap.loc[asof_date].dropna()
-        cap_universe = list(universe & set(cap_series.index))
-        if not cap_universe:
-            return []
-        sorted_caps = cap_series[cap_universe].sort_values()
-        n_cap = len(sorted_caps)
-        lower_idx = int(n_cap * self.size_percentile[0])
-        upper_idx = int(n_cap * self.size_percentile[1])
-        cap_group = sorted_caps.iloc[lower_idx:upper_idx].index
-
-        # 3. 获取基本面
-        fundamental_df = data.get("fundamental")
-        if fundamental_df is None:
-            return []
-        lookback_date = asof_date - pd.Timedelta(days=120)
-        sub_df = get_latest_available_row(fundamental_df, lookback_date)
-        if sub_df.empty:
+    def _select(self, universe):
+        if self.fundamental_df is None or self.mkt_cap_df is None or self.asof_date not in self.mkt_cap_df.index:
             return []
 
-        sub_df = sub_df.loc[cap_group.intersection(sub_df.index)].copy()
-        sub_df = sub_df.dropna(subset=["total_equity"])
-        sub_df = sub_df[sub_df["total_equity"] > 0]
-        if sub_df.empty:
+        lookback_date = self.asof_date - pd.Timedelta(days=120)
+        fundamentals = get_latest_available_row(self.fundamental_df, lookback_date)
+        if fundamentals.empty:
             return []
 
-        # 4. 计算 BM 值
-        cap_vals = cap_series[sub_df.index]
-        cap_vals = cap_vals[cap_vals > 1e-6]  # 避免除以零或极小值
-        sub_df = sub_df.loc[cap_vals.index]
-        bm = sub_df["total_equity"] / cap_vals
-        bm = bm.dropna().sort_values(ascending=False)
+        if universe is not None:
+            fundamentals = fundamentals.loc[fundamentals.index.intersection(universe)]
+        fundamentals = fundamentals.dropna(subset=["total_equity"])
+        fundamentals = fundamentals[fundamentals["total_equity"] > 0]
+        if fundamentals.empty:
+            return []
 
-        # 5. 分位筛选
+        cap_series = self.mkt_cap_df.loc[self.asof_date].reindex(fundamentals.index)
+        cap_series = cap_series[cap_series > 1e-6]
+        fundamentals = fundamentals.loc[cap_series.index]
+
+        bm = fundamentals["total_equity"] / cap_series
+        bm = bm.dropna().sort_values(ascending=True)
+
         n = len(bm)
         if n < 10:
             return []
