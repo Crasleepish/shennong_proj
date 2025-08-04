@@ -6,7 +6,7 @@ result
 output
 bt_result
 ml_results
-models
+/models/
 /api_key.py
 fund_portfolio_bt_result
 log
