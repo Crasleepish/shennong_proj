@@ -87,6 +87,7 @@ class FactorFetcher:
         )
         index_df = index_df.rename(columns={"change_percent": "MKT"})
         index_df = index_df.set_index("date", drop=True)
+        index_df["MKT"] = index_df["MKT"] / 100.0
         merged_df = merged_df.join(index_df, how="inner")
 
         # SMB = 小盘 - 大盘（平均）

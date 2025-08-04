@@ -16,6 +16,7 @@ class StockHistHolder:
         pass
 
     def get_stock_hist(self, start_date, end_date):
+        logging.warning("This method is deprecated.")
         if self.stock_hist_all is None:
             self.stock_hist_all = StockHistUnadjDao.select_dataframe_by_date_range(stock_code=None, start_date=start_date, end_date=end_date)
             self.stock_hist_all["date"] = pd.to_datetime(self.stock_hist_all["date"], errors="coerce")
@@ -31,6 +32,7 @@ class AdjFactorHolder:
         pass
 
     def get_adj_factor(self, start_date, end_date):
+        logging.warning("This method is deprecated.")
         if self.adj_factor_all is None:
             adj_factor_dao = AdjFactorDao._instance
             self.adj_factor_all = adj_factor_dao.get_adj_factor_dataframe(stock_code=None, start_date=start_date, end_date=end_date)
@@ -47,6 +49,7 @@ class StockInfoHolder:
         pass
 
     def get_stock_info_all(self):
+        logging.warning("This method is deprecated.")
         if self.stock_info_all is None:
             self.stock_info_all = StockInfoDao.select_dataframe_all()
             self.stock_info_all["listing_date"] = pd.to_datetime(self.stock_info_all["listing_date"], errors="coerce")
@@ -61,6 +64,7 @@ class FundamentalDataHolder:
         pass
 
     def get_fundamental_data_all(self):
+        logging.warning("This method is deprecated.")
         if self.fundamental_data_all is None:
             self.fundamental_data_all = FundamentalDataDao.select_dataframe_all()
             self.fundamental_data_all["report_date"] = pd.to_datetime(self.fundamental_data_all["report_date"], errors="coerce")
@@ -75,6 +79,7 @@ class SuspendDataHolder:
         pass
 
     def get_suspend_data_all(self):
+        logging.warning("This method is deprecated.")
         if self.suspend_data_all is None:
             suspend_data_dao = SuspendDataDao._instance
             self.suspend_data_all = suspend_data_dao.select_dataframe_all()
@@ -94,6 +99,7 @@ class IndexHistHolder:
         pass
 
     def get_index_hist_all(self):
+        logging.warning("This method is deprecated.")
         if self.index_hist_all is None:
             index_hist_dao = IndexHistDao._instance
             self.index_hist_all = index_hist_dao.select_dataframe_all()
@@ -101,6 +107,7 @@ class IndexHistHolder:
         return self.index_hist_all
     
     def get_index_hist_by_code(self, index_code: str) -> pd.DataFrame:
+        logging.warning("This method is deprecated.")
         index_hist_dao = IndexHistDao._instance
         return index_hist_dao.select_dataframe_by_code(index_code)
 
@@ -115,6 +122,7 @@ class FundHistHolder:
         pass
 
     def get_fund_hist_all(self):
+        logging.warning("This method is deprecated.")
         if self.fund_hist_all is None:
             fund_hist_dao = FundHistDao._instance
             self.fund_hist_all = fund_hist_dao.select_dataframe_all()
@@ -122,6 +130,7 @@ class FundHistHolder:
         return self.fund_hist_all
     
     def get_fund_hist_by_code(self, fund_code: str, start_date: str = None, end_date: str = None) -> pd.DataFrame:
+        logging.warning("This method is deprecated.")
         fund_hist_dao = FundHistDao._instance
         return fund_hist_dao.select_dataframe_by_code(fund_code, start_date, end_date)
 
@@ -198,11 +207,13 @@ def get_prices_df(start_date: str, end_date: str) -> pd.DataFrame:
     ...
     """
     # 获取原始数据并转换为数据透视表
-    df_hist = stock_hist_holder.get_stock_hist(start_date, end_date)
+    df_hist = StockHistUnadjDao.select_dataframe_by_date_range(stock_code=None, start_date=start_date, end_date=end_date)
+    df_hist["date"] = pd.to_datetime(df_hist["date"], errors="coerce")
     pivot_df_hist = df_hist.pivot(index="date", columns="stock_code", values="close")
     pivot_df_hist = pivot_df_hist.sort_index(ascending=True)
     
-    df_adjf = adj_factor_holder.get_adj_factor(start_date, end_date)
+    df_adjf = AdjFactorDao._instance.get_adj_factor_dataframe(stock_code=None, start_date=start_date, end_date=end_date)
+    df_adjf["date"] = pd.to_datetime(df_adjf["date"], errors="coerce")
     pivot_adjf = df_adjf.pivot(index="date", columns="stock_code", values="adj_factor")
     pivot_adjf = pivot_adjf.sort_index(ascending=True)
     
@@ -249,7 +260,8 @@ def get_volume_df(start_date: str, end_date: str) -> pd.DataFrame:
     2021-01-06   1050000   2050000    1550000
     ...
     """
-    df_all = stock_hist_holder.get_stock_hist(start_date, end_date)
+    df_all = StockHistUnadjDao.select_dataframe_by_date_range(stock_code=None, start_date=start_date, end_date=end_date)
+    df_all["date"] = pd.to_datetime(df_all["date"], errors="coerce")
     pivot_df = df_all.pivot(index="date", columns="stock_code", values="volume")
     pivot_df = pivot_df.fillna(0)
     pivot_df = pivot_df.sort_index(ascending=True)
@@ -272,7 +284,8 @@ def get_amount_df(start_date: str, end_date: str) -> pd.DataFrame:
     2021-01-06   170145432   128599108    180497477
     ...
     """
-    df_all = stock_hist_holder.get_stock_hist(start_date, end_date)
+    df_all = StockHistUnadjDao.select_dataframe_by_date_range(stock_code=None, start_date=start_date, end_date=end_date)
+    df_all["date"] = pd.to_datetime(df_all["date"], errors="coerce")
     pivot_df = df_all.pivot(index="date", columns="stock_code", values="amount")
     pivot_df = pivot_df.sort_index(ascending=True)
     return pivot_df
@@ -316,7 +329,8 @@ def get_mkt_cap_df(start_date: str, end_date: str) -> pd.DataFrame:
     2021-01-06   102000000  153000000   122000000
     ...
     """
-    df_all = stock_hist_holder.get_stock_hist(start_date, end_date)
+    df_all = StockHistUnadjDao.select_dataframe_by_date_range(stock_code=None, start_date=start_date, end_date=end_date)
+    df_all["date"] = pd.to_datetime(df_all["date"], errors="coerce")
     pivot_df = df_all.pivot(index="date", columns="stock_code", values="mkt_cap")
     pivot_df = pivot_df.sort_index(ascending=True)
     return pivot_df
@@ -337,7 +351,8 @@ def get_stock_info_df() -> pd.DataFrame:
     600018       2000-09-30      GEM
     ...
     """
-    df = stock_info_holder.get_stock_info_all()
+    df = StockInfoDao.select_dataframe_all()
+    df["listing_date"] = pd.to_datetime(df["listing_date"], errors="coerce")
     df = df.set_index("stock_code", drop=True)
     return df
 
@@ -358,30 +373,16 @@ def get_fundamental_df() -> pd.DataFrame:
     1     600012  2019-12-31          48.0         190.0                 75.0                    58.0       10.0               7.5         145.0       98.0                    12.0                   4.8
     ...
     """
-    df = fundamental_data_holder.get_fundamental_data_all()
+    df = FundamentalDataDao.select_dataframe_all()
+    df["report_date"] = pd.to_datetime(df["report_date"], errors="coerce")
     return df
-
-def get_suspend_df() -> pd.DataFrame:
-    """
-    返回停复牌数据 DataFrame。
-
-    要求包含字段：
-      - stock_code, trade_date, suspend_type, suspend_timing
-      - trade_date 应为 datetime64 类型
-    """
-    df = suspend_data_holder.get_suspend_data_all()
-    expected_columns = ['stock_code', 'trade_date', 'suspend_type', 'suspend_timing']
-    for col in expected_columns:
-        if col not in df.columns:
-            df[col] = pd.NA
-    return df[expected_columns]
 
 def get_index_daily_return(index_code: str) -> pd.DataFrame:
     """
     返回指数历史每日回报率：
     包含字段：date, daily_return
     """
-    df = index_hist_holder.get_index_hist_by_code(index_code)[['date', 'change_percent']]
+    df = IndexHistDao._instance.select_dataframe_by_code(index_code)[['date', 'change_percent']]
     df['date'] = pd.to_datetime(df['date'], errors="coerce")
     df['change_percent'] = df['change_percent'] / 100.0
     df = df.rename(columns={'change_percent': 'daily_return'})
@@ -393,7 +394,7 @@ def get_fund_daily_return(fund_code: str, start_date: str = None, end_date: str 
     返回基金历史每日回报率：
     包含字段：date, daily_return
     """
-    df = fund_hist_holder.get_fund_hist_by_code(fund_code, start_date, end_date)
+    df = FundHistDao._instance.select_dataframe_by_code(fund_code, start_date, end_date)
     df['date'] = pd.to_datetime(df['date'], errors="coerce")
     df = df.sort_values('date')
     df = df.set_index('date', drop=False)

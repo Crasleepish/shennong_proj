@@ -213,39 +213,6 @@ def sync_adj_factor_by_date():
         logger.exception("Error creating adj_factor sync_by_date task.")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-@fin_data_bp.route("/stock_adj_hist/sync", methods=["POST"])
-def sync_stock_hist_adj():
-    """
-    Deprecated: 同步股票前复权历史行情数据
-    """
-    try:
-        # 创建任务记录（初始状态为 RUNNING，进度为 0）
-        new_task = TaskRecord(
-            task_type="STOCK_ADJ_HIST_SYNC",
-            task_status="RUNNING",
-            progress_current=0,
-            progress_total=0,
-            message="Task started."
-        )
-        new_task = task_dao.insert(new_task)
-        task_id = new_task.id
-        logger.info("Created task id %d for stock adjusted historical data sync.", task_id)
-
-        # 定义进度回调函数
-        progress_cb = make_progress_callback(task_id)
-
-        def task_func():
-            stock_adj_hist_synchronizer.sync(progress_callback=progress_cb)
-
-        # 启动后台任务
-        launch_background_task(task_id, task_func)
-
-        return jsonify({"status": "success", "task_id": task_id, "message": "Task started"}), 200
-
-    except Exception as e:
-        logger.exception("Error creating forward-adjusted stock historical data sync task.")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
 @fin_data_bp.route("/company_action/sync", methods=["POST"])
 def sync_company_action():
     """
@@ -647,7 +614,7 @@ def sync_factors_all():
         progress_cb = make_progress_callback(task_id)
 
         def task_func():
-            factor_fetcher.fetch_all(start_date=start, end_date=end, append=False, progress_callback=progress_cb)
+            factor_fetcher.fetch_all(start_date=start, end_date=end, progress_callback=progress_cb)
 
         # 启动后台任务
         launch_background_task(task_id, task_func)
@@ -806,8 +773,7 @@ def update_all_fin_data():
         end_date_obj = datetime.strptime(end, "%Y%m%d")
 
         factor_fetcher.fetch_all(start_date=start_date_obj.strftime("%Y-%m-%d"), 
-                                 end_date=end_date_obj.strftime("%Y-%m-%d"), 
-                                 append=True)
+                                 end_date=end_date_obj.strftime("%Y-%m-%d"))
         
         MacroDataFetcher.fetch_all()
         return jsonify({"message": "success"})

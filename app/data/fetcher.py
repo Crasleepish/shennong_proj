@@ -1209,40 +1209,40 @@ class FundamentalDataSynchronizer:
         try:
             logger.info("Starting fundamental data synchronization.")
             # 1. 获取股票列表
-            # stock_list = StockInfoDao.load_stock_info()
-            # stock_list_codes = [x.stock_code for x in stock_list]
-            # self.stock_list_size = len(stock_list_codes)
-            # logger.info("Found %d stocks to process.", len(stock_list_codes))
+            stock_list = StockInfoDao.load_stock_info()
+            stock_list_codes = [x.stock_code for x in stock_list]
+            self.stock_list_size = len(stock_list_codes)
+            logger.info("Found %d stocks to process.", len(stock_list_codes))
 
-            # batch_size = 20
-            # def run_tasks(stock_list_codes, batch_size, progress_callback):
-            #     for i in range(0, len(stock_list_codes), batch_size):
-            #         batch = stock_list_codes[i : i + batch_size]
-            #         tasks = []
-            #         for full_stock_code in batch:
-            #             short_stock_code = full_stock_code[:full_stock_code.index(".")] #去掉股票市场标识，如600519.SH -> 600519
-            #             logger.info("Processing fundamental data for stock %s", full_stock_code)
+            batch_size = 20
+            def run_tasks(stock_list_codes, batch_size, progress_callback):
+                for i in range(0, len(stock_list_codes), batch_size):
+                    batch = stock_list_codes[i : i + batch_size]
+                    tasks = []
+                    for full_stock_code in batch:
+                        short_stock_code = full_stock_code[:full_stock_code.index(".")] #去掉股票市场标识，如600519.SH -> 600519
+                        logger.info("Processing fundamental data for stock %s", full_stock_code)
 
-            #             # 2. 查询 update_flag表中，当前股票代码是否允许更新基本面数据
-            #             update_flags = self.update_flag_dao.select_one_by_code(full_stock_code)
-            #             if update_flags and update_flags["fundamental_update_flag"] == "0":
-            #                 logger.info("Fundamental data update for stock %s is disabled.", full_stock_code)
-            #                 self.completed_num = self.completed_num + 1
-            #                 if progress_callback:
-            #                     progress_callback(self.completed_num, self.stock_list_size)
-            #                 continue
-            #             elif not update_flags:
-            #                 continue
+                        # 2. 查询 update_flag表中，当前股票代码是否允许更新基本面数据
+                        update_flags = self.update_flag_dao.select_one_by_code(full_stock_code)
+                        if update_flags and update_flags["fundamental_update_flag"] == "0":
+                            logger.info("Fundamental data update for stock %s is disabled.", full_stock_code)
+                            self.completed_num = self.completed_num + 1
+                            if progress_callback:
+                                progress_callback(self.completed_num, self.stock_list_size)
+                            continue
+                        elif not update_flags:
+                            continue
 
-            #             tasks.append(self.loop.create_task(self.process_data(short_stock_code, full_stock_code, progress_callback)))
-            #         if tasks:
-            #             self.loop.run_until_complete(asyncio.gather(*tasks))
+                        tasks.append(self.loop.create_task(self.process_data(short_stock_code, full_stock_code, progress_callback)))
+                    if tasks:
+                        self.loop.run_until_complete(asyncio.gather(*tasks))
 
-            # run_tasks(stock_list_codes, batch_size, progress_callback)
-            # # 重试 failed_stocks 列表
-            # failed_stocks_to_try = self.failed_stocks.copy()
-            # self.failed_stocks.clear()
-            # run_tasks(failed_stocks_to_try, batch_size, None)  #重试期间不更新进度
+            run_tasks(stock_list_codes, batch_size, progress_callback)
+            # 重试 failed_stocks 列表
+            failed_stocks_to_try = self.failed_stocks.copy()
+            self.failed_stocks.clear()
+            run_tasks(failed_stocks_to_try, batch_size, None)  #重试期间不更新进度
             fill_fundamental_fields(overwrite=True)
         finally:
             if self.failed_stocks:

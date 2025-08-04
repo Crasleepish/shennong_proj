@@ -43,6 +43,10 @@ def build_all_portfolios(start_date: str, end_date: str):
             "net_cash_from_operating"
         ]
     )
+    price.to_csv(os.path.join(output_path, "price.csv"))
+    mkt_cap.to_csv(os.path.join(output_path, "mkt_cap.csv"))
+    amount.to_csv(os.path.join(output_path, "amount.csv"))
+    fundamentals.to_csv(os.path.join(output_path, "fundamentals.csv"))
 
     # === 构造共用数据集 ===
     shared_data = {
@@ -135,8 +139,8 @@ def build_all_portfolios(start_date: str, end_date: str):
                 old_weight = pd.read_csv(weight_path, index_col=0, parse_dates=True)
                 weight_df_full = pd.concat([old_weight, weight_df])
                 weight_df_full = weight_df_full[~weight_df_full.index.duplicated(keep='last')].sort_index()
-            weight_df_full.to_csv(weight_path)
-            del weight_df_full
+                weight_df_full.to_csv(weight_path)
+                del weight_df_full
 
             if use_hist_weight_flag:
                 weight_df = pd.concat([pd.DataFrame([init_weight], index=[pd.to_datetime(prev_start_date)]), weight_df])
@@ -158,6 +162,10 @@ def build_all_portfolios(start_date: str, end_date: str):
         daily_return.name = "value"
         return_path = os.path.join(output_path, f"{factor}_{name}_daily_returns.csv")
         daily_return.to_csv(return_path, index_label="date")
+
+        # 可视化（可选）
+        fig = result["nav"].vbt.plot(title="Portfolio Value Curve")
+        fig.write_html(os.path.join(output_path, f"{factor}_{name}_{start_date}_{end_date}_value_plot.html"))
 
         # === 清理中间变量，控制内存 ===
         del weight_df, result

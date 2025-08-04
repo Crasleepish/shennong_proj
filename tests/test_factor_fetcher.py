@@ -14,5 +14,5 @@ def app():
     yield app
 
 
-def test_build_all_portfolios(app):
-    FactorFetcher().fetch_all("2025-02-20", "2025-08-01")
+def test_factor_fetcher(app):
+    FactorFetcher().fetch_all("2025-02-20", "2025-07-31")

@@ -22,12 +22,14 @@ from app.database import get_db
 from app.models.service_models import PortfolioWeights
 import json
 from app.data_fetcher.trade_calender_reader import TradeCalendarReader
+from app.backtest.backtest_engine import run_backtest
+from app.backtest.backtest_engine import BacktestConfig
 
 app = create_app()
 logger = logging.getLogger(__name__)
 factor_data_reader = FactorDataReader()
 csi_index_data_fetcher = CSIIndexDataFetcher()
-fee_rate = 0.00025
+sell_fee_rate = 0.0005
 slippage_rate = 0.0
 portfolio_id = 1
 alpha = 0.1
@@ -194,101 +196,14 @@ def run_backtest(start="2025-07-24", end="2025-07-31", window=20):
         for date in weights_df.index:
             segment_mask[price_df.index.get_loc(date), 0] = True
 
-        # 2. 计算 order_sizes（目标持仓变动量）
-        order_sizes = pd.DataFrame(0.0, index=price_df.index, columns=price_df.columns)
-        current_positions = pd.Series(0.0, index=price_df.columns)
-        current_cash = init_cash
-
-        for dt in weights_df.index:
-            target_weight = weights_df.loc[dt]
-            prices = price_df.loc[dt]
-
-            # 计算总资产
-            asset_value = (current_positions * prices).sum()
-            total_value = asset_value + current_cash
-
-            # 金额 -> 目标股数
-            target_position = np.floor((target_weight * total_value) / prices)
-            target_position = target_position.fillna(0)
-
-            diff_position = target_position - current_positions
-            diff_value = diff_position * prices
-
-            # 考虑手续费和滑点
-            sell_cash = -diff_value[diff_value < 0].sum() * (1 - fee_rate - slippage_rate)
-            buy_cash_needed = diff_value[diff_value > 0].sum() * (1 + fee_rate + slippage_rate)
-
-            while sell_cash + current_cash < buy_cash_needed:
-                scale = (sell_cash + current_cash) / buy_cash_needed
-                target_position = np.floor(target_position * scale)
-                diff_position = target_position - current_positions
-                diff_value = diff_position * prices
-                sell_cash = -diff_value[diff_value < 0].sum() * (1 - fee_rate - slippage_rate)
-                buy_cash_needed = diff_value[diff_value > 0].sum() * (1 + fee_rate + slippage_rate)
-
-            order_sizes.loc[dt] = diff_position
-            current_positions = target_position
-            current_cash = current_cash + sell_cash - buy_cash_needed
-
-        # 3. 自定义 order_func
-        @njit(cache=True)
-        def pre_group_func_nb(c):
-            order_value_out = np.empty(c.group_len, dtype=np.float64)
-            return (order_value_out,)
-
-        @njit(cache=True)
-        def pre_segment_func_nb(c, order_value_out, size, price, size_type, direction):
-            for col in range(c.from_col, c.to_col):
-                c.last_val_price[col] = nb.get_col_elem_nb(c, col, price)
-            nb.sort_call_seq_nb(c, size, size_type, direction, order_value_out)
-            return ()
-
-        @njit(cache=True)
-        def order_func_nb(c, size, price, size_type, direction, fees, slippage):
-            if nb.get_elem_nb(c, size) == 0:
-                return nb.NoOrder
-            print(">>>generate order: idx=", c.i, 
-              ", col=", c.col, 
-              ", size=", nb.get_elem_nb(c, size),
-              ", price=", nb.get_elem_nb(c, price), 
-              ", size_type=", nb.get_elem_nb(c, size_type),
-              ", direction=", nb.get_elem_nb(c, direction),
-              ", fees=", nb.get_elem_nb(c, fees),
-              ", slippage=", nb.get_elem_nb(c, slippage))
-            return nb.order_nb(
-                size=nb.get_elem_nb(c, size),
-                price=nb.get_elem_nb(c, price),
-                size_type=nb.get_elem_nb(c, size_type),
-                direction=nb.get_elem_nb(c, direction),
-                fees=nb.get_elem_nb(c, fees),
-                slippage=nb.get_elem_nb(c, slippage)
-            )
-        # 4. 构造 Portfolio
-        pf = vbt.Portfolio.from_order_func(
-            price_df,
-            order_func_nb,
-            vbt.Rep('size'),
-            vbt.Rep('price'),
-            vbt.Rep('size_type'),
-            vbt.Rep('direction'),
-            vbt.Rep('fees'),
-            vbt.Rep('slippage'),
-            segment_mask=segment_mask,
-            pre_group_func_nb=pre_group_func_nb,
-            pre_segment_func_nb=pre_segment_func_nb,
-            pre_segment_args=(vbt.Rep('size'), vbt.Rep('price'), vbt.Rep('size_type'), vbt.Rep('direction')),
-            broadcast_named_args=dict(
-                price=price_df,
-                size=order_sizes,
-                size_type=SizeType.Amount,
-                direction=Direction.Both,
-                fees=fee_rate,
-                slippage=slippage_rate
-            ),
-            cash_sharing=True,
-            group_by=True,
-            init_cash=init_cash
+        cfg = BacktestConfig(
+            init_cash=100_000_000,
+            buy_fee=0.0,
+            sell_fee=sell_fee_rate,
+            slippage=slippage_rate,
+            cash_sharing=True
         )
+        result = run_backtest(weights_df, price_df, cfg)
 
         # 5. 日换手率计算函数
         def compute_turnover_rate(portfolio, n: int = 1) -> pd.Series:
@@ -318,20 +233,18 @@ def run_backtest(start="2025-07-24", end="2025-07-31", window=20):
             return aligned['turnover'].rolling(n).mean()
 
         # 6. 结果输出
-        logger.info("Order detail:")
-        logger.info(pf.orders.records_readable)
         # stats = pf.stats()
-        turnover_rate = compute_turnover_rate(pf, n=1)
+        turnover_rate = compute_turnover_rate(result["pf"], n=1)
         mean_turnover = turnover_rate[1:].mean() #去掉建仓首日的换手率
 
         # print(stats)
         print(f"\n🔄 日均换手率: {mean_turnover:.4f}")
 
-        pf.value().to_csv(os.path.join(out_dir, "portfolio_value.csv"))
-        pf.returns().to_csv(os.path.join(out_dir, "daily_returns.csv"))
+        result["nav"].to_csv(os.path.join(out_dir, "portfolio_value.csv"))
+        result["returns"].to_csv(os.path.join(out_dir, "daily_returns.csv"))
         # stats.to_csv(os.path.join(out_dir, "stats.csv"))
         turnover_rate.to_csv(os.path.join(out_dir, "daily_turnover.csv"))
-        pf.value(group_by=True).vbt.plot(title="混合资产经债线").write_html(os.path.join(out_dir, "value_plot.html"))
+        result["nav"].vbt.plot(title="混合资产经债线").write_html(os.path.join(out_dir, "value_plot.html"))
 
         print(f"✅ 回测完成，结果已保存至：{out_dir}")
 
