@@ -15,4 +15,4 @@ def app():
 
 
 def test_factor_fetcher(app):
-    FactorFetcher().fetch_all("2025-02-20", "2025-07-31")
+    FactorFetcher().fetch_all("2008-06-30", "2010-12-31")

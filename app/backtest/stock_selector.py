@@ -5,18 +5,44 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def get_latest_available_row(df: pd.DataFrame, asof_date: pd.Timestamp) -> pd.DataFrame:
-    # 筛选截至asof_date之前的所有报告
-    df = df.loc[df.index.get_level_values("report_date") <= asof_date]
+def get_latest_available_row(
+    df: pd.DataFrame,
+    asof_date: pd.Timestamp,
+    check_fields: List[str] = None,
+) -> pd.DataFrame:
+    """
+    获取截至 asof_date 前（含）一年以内、且在 check_fields 指定的字段上都不为空的最新报告行。
 
+    :param df: 原始 DataFrame，索引需包含名为 "report_date" 的日期级别，或可通过 df.index.get_level_values("report_date") 取到报告日期。
+    :param asof_date: 查询日期，如 pd.Timestamp("2025-08-06")
+    :param check_fields: 需要验证非空的列名列表
+    :return: 每个股票（或每个分组）最新的一行记录，索引设为股票代码（索引级别 "stock_code" 或对应列名）
+    """
+    # 1. 时间范围过滤：报告日期 ≤ asof_date，且 ≥ asof_date - 1 年
+    one_year_ago = asof_date - pd.DateOffset(years=1)
+    mask_date = (
+        (df.index.get_level_values("report_date") <= asof_date) &
+        (df.index.get_level_values("report_date") >= one_year_ago)
+    )
+    df = df.loc[mask_date]
     if df.empty:
         return pd.DataFrame()
 
-    # 排序确保每个股票最后一条是最新的
+    # 2. 指定字段均非空（当且仅当 check_fields 非 None 且长度 > 0）
+    if check_fields:
+        # 若需同时把空字符串视为缺失，可先做：df = df.replace(r'^\s*$', pd.NA, regex=True)
+        df = df.dropna(subset=check_fields, how="any")
+        if df.empty:
+            return pd.DataFrame()
+
+    # 3. 按报告日期升序排序，保证最新的排在后面
     df = df.sort_index(level="report_date")
 
-    # 保留每个股票最新一条记录
-    latest = df.groupby("stock_code").tail(1)
+    # 4. 分组取每组最后一条（最新的）记录
+    #    如果股票代码是索引级别，用 level；若是列，请改为 df.groupby("stock_code")
+    latest = df.groupby(level="stock_code").tail(1)
+
+    # 5. 重设索引为股票代码
     latest.index = latest.index.get_level_values("stock_code")
     return latest
 
@@ -144,7 +170,7 @@ class QualityScoreSelector(Selector):
             return []
 
         lookback_date = self.asof_date - pd.Timedelta(days=120)
-        fundamentals = get_latest_available_row(self.fundamental_df, lookback_date)
+        fundamentals = get_latest_available_row(self.fundamental_df, lookback_date, ["operating_profit_ttm", "total_equity", "net_cash_from_operating", "net_profit", "total_assets", "total_liabilities"])
         if fundamentals.empty:
             return []
 
@@ -187,14 +213,13 @@ class BMScoreSelector(Selector):
             return []
 
         lookback_date = self.asof_date - pd.Timedelta(days=120)
-        fundamentals = get_latest_available_row(self.fundamental_df, lookback_date)
+        fundamentals = get_latest_available_row(self.fundamental_df, lookback_date, ["total_equity"])
         if fundamentals.empty:
             return []
 
         if universe is not None:
             fundamentals = fundamentals.loc[fundamentals.index.intersection(universe)]
         fundamentals = fundamentals.dropna(subset=["total_equity"])
-        fundamentals = fundamentals[fundamentals["total_equity"] > 0]
         if fundamentals.empty:
             return []
 

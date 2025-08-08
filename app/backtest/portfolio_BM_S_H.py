@@ -36,6 +36,7 @@ from vectorbt.portfolio import nb
 from app.utils.data_utils import format_date, filter_listed_and_traded_universe
 from app.data_fetcher.calender_fetcher import CalendarFetcher
 import calendar
+from app.data_fetcher.bt_data_fetcher import DataFetcher
 
 logger = logging.getLogger(__name__)
 logging.getLogger('numba').setLevel(logging.INFO)
@@ -45,6 +46,7 @@ slippage_rate = 0.0001
 output_dir = r"./bt_result"
 output_prefix = "portfolio_BM_S_H"
 calender_fetcher = CalendarFetcher()
+fetcher = DataFetcher()
 
 def get_rebalance_dates(prices: pd.DataFrame, start_date: str, end_date: str) -> pd.DatetimeIndex:
     """
@@ -134,10 +136,10 @@ def backtest_strategy(start_date: str, end_date: str):
     # 为保证数据的完整性，加载180天前的数据
     data_start_date = datetime.strptime(start_date, "%Y-%m-%d").date() - timedelta(days=180)
     data_start_date = data_start_date.strftime("%Y-%m-%d")
-    prices = get_prices_df(data_start_date, end_date)
-    volumes = get_volume_df(data_start_date, end_date)
+    prices = fetcher.fetch_adj_hist("close", data_start_date, end_date)
+    volumes = fetcher.fetch_price("amount", data_start_date, end_date)
     volumes = volumes.fillna(0)
-    mkt_cap = get_mkt_cap_df(data_start_date, end_date)
+    mkt_cap = fetcher.fetch_price("mkt_cap", data_start_date, end_date)
     mkt_cap = mkt_cap.ffill()
     stock_info = get_stock_info_df()
     fundamental_df = get_fundamental_df()
@@ -210,33 +212,33 @@ def backtest_strategy(start_date: str, end_date: str):
             # 填充目标持仓（示例：市值加权）
             target_weights.loc[rb_date, selected_stocks] = mkt_cap.loc[rb_date, selected_stocks] / mkt_cap.loc[rb_date, selected_stocks].sum()
 
-            current_prices = prices_fill.loc[rb_date]
-            holdings_value = (current_positions * current_prices).sum()
-            total_asset = holdings_value + current_cash
-            # 计算目标持仓
-            target_positions = np.floor((target_weights.loc[rb_date] * total_asset) / current_prices)
-            target_positions = target_positions.fillna(0)
-            diff_positions = target_positions - current_positions
-            diff_value = diff_positions * current_prices
-            assumpt_left_balance = -1 * diff_value[diff_value < 0].sum() * (1 - fee_rate - slippage_rate) + current_cash
-            assumpt_need_amount = diff_value[diff_value > 0].sum() * (1 + fee_rate + slippage_rate)
-            while assumpt_left_balance < assumpt_need_amount:
-                scale_factor = assumpt_left_balance / assumpt_need_amount
-                target_positions = np.floor(target_positions * scale_factor)
-                diff_positions = target_positions - current_positions
-                diff_value = diff_positions * current_prices
-                assumpt_left_balance = -1 * diff_value[diff_value < 0].sum() * (1 - fee_rate - slippage_rate) + current_cash
-                assumpt_need_amount = diff_value[diff_value > 0].sum() * (1 + fee_rate + slippage_rate)
-            order_sizes.loc[rb_date] = diff_positions
-            current_positions = target_positions
-            current_cash = assumpt_left_balance - assumpt_need_amount
+            # current_prices = prices_fill.loc[rb_date]
+            # holdings_value = (current_positions * current_prices).sum()
+            # total_asset = holdings_value + current_cash
+            # # 计算目标持仓
+            # target_positions = np.floor((target_weights.loc[rb_date] * total_asset) / current_prices)
+            # target_positions = target_positions.fillna(0)
+            # diff_positions = target_positions - current_positions
+            # diff_value = diff_positions * current_prices
+            # assumpt_left_balance = -1 * diff_value[diff_value < 0].sum() * (1 - fee_rate - slippage_rate) + current_cash
+            # assumpt_need_amount = diff_value[diff_value > 0].sum() * (1 + fee_rate + slippage_rate)
+            # while assumpt_left_balance < assumpt_need_amount:
+            #     scale_factor = assumpt_left_balance / assumpt_need_amount
+            #     target_positions = np.floor(target_positions * scale_factor)
+            #     diff_positions = target_positions - current_positions
+            #     diff_value = diff_positions * current_prices
+            #     assumpt_left_balance = -1 * diff_value[diff_value < 0].sum() * (1 - fee_rate - slippage_rate) + current_cash
+            #     assumpt_need_amount = diff_value[diff_value > 0].sum() * (1 + fee_rate + slippage_rate)
+            # order_sizes.loc[rb_date] = diff_positions
+            # current_positions = target_positions
+            # current_cash = assumpt_left_balance - assumpt_need_amount
 
 
     # 输出当日持仓详情到 CSV
     if not os.path.exists(os.path.join(output_dir, format_date(end_date))):
         os.makedirs(os.path.join(output_dir, format_date(end_date)))
     target_weights.loc[rb_dates].to_csv(os.path.join(output_dir, format_date(end_date), output_prefix + "_portfolio.csv"))
-
+    target_weights = target_weights.loc[rb_dates]
     prices = None
     volumes = None
     mkt_cap = None
@@ -245,89 +247,28 @@ def backtest_strategy(start_date: str, end_date: str):
     # 定义回测所需的回调函数
     # -------------------------------
 
-    # 组级预处理：为当前组初始化排序数组
-    @njit(cache=True)
-    def pre_group_func_nb(c):
-        order_value_out = np.empty(c.group_len, dtype=np.float64)
-        return (order_value_out,)
+    from app.backtest.backtest_engine import run_backtest, BacktestConfig
 
-    # 段级预处理：更新每个资产的最新估值，并根据目标订单参数排序订单调用顺序
-    @njit(cache=True)
-    def pre_segment_func_nb(c, order_value_out, size, price, size_type, direction):
-        # 更新每个资产的最后有效价格
-        for col in range(c.from_col, c.to_col):
-            c.last_val_price[col] = nb.get_col_elem_nb(c, col, price)
-        # 根据 size、size_type、direction 和当前状态计算订单“价值”，并排序 call sequence
-        nb.sort_call_seq_nb(c, size, size_type, direction, order_value_out)
-        return ()
-
-    # 订单生成函数：从广播的参数中提取当前资产的数值，生成订单
-    @njit(cache=True)
-    def order_func_nb(c, size, price, size_type, direction, fees, slippage):
-        if nb.get_elem_nb(c, size) == 0:
-            return nb.NoOrder
-        print(">>>generate order: idx=", c.i, 
-              ", col=", c.col, 
-              ", size=", nb.get_elem_nb(c, size),
-              ", price=", nb.get_elem_nb(c, price), 
-              ", size_type=", nb.get_elem_nb(c, size_type),
-              ", direction=", nb.get_elem_nb(c, direction),
-              ", fees=", nb.get_elem_nb(c, fees),
-              ", slippage=", nb.get_elem_nb(c, slippage))
-        return nb.order_nb(
-            size=nb.get_elem_nb(c, size),
-            price=nb.get_elem_nb(c, price),
-            size_type=nb.get_elem_nb(c, size_type),
-            direction=nb.get_elem_nb(c, direction),
-            fees=nb.get_elem_nb(c, fees),
-            slippage=nb.get_elem_nb(c, slippage)
-        )
-
-    # -------------------------------
-    # 构造 Portfolio
-    # -------------------------------
-
-    # 利用占位符Rep传递参数，并利用broadcast_named_args完成广播
-    pf = vbt.Portfolio.from_order_func(
-        prices_fill,
-        order_func_nb,
-        # 订单生成函数的参数：首先传入订单 size（此处用目标权重），然后price, size_type, direction, fees, slippage
-        vbt.Rep('size'),
-        vbt.Rep('price'),
-        vbt.Rep('size_type'),
-        vbt.Rep('direction'),
-        vbt.Rep('fees'),
-        vbt.Rep('slippage'),
-        # 每次调仓开始为一个segment开始（在调仓日更新订单排序）
-        segment_mask=segment_mask,
-        pre_group_func_nb=pre_group_func_nb,
-        pre_segment_func_nb=pre_segment_func_nb,
-        # pre_segment_func_nb 的附加参数（注意：这里传入的 'size' 实际为目标权重）
-        pre_segment_args=(vbt.Rep('size'), vbt.Rep('price'), vbt.Rep('size_type'), vbt.Rep('direction')),
-        broadcast_named_args=dict(
-            price=prices_fill,                # 订单价格使用收盘价数据
-            size=order_sizes,         # 目标权重矩阵作为订单 size（用百分比表示）
-            size_type=SizeType.Amount,   # 订单类型： 按数量
-            direction=Direction.Both, # 订单方向：双向
-            fees=fee_rate,                  # 交易费用（动态费用也可以传入Series或DataFrame）
-            slippage=slippage_rate               # 滑点
-        ),
-        cash_sharing=True,  # 同一组内共享现金
-        group_by=True,      # 所有资产构成一个组
-        init_cash=init_cash
+    cfg = BacktestConfig(
+        init_cash=100_000_000,
+        buy_fee=0.0,
+        sell_fee=0.0,
+        slippage=0.0,
+        cash_sharing=True
     )
+    result = run_backtest(target_weights, prices_fill, cfg)
     
     # 输出结果（与原始代码相同）
     logger.info("Order detail:")
-    logger.info(pf.orders.records_readable)
-    total_value = pf.value().loc[rb_dates[0]:end_date]
-    daily_returns = pf.returns().loc[rb_dates[0]:end_date]
+    logger.info(result["pf"].orders.records_readable)
+    total_value = result["pf"].value().loc[rb_dates[0]:end_date]
+    daily_returns = result["pf"].returns().loc[rb_dates[0]:end_date]
     # logger.info(pf.stats())
     total_value.to_csv(os.path.join(output_dir, format_date(end_date), output_prefix + "_total_value.csv"))
     daily_returns.to_csv(os.path.join(output_dir, format_date(end_date), output_prefix + "_daily_returns.csv"))
-    logger.info("Latest Value: %s", pf.final_value())
-    logger.info("Total Return: %s", pf.total_return())
+    logger.info("Latest Value: %s", result["pf"].final_value())
+    logger.info("Total Return: %s", result["pf"].total_return())
     # 可视化（可选）
-    fig = pf.value(group_by=True).vbt.plot(title="Portfolio Value Curve")
+    fig = result["pf"].value(group_by=True).vbt.plot(title="Portfolio Value Curve")
     fig.write_html(os.path.join(output_dir, format_date(end_date), output_prefix + "_value_plot.html"))
-    return pf
+    return result["pf"]

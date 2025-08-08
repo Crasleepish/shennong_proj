@@ -24,8 +24,8 @@ def test_backtest_strategy(
     app
 ):
     # 设置回测日期范围
-    start_date = "2010-12-20"
-    end_date = "2011-01-10"
+    start_date = "2008-01-01"
+    end_date = "2010-12-31"
     
     # 调用 backtest_strategy 函数
     portfolio = backtest_strategy(start_date, end_date)

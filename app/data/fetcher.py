@@ -14,6 +14,7 @@ from typing import Union
 from .custom_api import fetch_stock_equity_changes
 import re
 import time
+import calendar
 from .fundamental_filler import fill_fundamental_fields
 
 import logging
@@ -242,7 +243,7 @@ class StockHistSynchronizer:
             logger.error("Error fetching stock data for %s: %s", stock_code, e)
             return pd.DataFrame()
         
-    async def fetch_daily_basic_data(self, stock_code, market, start_date, end_date):
+    async def fetch_daily_basic_data(self, stock_code, start_date, end_date):
         """异步获取股票每日基本面数据"""
         try:
             async with self.semaphore:
@@ -331,7 +332,7 @@ class StockHistSynchronizer:
             # 5. 批量插入新增记录到数据库
             if new_records:
                 try:
-                    result_records = StockHistUnadjDao.batch_insert(new_records)
+                    result_records = StockHistUnadjDao.batch_upsert(new_records)
                     logger.info("Inserted %d new historical records for stock %s.", len(result_records), stock_code)
                     self.update_flag_dao.update_action_flag(stock_code, "1")
                 except Exception as e:
@@ -398,11 +399,11 @@ class StockHistSynchronizer:
             logger.error("Error processing stock %s: %s", stock_code, e)
             raise e
 
-    def sync(self, progress_callback=None):
+    def sync(self, stock_codes: List[str] = None, overwrite: bool = False, progress_callback=None):
         self.initialize()
         try:
             logger.info("Starting stock historical data synchronization.")
-            stock_list = StockInfoDao.load_stock_info()
+            stock_list = StockInfoDao.load_stock_info(stock_codes)
             self.stock_list_size = len(stock_list)
             logger.info("Found %d stocks to synchronize.", len(stock_list))
 
@@ -413,11 +414,14 @@ class StockHistSynchronizer:
                     stock_code = stock.stock_code
                     logger.info("Synchronizing stock %s", stock_code)
 
-                    latest_date = StockHistUnadjDao.get_latest_date(stock_code)
-                    if latest_date is None:
+                    if overwrite:
                         start_date_dt = datetime.date(1990, 1, 1)
                     else:
-                        start_date_dt = latest_date + datetime.timedelta(days=1)
+                        latest_date = StockHistUnadjDao.get_latest_date(stock_code)
+                        if latest_date is None:
+                            start_date_dt = datetime.date(1990, 1, 1)
+                        else:
+                            start_date_dt = latest_date + datetime.timedelta(days=1)
 
                     listing_date = stock.listing_date
                     start_date_dt = max(listing_date, start_date_dt)
@@ -1030,17 +1034,20 @@ class FundamentalDataSynchronizer:
             tspro.income_vip, period=period,
             fields="ts_code,f_ann_date,end_date,n_income_attr_p,operate_profit,total_revenue,total_cogs"
         )
+        df_income = df_income.drop_duplicates(subset=['ts_code', 'end_date'], keep='last').reset_index(drop=True)
         df_balance = await asyncio.to_thread(
             tspro.balancesheet_vip, period=period,
             fields="ts_code,f_ann_date,end_date,total_hldr_eqy_exc_min_int,total_assets,total_cur_liab,total_ncl"
         )
+        df_balance = df_balance.drop_duplicates(subset=['ts_code', 'end_date'], keep='last').reset_index(drop=True)
         df_cashflow = await asyncio.to_thread(
             tspro.cashflow_vip, period=period,
             fields="ts_code,f_ann_date,end_date,n_cashflow_act,c_pay_acq_const_fiolta"
         )
+        df_cashflow = df_cashflow.drop_duplicates(subset=['ts_code', 'end_date'], keep='last').reset_index(drop=True)
         return df_income, df_balance, df_cashflow
 
-    async def process_one_period_by_tushare(self, period: str):
+    async def process_one_period_by_tushare(self, period: str, overwrite: bool = False):
         try:
             df_income, df_balance, df_cashflow = await self.fetch_all_data_by_tushare(period)
 
@@ -1082,10 +1089,12 @@ class FundamentalDataSynchronizer:
             if fundamental_records:
                 logger.info(f"Batch upserting {len(fundamental_records)} fundamental records for period {period}...")
                 await asyncio.to_thread(FundamentalDataDao.batch_upsert, fundamental_records)
-                fill_fundamental_fields(overwrite=False)
                 logger.info(f"Batch upsert successful for period {period}.")
             else:
                 logger.warning(f"No fundamental records to insert for period {period}.")
+
+            if not df_merge.empty:
+                fill_fundamental_fields(codes=df_merge['ts_code'].tolist(), asof_date=period, overwrite=overwrite)
 
         except Exception as e:
             logger.error(f"Error processing fundamental data for period {period}: {e}")
@@ -1204,14 +1213,18 @@ class FundamentalDataSynchronizer:
                 if progress_callback:
                     progress_callback(self.completed_num, self.stock_list_size)
 
-    def sync(self, progress_callback=None):
+    def sync(self, stock_codes: List[str] = None, progress_callback=None):
         self.initialize()
         try:
             logger.info("Starting fundamental data synchronization.")
             # 1. 获取股票列表
-            stock_list = StockInfoDao.load_stock_info()
-            stock_list_codes = [x.stock_code for x in stock_list]
-            self.stock_list_size = len(stock_list_codes)
+            if not stock_codes:
+                stock_list = StockInfoDao.load_stock_info()
+                stock_list_codes = [x.stock_code for x in stock_list]
+                self.stock_list_size = len(stock_list_codes)
+            else:
+                stock_list_codes = stock_codes
+                self.stock_list_size = len(stock_list_codes)
             logger.info("Found %d stocks to process.", len(stock_list_codes))
 
             batch_size = 20
@@ -1243,7 +1256,7 @@ class FundamentalDataSynchronizer:
             failed_stocks_to_try = self.failed_stocks.copy()
             self.failed_stocks.clear()
             run_tasks(failed_stocks_to_try, batch_size, None)  #重试期间不更新进度
-            fill_fundamental_fields(overwrite=True)
+            fill_fundamental_fields(codes=None, asof_date= None, overwrite=True)
         finally:
             if self.failed_stocks:
                 logger.error("Failed stocks: %s", self.failed_stocks)
@@ -1251,18 +1264,40 @@ class FundamentalDataSynchronizer:
                 logger.info("Fundamental data synchronization completed.")
             self.terminate()
 
-    def sync_by_period(self, period: str):
+    def sync_by_period(self, start_period: str, end_period):
         """
         同步指定单一季度
         """
         self.initialize()
+        start = datetime.datetime.strptime(start_period, '%Y%m%d').date()
+        end   = datetime.datetime.strptime(end_period,   '%Y%m%d').date()
+        
+        periods = []
+        
+        # 2. 遍历每年每个季度
+        for year in range(start.year, end.year + 1):
+            for month in (3, 6, 9, 12):
+                # 当年该月的最后一天
+                last_day = calendar.monthrange(year, month)[1]
+                q_date = datetime.date(year, month, last_day)
+                
+                if start <= q_date <= end:
+                    periods.append(q_date.strftime('%Y%m%d'))
+        
+        for period in periods[:-1]:
+            try:
+                logger.info(f"Syncing specified period {period}...")
+                self.loop.run_until_complete(self.process_one_period_by_tushare(period, False))
+            except Exception as e:
+                logger.error(f"Error during specified period {period} synchronization: {e}")
+
         try:
-            logger.info(f"Syncing specified period {period}...")
-            self.loop.run_until_complete(self.process_one_period_by_tushare(period))
+            logger.info(f"Syncing specified period {periods[-1]}...")
+            self.loop.run_until_complete(self.process_one_period_by_tushare(periods[-1], True))
         except Exception as e:
-            logger.error(f"Error during specified period {period} synchronization: {e}")
-        finally:
-            self.terminate()
+            logger.error(f"Error during specified period {periods[-1]} synchronization: {e}")
+
+        self.terminate()
 
 
 class SuspendDataSynchronizer:

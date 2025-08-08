@@ -76,6 +76,9 @@ def sync_stock_hist():
     请求参数（JSON）中可包含 task_type（例如 "STOCK_HIST_SYNC"），
     此处示例中直接固定为同步无复权数据。
     """
+    data = request.get_json()
+    stock_codes = data.get("stock_codes")
+    overwrite = data.get("overwrite", False)
     try:
         # 创建任务记录（初始状态为 RUNNING，进度为 0）
         new_task = TaskRecord(
@@ -93,7 +96,7 @@ def sync_stock_hist():
         progress_cb = make_progress_callback(task_id)
 
         def task_func():
-            stock_hist_synchronizer.sync(progress_callback=progress_cb)
+            stock_hist_synchronizer.sync(stock_codes=stock_codes, overwrite=overwrite, progress_callback=progress_cb)
 
         # 启动后台任务
         launch_background_task(task_id, task_func)
@@ -250,6 +253,8 @@ def sync_fundamental():
     """
     同步公司基本面数据
     """
+    data = request.get_json()
+    stock_codes = data.get("stock_codes")
     try:
         # 创建任务记录（初始状态为 RUNNING，进度为 0）
         new_task = TaskRecord(
@@ -267,7 +272,7 @@ def sync_fundamental():
         progress_cb = make_progress_callback(task_id)
 
         def task_func():
-            fundamental_data_synchronizer.sync(progress_callback=progress_cb)
+            fundamental_data_synchronizer.sync(stock_codes, progress_callback=progress_cb)
 
         # 启动后台任务
         launch_background_task(task_id, task_func)
@@ -285,7 +290,8 @@ def sync_fundamental_by_period():
       - period: 财报周期，例如 "20250331" 表示2025年一季度
     """
     data = request.get_json()
-    period = data.get("period")
+    start_period = data.get("start_period")
+    end_period = data.get("end_period")
     try:
         # 创建任务记录（初始状态为 RUNNING，进度为 0）
         new_task = TaskRecord(
@@ -300,7 +306,7 @@ def sync_fundamental_by_period():
         logger.info("Created task id %d for one period fundamental data sync.", task_id)
 
         def task_func():
-            fundamental_data_synchronizer.sync_by_period(period)
+            fundamental_data_synchronizer.sync_by_period(start_period, end_period)
 
         # 启动后台任务
         launch_background_task(task_id, task_func)

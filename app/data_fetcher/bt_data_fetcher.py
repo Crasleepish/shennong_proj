@@ -152,7 +152,7 @@ class DataFetcher:
         return df.astype('float32')
     
     def fetch_fundamentals_on_all(self, start_date: str, end_date: str, fields: List[str]) -> pd.DataFrame:
-        adj_start = pd.to_datetime(start_date) - pd.Timedelta(days=365)
+        adj_start = pd.to_datetime(start_date) - pd.Timedelta(days=500)
         adj_end = pd.to_datetime(end_date) - pd.Timedelta(days=120)
         try:
             with get_db() as db:

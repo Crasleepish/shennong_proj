@@ -1,9 +1,11 @@
 # app/data_process/fundamental_filler.py
 
 import pandas as pd
+from typing import List
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.stock_models import FundamentalData
+from sqlalchemy import and_, or_, asc
 import logging
 
 logger = logging.getLogger(__name__)
@@ -78,38 +80,45 @@ def calc_total_liabilities(df: pd.DataFrame, overwrite: bool = True) -> pd.DataF
     return df
 
 
-def fill_fundamental_fields(overwrite: bool = False):
+def fill_fundamental_fields(codes: List[str] = None, asof_date: str = None, overwrite: bool = False):
     try:
         with get_db() as db:
-            codes = db.query(FundamentalData.stock_code).distinct().all()
-            codes = [c[0] for c in codes]
+            if codes is None:
+                codes = db.query(FundamentalData.stock_code).distinct().all()
+                codes = [c[0] for c in codes]
 
             for code in codes:
-                rows = (
+                sql = (
                     db.query(FundamentalData)
                     .filter(FundamentalData.stock_code == code)
-                    .order_by(FundamentalData.report_date)
-                    .all()
                 )
-                if not rows:
-                    continue
 
-                df = pd.DataFrame([r.__dict__ for r in rows])
-                df = df.drop(columns=["_sa_instance_state"])
+                if asof_date:
+                    asof_date = pd.to_datetime(asof_date, format="%Y%m%d")
+                    sql = sql.filter(FundamentalData.report_date <= asof_date)
 
-                if overwrite or df["operating_profit_ttm"].isna().any():
+                sql = sql.order_by(asc(FundamentalData.report_date))
+                df = pd.read_sql(sql.statement, db.bind)
+                df = df.sort_values("report_date")
+
+                modified_flag = False
+
+                if overwrite or pd.isna(df["operating_profit_ttm"].iloc[-1]):
                     df = calc_operating_profit_ttm(df, overwrite)
+                    modified_flag = True
 
-                if overwrite or df["total_liabilities"].isna().any():
+                if overwrite or pd.isna(df["total_liabilities"].iloc[-1]):
                     df = calc_total_liabilities(df, overwrite)
+                    modified_flag = True
 
-                for _, row in df.iterrows():
-                    db.merge(FundamentalData(
-                        stock_code=row["stock_code"],
-                        report_date=row["report_date"],
-                        operating_profit_ttm=safe_value(row.get("operating_profit_ttm")),
-                        total_liabilities=safe_value(row.get("total_liabilities"))
-                    ))
+                if modified_flag:
+                    for _, row in df.iterrows():
+                        db.merge(FundamentalData(
+                            stock_code=row["stock_code"],
+                            report_date=row["report_date"],
+                            operating_profit_ttm=safe_value(row.get("operating_profit_ttm")),
+                            total_liabilities=safe_value(row.get("total_liabilities"))
+                        ))
 
             db.commit()
             logger.info("✅ 所有报告期字段填充完成")

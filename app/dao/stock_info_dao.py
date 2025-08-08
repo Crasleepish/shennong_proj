@@ -15,11 +15,13 @@ logger = logging.getLogger(__name__)
 class StockInfoDao:
 
     @staticmethod
-    def load_stock_info() -> List[StockInfo]:
+    def load_stock_info(stock_codes: List[str] = None) -> List[StockInfo]:
         try:
             with get_db() as db:
-                stock_info_lst = db.query(StockInfo).all()
-                return stock_info_lst
+                stock_info_lst_query = db.query(StockInfo)
+                if stock_codes:
+                    stock_info_lst_query = stock_info_lst_query.filter(StockInfo.stock_code.in_(stock_codes))
+                return stock_info_lst_query.all()
         except Exception as e:
             logger.error(e)
         
@@ -340,16 +342,12 @@ class StockHistUnadjDao:
                 logger.info(f"Using database bind: {db.bind}")
 
                 def upsert_one_batch(batch: List[StockHistUnadj]):
-                    # 先查出现有记录
-                    stock_code_list = [rec.stock_code for rec in batch]
-                    date_list = [rec.date for rec in batch]
+                    keys = [(rec.stock_code, rec.date) for rec in batch]
 
-                    # 查询数据库已有记录
                     existing_records = db.query(StockHistUnadj).filter(
-                        StockHistUnadj.stock_code.in_(stock_code_list),
-                        StockHistUnadj.date.in_(date_list)
+                        tuple_(StockHistUnadj.stock_code, StockHistUnadj.date).in_(keys)
                     ).all()
-
+                    
                     # 建立快速索引
                     existing_dict = {
                         (rec.stock_code, rec.date): rec for rec in existing_records
