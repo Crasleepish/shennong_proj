@@ -44,32 +44,32 @@ def build_all_portfolios(start_date: str, end_date: str):
     fetcher = DataFetcher()
     logging.info("开始初始化数据...")
     logging.info(f"获取收盘价数据... {prev_start_date} - {end_date}")
-    # price = fetcher.fetch_adj_hist("close", prev_start_date, end_date)
-    price = read_from_csv(os.path.join(output_path, "price.csv"), "date", [0])
+    price = fetcher.fetch_adj_hist("close", prev_start_date, end_date)
+    # price = read_from_csv(os.path.join(output_path, "price.csv"), "date", [0])
     logging.info(f"获取市值数据... {prev_start_date} - {end_date}")
-    # mkt_cap = fetcher.fetch_price("mkt_cap", prev_start_date, end_date)
-    mkt_cap = read_from_csv(os.path.join(output_path, "mkt_cap.csv"), "date", [0])
+    mkt_cap = fetcher.fetch_price("mkt_cap", prev_start_date, end_date)
+    # mkt_cap = read_from_csv(os.path.join(output_path, "mkt_cap.csv"), "date", [0])
     logging.info(f"获取成交额数据... {prev_start_date} - {end_date}")
-    # amount = fetcher.fetch_price("amount", prev_start_date, end_date)
-    amount = read_from_csv(os.path.join(output_path, "amount.csv"), "date", [0])
+    amount = fetcher.fetch_price("amount", prev_start_date, end_date)
+    # amount = read_from_csv(os.path.join(output_path, "amount.csv"), "date", [0])
     logging.info(f"获取基本面数据... {prev_start_date} - {end_date}")
-    # fundamentals = fetcher.fetch_fundamentals_on_all(
-    #     prev_start_date,
-    #     end_date,
-    #     fields=[
-    #         "total_equity",
-    #         "operating_profit_ttm",
-    #         "total_assets",
-    #         "total_liabilities",
-    #         "net_profit",
-    #         "net_cash_from_operating"
-    #     ]
-    # )
-    fundamentals = read_from_csv(os.path.join(output_path, "fundamentals.csv"), "report_date", [0, 1])
-    # price.to_csv(os.path.join(output_path, "price.csv"))
-    # mkt_cap.to_csv(os.path.join(output_path, "mkt_cap.csv"))
-    # amount.to_csv(os.path.join(output_path, "amount.csv"))
-    # fundamentals.to_csv(os.path.join(output_path, "fundamentals.csv"))
+    fundamentals = fetcher.fetch_fundamentals_on_all(
+        prev_start_date,
+        end_date,
+        fields=[
+            "total_equity",
+            "operating_profit_ttm",
+            "total_assets",
+            "total_liabilities",
+            "net_profit",
+            "net_cash_from_operating"
+        ]
+    )
+    # fundamentals = read_from_csv(os.path.join(output_path, "fundamentals.csv"), "report_date", [0, 1])
+    price.to_csv(os.path.join(output_path, "price.csv"))
+    mkt_cap.to_csv(os.path.join(output_path, "mkt_cap.csv"))
+    amount.to_csv(os.path.join(output_path, "amount.csv"))
+    fundamentals.to_csv(os.path.join(output_path, "fundamentals.csv"))
 
     # === 构造共用数据集 ===
     shared_data = {

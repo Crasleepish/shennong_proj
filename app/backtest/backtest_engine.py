@@ -112,9 +112,9 @@ def sparse_sort_call_seq_nb(c: SegmentContext, order_value_out, target_w, direct
     for k in range(c.from_col, c.to_col):
         col = k
         w = target_w[row_in_w, col]
+        # 若权重为NaN，则置为0
         if np.isnan(w):
-            order_value_out[col - c.from_col] = np.nan
-            continue
+            w = 0.0
 
         cash_now = c.last_cash[c.group] if c.cash_sharing else c.last_cash[col]
         free_cash_now = c.last_free_cash[c.group] if c.cash_sharing else c.last_free_cash[col]
@@ -181,7 +181,8 @@ def run_backtest(
     # 1) Align matrices --------------------------------------------------
 															
     close = close.ffill().copy()
-    weights, close = weights.align(close, join="inner", axis=1)
+    weights = weights.fillna(0.0).copy()
+    weights, close = weights.align(close, join="left", axis=1)
     if weights.empty or close.empty:
         raise ValueError("After alignment, weights/close share no common index or columns.")
 

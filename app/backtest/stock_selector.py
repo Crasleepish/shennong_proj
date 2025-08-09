@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 import pandas as pd
 from typing import List, Dict, Set, Optional
 import logging
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ class AmountSelector(Selector):
             return []
         amount_series = amount_series.sort_values(ascending=True)
         n = len(amount_series)
-        cutoff = int(n * self.percentile)
+        cutoff = int(math.ceil(n * self.percentile))
         return amount_series.iloc[cutoff:].index.tolist()
 
 
@@ -169,7 +170,7 @@ class QualityScoreSelector(Selector):
         if self.fundamental_df is None:
             return []
 
-        lookback_date = self.asof_date - pd.Timedelta(days=120)
+        lookback_date = self.asof_date - pd.Timedelta(days=90)
         fundamentals = get_latest_available_row(self.fundamental_df, lookback_date, ["operating_profit_ttm", "total_equity", "net_cash_from_operating", "net_profit", "total_assets", "total_liabilities"])
         if fundamentals.empty:
             return []
@@ -188,7 +189,33 @@ class QualityScoreSelector(Selector):
         fundamentals["lev"] = fundamentals["total_liabilities"] / fundamentals["total_assets"]
 
         fundamentals["industry"] = self.stock_info.reindex(fundamentals.index)["industry"]
-        zscore_df = fundamentals.groupby("industry")[["profit", "cfq", "lev"]].transform(lambda x: (x - x.mean()) / x.std())
+
+        def zscore_trimmed(group: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+            result = pd.DataFrame(index=group.index, columns=cols)
+            for col in cols:
+                series = group[col]
+                if series.count() <= 2:
+                    mu = series.mean()
+                    sigma = series.std()
+                else:
+                    # 固定丢弃一个最小值和一个最大值（保留其余）
+                    drop_idx = [series.idxmin(), series.idxmax()]
+                    trimmed = series.drop(index=drop_idx)
+                    if trimmed.count() < 1:
+                        mu = series.mean()
+                        sigma = series.std()
+                    else:
+                        mu = trimmed.mean()
+                        sigma = trimmed.std()
+
+                if sigma == 0 or pd.isna(sigma):
+                    result[col] = 0.0
+                else:
+                    result[col] = (series - mu) / sigma
+            return result
+
+        cols = ["profit", "cfq", "lev"]
+        zscore_df = fundamentals.groupby("industry").apply(lambda g: zscore_trimmed(g, cols)).reset_index(level=0, drop=True)
         if universe is not None:
             zscore_df = zscore_df.loc[zscore_df.index.intersection(universe)]
         score = zscore_df["profit"] + zscore_df["cfq"] - zscore_df["lev"]
@@ -212,7 +239,7 @@ class BMScoreSelector(Selector):
         if self.fundamental_df is None or self.mkt_cap_df is None or self.asof_date not in self.mkt_cap_df.index:
             return []
 
-        lookback_date = self.asof_date - pd.Timedelta(days=120)
+        lookback_date = self.asof_date - pd.Timedelta(days=90)
         fundamentals = get_latest_available_row(self.fundamental_df, lookback_date, ["total_equity"])
         if fundamentals.empty:
             return []

@@ -9,7 +9,7 @@ import vectorbt as vbt
 # Use the TestConfig from our config module
 from app.config import TestConfig, Config
 
-from app.backtest.portfolio_BM_S_H import backtest_strategy
+from app.backtest.portfolio_OP_S_H import backtest_strategy
 # Create the Flask app using TestConfig
 @pytest.fixture
 def app():

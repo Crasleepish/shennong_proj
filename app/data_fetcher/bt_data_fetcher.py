@@ -4,6 +4,7 @@ import os
 import pickle
 from typing import List, Dict, Optional
 import logging
+from tqdm import tqdm
 from sqlalchemy.orm import Session
 from datetime import timedelta
 from app.database import get_db
@@ -63,22 +64,30 @@ class DataFetcher:
         end = pd.to_datetime(end_date)
         result = []
 
+        # 1. 构造 (chunk_start, chunk_end) 列表
+        chunks = []
         while current <= end:
             chunk_end = min(current + pd.DateOffset(days=30), end)
+            chunks.append((current, chunk_end))
+            # 下一片从 chunk_end + 1 天开始
+            current = chunk_end + timedelta(days=1)
+
+        # 2. 迭代所有块并显示进度条
+        for chunk_start, chunk_end in tqdm(chunks, desc=f"Fetching {field}", unit="chunk"):
             try:
                 with get_db() as db:
                     query = db.query(StockHistUnadj.date, StockHistUnadj.stock_code, getattr(StockHistUnadj, field))
-                    query = query.filter(StockHistUnadj.date >= current.strftime('%Y-%m-%d'), StockHistUnadj.date <= chunk_end.strftime('%Y-%m-%d'))
+                    query = query.filter(StockHistUnadj.date >= chunk_start.strftime("%Y-%m-%d"), StockHistUnadj.date <= chunk_end.strftime("%Y-%m-%d"))
                     df = pd.read_sql(query.statement, db.bind)
                     if not df.empty:
-                        df = df.dropna()
+                        df = df.dropna(subset=[field])
                         df['date'] = pd.to_datetime(df['date'])
                         df = df.pivot(index='date', columns='stock_code', values=field)
                         result.append(df.astype('float32'))
             except Exception as e:
-                logger.error(f"Failed to fetch price field {field} from {current} to {chunk_end}: {e}")
-            current = chunk_end + timedelta(days=1)
+                logger.error(f"Failed to fetch price field {field} from {chunk_start.date()} to {chunk_end.date()}: {e}")
 
+        # 3. 返回结果
         if result:
             return pd.concat(result).sort_index()
         return pd.DataFrame()
@@ -88,12 +97,19 @@ class DataFetcher:
         end = pd.to_datetime(end_date)
         result = []
 
+        # 1. 构造 (chunk_start, chunk_end) 列表
+        chunks = []
         while current <= end:
             chunk_end = min(current + pd.DateOffset(days=30), end)
+            chunks.append((current, chunk_end))
+            # 下一片从 chunk_end + 1 天开始
+            current = chunk_end + timedelta(days=1)
+
+        for chunk_start, chunk_end in tqdm(chunks, desc=f"Fetching adjusted factor", unit="chunk"):
             try:
                 with get_db() as db:
                     query = db.query(AdjFactor.date, AdjFactor.stock_code, AdjFactor.adj_factor)
-                    query = query.filter(AdjFactor.date >= current.strftime('%Y-%m-%d'), AdjFactor.date <= chunk_end.strftime('%Y-%m-%d'))
+                    query = query.filter(AdjFactor.date >= chunk_start.strftime('%Y-%m-%d'), AdjFactor.date <= chunk_end.strftime('%Y-%m-%d'))
                     df = pd.read_sql(query.statement, db.bind)
                     if not df.empty:
                         df = df.dropna()
@@ -101,7 +117,7 @@ class DataFetcher:
                         df = df.pivot(index='date', columns='stock_code', values='adj_factor')
                         result.append(df.astype('float32'))
             except Exception as e:
-                logger.error(f"Failed to fetch adj_factor from {current} to {chunk_end}: {e}")
+                logger.error(f"Failed to fetch adj_factor from {chunk_start.date()} to {chunk_end.date()}: {e}")
             current = chunk_end + timedelta(days=1)
 
         if result:
