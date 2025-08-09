@@ -17,4 +17,4 @@ def app():
 
 
 def test_build_all_portfolios(app):
-    build_all_portfolios("2008-07-01", "2010-12-31")
+    build_all_portfolios("2008-07-01", "2010-12-31", "history")

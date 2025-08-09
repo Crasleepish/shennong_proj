@@ -138,7 +138,7 @@ class FactorFetcher:
         logger.info("因子入库完成: %d 条记录", len(factors_df))
 
 
-    def fetch_all(self, start_date: str, end_date: str, progress_callback=None):
+    def fetch_all(self, start_date: str, end_date: str, mode: str, progress_callback=None):
         """
         Parameters:
         - start_date (str): The start date of the data to fetch, in 'YYYY-MM-DD' format.
@@ -146,9 +146,12 @@ class FactorFetcher:
         - progress_callback (callable, optional): A callback function to report the progress of the fetch operation.
                                     The callback function should accept two float arguments: the current progress
                                     and the total progress. Defaults to None.
+        - mode: realtime/history，realtime表示正在使用最近的数据构建回测组合（近3个月内），history表示正在用历史数据构建。
+                   mode=realtime时会使用早于start_date的最新的基本面数据计算指标，
+                   mode=history时使用早于start_date-90天的最新的基本面数据计算指标，防止未来数据泄漏影响回测准确性。
         """
         logger.info("Starting fetching market index from %s to %s", start_date, end_date)
-        build_all_portfolios(start_date, end_date)
+        build_all_portfolios(start_date, end_date, mode)
 
         self.compute_and_store_daily_factors(start_date=start_date, end_date=end_date, output_dir=output_dir)
 

@@ -29,7 +29,14 @@ def read_from_csv(file_path: str, date_col: List = 'date', index_cols: List = [0
     df = df.astype('float32', errors='ignore')
     return df
 
-def build_all_portfolios(start_date: str, end_date: str):
+def build_all_portfolios(start_date: str, end_date: str, mode: str):
+    '''
+        start_date 期望的结果数据开始日期，YYYY-MM-DD
+        end_date   期望的结果数据结束日期，YYYY-MM-DD
+        mode       realtime/history，realtime表示正在使用最近的数据构建回测组合（近3个月内），history表示正在用历史数据构建。
+                   mode=realtime时会使用早于start_date的最新的基本面数据计算指标，
+                   mode=history时使用早于start_date-90天的最新的基本面数据计算指标，防止未来数据泄漏影响回测准确性。
+    '''
     # === 历史数据归档目录 ===
     output_path = "./bt_result"
     os.makedirs(output_path, exist_ok=True)
@@ -141,10 +148,15 @@ def build_all_portfolios(start_date: str, end_date: str):
             basic_selector = BasicSelector(stock_info, blacklist, shared_data.get("price"), date)
             basic_amount_selector = AmountSelector(amount, date, 0.01, parents=[basic_selector])
             size_selector = MktCapPercentileSelector(shared_data.get("mkt_cap"), date, size_percentile)
+            lookback_range = 0 if mode == 'realtime' else 90
             if factor == "bm":
-                selector = BMScoreSelector(fundamental_df=shared_data.get("fundamental"), mkt_cap_df=shared_data.get("mkt_cap"), asof_date=date, bm_percentile=score_percentile, parents=[basic_amount_selector, size_selector])
+                selector = BMScoreSelector(fundamental_df=shared_data.get("fundamental"), mkt_cap_df=shared_data.get("mkt_cap"), 
+                                           asof_date=date, bm_percentile=score_percentile, lookback_range=lookback_range, 
+                                           parents=[basic_amount_selector, size_selector])
             elif factor == "qmj":
-                selector = QualityScoreSelector(stock_info=stock_info, fundamental_df=shared_data.get("fundamental"), asof_date=date, score_percentile=score_percentile, parents=[basic_amount_selector, size_selector])
+                selector = QualityScoreSelector(stock_info=stock_info, fundamental_df=shared_data.get("fundamental"), 
+                                                asof_date=date, score_percentile=score_percentile, lookback_range=lookback_range, 
+                                                parents=[basic_amount_selector, size_selector])
             else:
                 raise ValueError("Unknown factor")
             

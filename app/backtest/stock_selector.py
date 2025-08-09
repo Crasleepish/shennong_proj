@@ -159,18 +159,19 @@ class MktCapPercentileSelector(Selector):
 
 class QualityScoreSelector(Selector):
     def __init__(self, stock_info: pd.DataFrame, fundamental_df: pd.DataFrame, asof_date: pd.Timestamp,
-                 score_percentile: tuple = (0.7, 1.0), parents: Optional[List[Selector]] = None):
+                 score_percentile: tuple = (0.7, 1.0), lookback_range: int = 90, parents: Optional[List[Selector]] = None):
         super().__init__(parents)
         self.stock_info = stock_info
         self.fundamental_df = fundamental_df
         self.asof_date = asof_date
         self.score_percentile = score_percentile
+        self.lookback_range = lookback_range
 
     def _select(self, universe):
         if self.fundamental_df is None:
             return []
 
-        lookback_date = self.asof_date - pd.Timedelta(days=90)
+        lookback_date = self.asof_date - pd.Timedelta(days=self.lookback_range)
         fundamentals = get_latest_available_row(self.fundamental_df, lookback_date, ["operating_profit_ttm", "total_equity", "net_cash_from_operating", "net_profit", "total_assets", "total_liabilities"])
         if fundamentals.empty:
             return []
@@ -228,18 +229,19 @@ class QualityScoreSelector(Selector):
 
 class BMScoreSelector(Selector):
     def __init__(self, fundamental_df: pd.DataFrame, mkt_cap_df: pd.DataFrame, 
-                 asof_date: pd.Timestamp, bm_percentile: tuple = (0.7, 1.0), parents: Optional[List[Selector]] = None):
+                 asof_date: pd.Timestamp, bm_percentile: tuple = (0.7, 1.0), lookback_range: int = 90, parents: Optional[List[Selector]] = None):
         super().__init__(parents)
         self.fundamental_df = fundamental_df
         self.mkt_cap_df = mkt_cap_df
         self.asof_date = asof_date
         self.bm_percentile = bm_percentile
+        self.lookback_range = lookback_range
 
     def _select(self, universe):
         if self.fundamental_df is None or self.mkt_cap_df is None or self.asof_date not in self.mkt_cap_df.index:
             return []
 
-        lookback_date = self.asof_date - pd.Timedelta(days=90)
+        lookback_date = self.asof_date - pd.Timedelta(days=self.lookback_range)
         fundamentals = get_latest_available_row(self.fundamental_df, lookback_date, ["total_equity"])
         if fundamentals.empty:
             return []

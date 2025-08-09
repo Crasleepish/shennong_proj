@@ -29,10 +29,6 @@ init_if_empty(
     os.path.join(BASE_DIR, "output"),
     os.path.join(BASE_DIR, "output_init")
 )
-init_if_empty(
-    os.path.join(BASE_DIR, ".cache"),
-    os.path.join(BASE_DIR, ".cache_init")
-)
 
 from app import create_app
 

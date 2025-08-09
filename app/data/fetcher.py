@@ -1032,12 +1032,12 @@ class FundamentalDataSynchronizer:
         logger.info(f"Fetching full market data for period {period} asynchronously...")
         df_income = await asyncio.to_thread(
             tspro.income_vip, period=period,
-            fields="ts_code,f_ann_date,end_date,n_income_attr_p,operate_profit,total_revenue,total_cogs"
+            fields="ts_code,f_ann_date,end_date,n_income_attr_p,n_income,continued_net_profit,end_net_profit,operate_profit,total_revenue,total_cogs,oper_exp"
         )
         df_income = df_income.drop_duplicates(subset=['ts_code', 'end_date'], keep='last').reset_index(drop=True)
         df_balance = await asyncio.to_thread(
             tspro.balancesheet_vip, period=period,
-            fields="ts_code,f_ann_date,end_date,total_hldr_eqy_exc_min_int,total_assets,total_cur_liab,total_ncl"
+            fields="ts_code,f_ann_date,end_date,total_hldr_eqy_exc_min_int,total_assets,total_cur_liab,total_ncl,total_liab"
         )
         df_balance = df_balance.drop_duplicates(subset=['ts_code', 'end_date'], keep='last').reset_index(drop=True)
         df_cashflow = await asyncio.to_thread(
@@ -1077,10 +1077,13 @@ class FundamentalDataSynchronizer:
                     total_assets=parse_amount(row.get('total_assets')),
                     current_liabilities=parse_amount(row.get('total_cur_liab')),
                     noncurrent_liabilities=parse_amount(row.get('total_ncl')),
-                    net_profit=parse_amount(row.get('n_income_attr_p')),
+                    total_liabilities=parse_amount(row.get('total_liab')),
+                    net_profit=first_not_none(parse_amount(row.get('n_income_attr_p')), 
+                                              parse_amount(row.get('n_income')), 
+                                              safe_get(parse_amount(row.get('continued_net_profit'))) + safe_get(parse_amount(row.get('end_net_profit')))) if not pd.isna(row.get('continued_net_profit')) and not pd.isna(row.get('end_net_profit')) else None,
                     operating_profit=parse_amount(row.get('operate_profit')),
                     total_revenue=parse_amount(row.get('total_revenue')),
-                    total_cost=parse_amount(row.get('total_cogs')),
+                    total_cost=first_not_none(parse_amount(row.get('total_cogs')), parse_amount(row.get('oper_exp'))),
                     net_cash_from_operating=parse_amount(row.get('n_cashflow_act')),
                     cash_for_fixed_assets=parse_amount(row.get('c_pay_acq_const_fiolta'))
                 )
@@ -1389,6 +1392,9 @@ def parse_amount(s: Union[str, float, None]) -> Union[float, None]:
     except Exception as e:
         logger.error("parse_amount error for value %s: %s", s, e)
         return None
+    
+def first_not_none(*args):
+    return next((arg for arg in args if arg is not None and not pd.isna(arg)), None)
     
 stock_info_synchronizer = StockInfoSynchronizer()
 stock_hist_synchronizer = StockHistSynchronizer()

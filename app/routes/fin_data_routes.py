@@ -603,6 +603,7 @@ def sync_factors_all():
     data = request.get_json()
     start = data.get("start_date")
     end = data.get("end_date")
+    mode = data.get("mode")
     try:
         # 创建任务记录（初始状态为 RUNNING，进度为 0）
         new_task = TaskRecord(
@@ -620,7 +621,7 @@ def sync_factors_all():
         progress_cb = make_progress_callback(task_id)
 
         def task_func():
-            factor_fetcher.fetch_all(start_date=start, end_date=end, progress_callback=progress_cb)
+            factor_fetcher.fetch_all(start_date=start, end_date=end, mode=mode, progress_callback=progress_cb)
 
         # 启动后台任务
         launch_background_task(task_id, task_func)
@@ -630,38 +631,6 @@ def sync_factors_all():
         logger.exception("Error creating factors sync task.")
         return jsonify({"status": "error", "message": str(e)}), 500
     
-@fin_data_bp.route("/factors/sync_recent", methods=["POST"])
-def sync_factors_recent():
-    try:
-        # 创建任务记录（初始状态为 RUNNING，进度为 0）
-        new_task = TaskRecord(
-            task_type="FACTORS_SYNC",
-            task_status="RUNNING",
-            progress_current=0,
-            progress_total=0,
-            message="Task started."
-        )
-        new_task = task_dao.insert(new_task)
-        task_id = new_task.id
-        logger.info("Created task id %d for recent factors data sync.", task_id)
-
-        # 定义进度回调函数
-        progress_cb = make_progress_callback(task_id)
-
-        end_date=datetime.now().strftime("%Y-%m-%d")
-        #开始时间为183天前
-        start_date=(datetime.now()-timedelta(days=183)).strftime("%Y-%m-%d")
-
-        def task_func():
-            factor_fetcher.fetch_all(start_date=start_date, end_date=end_date, append=True, progress_callback=progress_cb)
-
-        # 启动后台任务
-        launch_background_task(task_id, task_func)
-
-        return jsonify({"status": "success", "task_id": task_id, "message": "Task started"}), 200
-    except Exception as e:
-        logger.exception("Error creating factors sync task.")
-        return jsonify({"status": "error", "message": str(e)}), 500
     
 @fin_data_bp.route("/macro/fetch_all", methods=["POST"])
 def fetch_all_macro_data():
@@ -749,6 +718,7 @@ def update_all_fin_data():
         data = request.get_json()
         start = data.get("start_date")
         end = data.get("end_date")
+        mode = data.get("mode")
         if not start or not end:
             return jsonify({"status": "error", "message": "start_date 和 end_date 必须提供"}), 400
         
@@ -779,7 +749,8 @@ def update_all_fin_data():
         end_date_obj = datetime.strptime(end, "%Y%m%d")
 
         factor_fetcher.fetch_all(start_date=start_date_obj.strftime("%Y-%m-%d"), 
-                                 end_date=end_date_obj.strftime("%Y-%m-%d"))
+                                 end_date=end_date_obj.strftime("%Y-%m-%d"),
+                                 mode=mode)
         
         MacroDataFetcher.fetch_all()
         return jsonify({"message": "success"})

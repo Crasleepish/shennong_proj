@@ -71,10 +71,11 @@ def calc_total_liabilities(df: pd.DataFrame, overwrite: bool = True) -> pd.DataF
 
         cl = row["current_liabilities"]
         ncl = row["noncurrent_liabilities"]
-        if pd.isna(cl) and pd.isna(ncl):
+        tcl = row["total_liabilities"]
+        if pd.isna(cl) and pd.isna(ncl) and pd.isna(tcl):
             continue
 
-        df.at[i, "total_liabilities"] = safe_num(cl) + safe_num(ncl)
+        df.at[i, "total_liabilities"] = max(safe_num(cl) + safe_num(ncl), safe_num(tcl))
 
     df["total_liabilities"] = safe_ffill_float(df["total_liabilities"])
     return df

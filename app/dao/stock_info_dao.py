@@ -909,6 +909,7 @@ class FundamentalDataDao:
                             existing.total_assets = rec.total_assets
                             existing.current_liabilities = rec.current_liabilities
                             existing.noncurrent_liabilities = rec.noncurrent_liabilities
+                            existing.total_liabilities = rec.total_liabilities
                             existing.net_profit = rec.net_profit
                             existing.operating_profit = rec.operating_profit
                             existing.total_revenue = rec.total_revenue
