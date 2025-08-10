@@ -150,3 +150,16 @@ class EtfDataFetcher:
                         continue
                     db.merge(EtfHist(**row.to_dict()))
             logger.info("入库完成：%s，共 %d 条", date_str, len(df))
+
+    def get_etf_info(self) -> pd.DataFrame:
+        try:
+            with get_db() as db:
+                condition = or_(
+                    EtfInfo.invest_type.in_(['被动指数型', '增强指数型']),
+                    EtfInfo.fund_type == '商品型'
+                )
+                query = db.query(EtfInfo).filter(condition)
+                df = pd.read_sql(query.statement, db.bind)
+            return df
+        except Exception as e:
+            return pd.DataFrame()

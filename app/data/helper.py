@@ -511,7 +511,7 @@ def get_fund_daily_return_for_beta_regression(fund_code: str, start_date: str = 
     返回基金历史每日回报率：
     包含字段：date, daily_return
     """
-    df = fund_hist_holder.get_fund_hist_by_code(fund_code, start_date, end_date)
+    df = FundHistDao._instance.select_dataframe_by_code(fund_code, start_date, end_date)
     df['date'] = pd.to_datetime(df['date'], errors="coerce")
     df = df.sort_values('date')
     df = df.set_index('date', drop=True)
@@ -534,7 +534,7 @@ def get_etf_daily_return_for_beta_regression(etf_code: str, start_date: str = No
 from app.dao.fund_info_dao import FundInfoDao
 from app.data_fetcher.etf_data_fetcher import EtfDataFetcher
 
-def get_all_fund_codes_with_source() -> pd.DataFrame:
+def get_all_fund_codes_with_source(asset_type: str) -> pd.DataFrame:
     """
     合并 FundInfo 和 EtfInfo，输出所有基金代码及其来源。
     返回：
@@ -544,19 +544,27 @@ def get_all_fund_codes_with_source() -> pd.DataFrame:
     """
     try:
         # 从 FundInfo 表提取
-        df1 = FundInfoDao().select_dataframe_all()
-        df1 = df1[["fund_code"]].dropna().copy()
-        df1["fund_code"] = df1["fund_code"].astype(str).str.strip()
-        df1["source"] = "fund_info"
+        if asset_type == "fund_info" or asset_type == "all":
+            df1 = FundInfoDao().select_dataframe_all()
+            df1 = df1[["fund_code", "fund_type", "found_date"]].dropna().copy()
+            df1["fund_code"] = df1["fund_code"].astype(str).str.strip()
+            df1["source"] = "fund_info"
+        else:
+            df1 = pd.DataFrame(columns=["fund_code", "fund_type", "found_date", "source"])
 
         # 从 EtfInfo 表提取
-        df2 = EtfDataFetcher.get_etf_info()
-        df2 = df2[["ts_code"]].rename(columns={"ts_code": "fund_code"}).dropna().copy()
-        df2["fund_code"] = df2["fund_code"].astype(str).str.strip()
-        df2["source"] = "etf_info"
+        if asset_type == "etf_info" or asset_type == "all":
+            df2 = EtfDataFetcher().get_etf_info()
+            df2 = df2[["etf_code", "fund_type", "found_date"]].rename(columns={"etf_code": "fund_code"}).dropna().copy()
+            df2["fund_code"] = df2["fund_code"].astype(str).str.strip()
+            df2["source"] = "etf_info"
+        else:
+            df2 = pd.DataFrame(columns=["fund_code", "fund_type", "found_date", "source"])
 
         # 合并 & 去重
+        one_year_ago = (pd.to_datetime("today") - pd.DateOffset(years=1)).strftime('%Y-%m-%d')
         df_all = pd.concat([df1, df2], ignore_index=True)
+        df_all = df_all[(df_all["fund_type"]=="股票型") & (pd.to_datetime(df_all["found_date"]) <= pd.to_datetime(one_year_ago))]
         df_all = df_all.drop_duplicates(subset=["fund_code"]).reset_index(drop=True)
 
         return df_all

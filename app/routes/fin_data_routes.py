@@ -16,6 +16,7 @@ from app.data_fetcher import MacroDataFetcher
 from app.data_fetcher import CalendarFetcher
 from app.data_fetcher import CSIIndexDataFetcher, GoldDataFetcher
 from app.data_fetcher import EtfDataFetcher
+import pandas as pd
 
 
 logger = logging.getLogger(__name__)
@@ -771,14 +772,15 @@ def update_historical_dynamic_beta():
     end_date = data.get("end_date")
 
     if not fund_codes:
-        df_all = get_all_fund_codes_with_source()
-        fund_codes = df_all["fund_code"].tolist()
+        df_all = get_all_fund_codes_with_source(asset_type)
+        type_codes_map = df_all.groupby("source")["fund_code"].apply(list).to_dict()
 
     if not start_date or not end_date:
         return jsonify({"status": "error", "message": "请提供 start_date 和 end_date"}), 400
 
     try:
-        run_historical_beta_batch(fund_codes, asset_type, start_date, end_date)
+        for asset_type, fund_codes in type_codes_map.items():
+            run_historical_beta_batch(fund_codes, asset_type, start_date, end_date)
         return jsonify({
             "status": "success",
             "message": f"历史 Kalman β 已完成 {len(fund_codes)} 只基金的处理",
@@ -788,32 +790,37 @@ def update_historical_dynamic_beta():
         return jsonify({"status": "error", "message": str(e)}), 500
     
 from app.ml.beta_estimator import run_realtime_update_batch
-from app.data_fetcher.trade_calender_reader import TradeCalendarReader
+from app.data_fetcher.calender_fetcher import CalendarFetcher
 from app.data.helper import get_all_fund_codes_with_source
 
 @fin_data_bp.route("/dynamic_beta", methods=["POST"])
 def update_dynamic_beta():
     data = request.get_json()
     fund_codes = data.get("fund_codes")
-    date = data.get("date")
+    asset_type = data.get("asset_type")
+    end_date = data.get("end_date")
 
     if not fund_codes:
-        df_all = get_all_fund_codes_with_source()
+        df_all = get_all_fund_codes_with_source(asset_type)
         fund_codes = df_all["fund_code"].tolist()
 
-    if not date:
-        trade_dates = TradeCalendarReader.get_trade_dates()
-        if trade_dates.empty:
+    if not end_date:
+        latest_trade_date = CalendarFetcher().get_trade_date(start="19900101", end=pd.to_datetime("today").strftime("%Y%m%d"), format="%Y-%m-%d", limit=1, ascending=False)
+        if not latest_trade_date:
             return jsonify({"status": "error", "message": "交易日历为空，请先同步"}), 400
-        date = trade_dates.max().strftime("%Y-%m-%d")
+        end_date = latest_trade_date[0]
+    else:
+        latest_trade_date = CalendarFetcher().get_trade_date(start="19900101", end=end_date.replace("-", ""), format="%Y-%m-%d", limit=1, ascending=False)
+        if not latest_trade_date:
+            return jsonify({"status": "error", "message": "交易日历为空，请先同步"}), 400
+        end_date = latest_trade_date[0]
 
     try:
-        run_realtime_update_batch(fund_codes, end_date=date)
+        run_realtime_update_batch(fund_codes, end_date=end_date)
+        logging.info(f"[实时更新] 基金betas处理完成，处理{len(fund_codes)}个基金")
         return jsonify({
             "status": "success",
-            "message": f"{date} Kalman β 更新完成",
-            "fund_count": len(fund_codes),
-            "date": date
-        })
+            "message": f"Kalman β 更新完成"
+            })
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500

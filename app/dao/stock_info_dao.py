@@ -1159,7 +1159,7 @@ class MarketFactorsDao:
         try:
             with get_db() as db:
                 select_columns = [MarketFactors.date, MarketFactors.MKT, MarketFactors.SMB, MarketFactors.HML, MarketFactors.QMJ]
-                query = db.query(*select_columns).filter(MarketFactors.date >= start_date_dt, MarketFactors.date < end_date_dt)
+                query = db.query(*select_columns).filter(MarketFactors.date >= start_date_dt, MarketFactors.date <= end_date_dt)
                 df = pd.read_sql(query.statement, db.bind)
                 return df
         except Exception as e:

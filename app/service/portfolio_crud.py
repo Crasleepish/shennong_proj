@@ -28,6 +28,43 @@ def query_weights_by_date(date: str, portfolio_id: int = 1) -> dict:
             weights_dict = {}
 
         return { "weights": weights_dict }
+    
+    
+from typing import Optional
+from sqlalchemy import desc
+
+def query_latest_portfolio_by_id(portfolio_id: int) -> pd.Series:
+    """
+    查询指定 portfolio_id 最新一条组合权重记录
+    返回: pd.Series，包含 fields: date, weights, weights_ewma
+    - weights / weights_ewma: 若为 JSON 字符串则解析为 dict，若为空返回 None
+    - 若查无记录，返回空 Series
+    """
+    with get_db() as db:
+        row: Optional[PortfolioWeights] = (
+            db.query(PortfolioWeights)
+              .filter(PortfolioWeights.portfolio_id == portfolio_id)
+              .order_by(desc(PortfolioWeights.date))
+              .first()
+        )
+
+        if not row:
+            return pd.Series(dtype=object)
+
+        def _loads_or_none(s: Optional[str]):
+            if not s:
+                return None
+            try:
+                return json.loads(s)
+            except Exception:
+                # 若不是合法 JSON，原样返回字符串，避免报错
+                return s
+
+        return pd.Series({
+            "date": row.date,
+            "weights": _loads_or_none(row.weights),
+            "weights_ewma": _loads_or_none(row.weights_ewma),
+        })
 
 from app.data.helper import get_fund_current_prices_by_code_list
 from app.data_fetcher.trade_calender_reader import TradeCalendarReader

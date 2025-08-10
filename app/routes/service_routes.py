@@ -5,7 +5,22 @@ logger = logging.getLogger(__name__)
 
 service_bp = Blueprint("service_routes", __name__, url_prefix="/service")
 
-from app.service.portfolio_opt import optimize_portfolio_realtime
+from app.service.portfolio_opt import optimize_portfolio_realtime, optimize_portfolio_history
+
+#
+@service_bp.route("/portfolio_opt_hist", methods=["POST"])
+def portfolio_opt_hist():
+    """
+    Optimize portfolio ;history
+    """
+    data = request.get_json()
+    start_date = data.get("start_date", None)
+    end_date = data.get("end_date", None)
+    try:
+        optimize_portfolio_history(start_date, end_date)
+        return jsonify({"message": "success"})
+    except Exception as e:
+        return jsonify({"message": "error", "data": str(e)})
 
 @service_bp.route("/portfolio_opt_rt", methods=["POST"])
 def portfolio_opt_rt():

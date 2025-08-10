@@ -22,8 +22,9 @@ from app.database import get_db
 from app.models.service_models import PortfolioWeights
 import json
 from app.data_fetcher.trade_calender_reader import TradeCalendarReader
-from app.backtest.backtest_engine import run_backtest
+from app.backtest.backtest_engine import run_backtest as run_backtest_engine
 from app.backtest.backtest_engine import BacktestConfig
+from app.dao.betas_dao import FundBetaDao
 
 app = create_app()
 logger = logging.getLogger(__name__)
@@ -63,10 +64,17 @@ for code, src in asset_source_map.items():
 
 view_codes = ["H11004.CSI", "Au99.99.SGE", "008114.OF", "020602.OF", "019918.OF", "002236.OF", "019311.OF", "006712.OF", "011041.OF", "110003.OF", "019702.OF", "006342.OF", "020466.OF", "018732.OF"]
         
-def load_fund_betas(codes):
-    df = pd.read_csv("output/fund_factors.csv")
-    df = df[df["code"].isin(codes)].reset_index(drop=True)
-    return df[["code", "MKT", "SMB", "HML", "QMJ"]]
+def load_fund_betas(code):
+    df = FundBetaDao.select_by_code_date(code, None)
+    df = df.set_index("date", drop=True)
+    return df[["MKT", "SMB", "HML", "QMJ"]]
+
+def load_latest_fund_betas(codes):
+    one_year_ago = (pd.to_datetime("today") - pd.DateOffset(years=1)).strftime('%Y-%m-%d')
+    df = FundBetaDao.get_latest_fund_betas(fund_type_list=["股票型"], invest_type_list=["被动指数型", "增强指数型"], found_date_limit=one_year_ago)
+    df = df.set_index("code", drop=True)
+    df = df[df.index.isin(codes)]
+    return df[["MKT", "SMB", "HML", "QMJ"]]
 
 
 def build_price_df(asset_source_map: dict, start: str, end: str) -> pd.DataFrame:
@@ -79,12 +87,12 @@ def build_price_df(asset_source_map: dict, start: str, end: str) -> pd.DataFrame
     dao = FundHistDao._instance
     for code, src in asset_source_map.items():
         if src == "factor":
-            beta_df = load_fund_betas([code]).set_index("code")
-            if code not in beta_df.index:
+            beta_df = load_fund_betas(code)
+            if beta_df.empty:
                 logger.warning(f"⚠️ {code} 因子暴露缺失，跳过")
                 continue
-            beta = beta_df.loc[code].values
-            ret = df_factors.values @ beta
+            beta_df = beta_df.reindex(df_factors.index).bfill()
+            ret = (beta_df * df_factors).sum(axis=1)
             net_value_df[code] = (1 + pd.Series(ret, index=df_factors.index)).cumprod()
         elif src == "index":
             df = csi_index_data_fetcher.get_data_by_code_and_date(code=code)
@@ -106,7 +114,7 @@ def build_price_df(asset_source_map: dict, start: str, end: str) -> pd.DataFrame
     return net_value_df.ffill()
 
 
-def run_backtest(start="2025-07-24", end="2025-07-31", window=20):
+def run_backtest(start="2025-01-02", end="2025-07-18", window=20):
     out_dir = f"./fund_portfolio_bt_result/{datetime.today().strftime('%Y%m%d_%H%M%S')}"
     os.makedirs(out_dir, exist_ok=True)
     with app.app_context(), get_db() as db:
@@ -189,13 +197,6 @@ def run_backtest(start="2025-07-24", end="2025-07-31", window=20):
 
         print("🏁 开始构建 Portfolio")
 
-        init_cash = 10_000_000
-
-        # 1. 构造 segment_mask
-        segment_mask = np.full((price_df.shape[0], 1), False, dtype=bool)
-        for date in weights_df.index:
-            segment_mask[price_df.index.get_loc(date), 0] = True
-
         cfg = BacktestConfig(
             init_cash=100_000_000,
             buy_fee=0.0,
@@ -203,7 +204,7 @@ def run_backtest(start="2025-07-24", end="2025-07-31", window=20):
             slippage=slippage_rate,
             cash_sharing=True
         )
-        result = run_backtest(weights_df, price_df, cfg)
+        result = run_backtest_engine(weights_df, price_df, cfg)
 
         # 5. 日换手率计算函数
         def compute_turnover_rate(portfolio, n: int = 1) -> pd.Series:

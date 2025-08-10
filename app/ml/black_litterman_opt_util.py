@@ -8,17 +8,18 @@ import numpy as np
 from app.ml.inference import get_softprob_dict, get_label_to_ret
 from scipy.optimize import minimize
 from app.ml.dataset_builder import DatasetBuilder
-
-FUND_BETA_PATH = "output/fund_factors.csv"
+from app.dao.betas_dao import FundBetaDao
 
 def load_fund_betas(codes: List[str]) -> pd.DataFrame:
     """
     从 output/fund_factors.csv 中读取指定 code 的因子暴露数据。
     返回包含 ['code', 'MKT', 'SMB', 'HML', 'QMJ'] 的 DataFrame。
     """
-    df = pd.read_csv(FUND_BETA_PATH)
-    df = df[df["code"].isin(codes)].reset_index(drop=True)
-    return df[["code", "MKT", "SMB", "HML", "QMJ"]]
+    one_year_ago = (pd.to_datetime("today") - pd.DateOffset(years=1)).strftime('%Y-%m-%d')
+    df = FundBetaDao.get_latest_fund_betas(fund_type_list=["股票型"], invest_type_list=["被动指数型", "增强指数型"], found_date_limit=one_year_ago)
+    df = df.set_index("code", drop=True)
+    df = df[df.index.isin(codes)]
+    return df[["MKT", "SMB", "HML", "QMJ"]]
 
 def build_bl_views(
     code_type_map: dict,
@@ -46,11 +47,11 @@ def build_bl_views(
 
         beta_row = {"code": code}
         if asset_type == "factor":
-            row = df_beta_all[df_beta_all["code"] == code]
+            row = df_beta_all.loc[code]
             if row.empty:
                 raise ValueError(f"Missing beta data for {code}")
             for f in factors:
-                beta_row[f] = row[f].values[0]
+                beta_row[f] = row[f]
         else:
             beta_row[factors[0]] = 1.0
 

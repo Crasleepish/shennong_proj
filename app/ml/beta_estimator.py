@@ -7,22 +7,27 @@ from app.dao.stock_info_dao import MarketFactorsDao
 from app.dao.betas_dao import FundBetaDao
 from app.ml.kalman_beta.kalman_filter import KalmanFilter
 from app.ml.kalman_beta import QREstimator
-from app.data_fetcher.trade_calender_reader import TradeCalendarReader
+from app.ml.kalman_beta.q_r_estimator import _bootstrap_qr_from_history
+import logging
+from datetime import timedelta
 
 FACTOR_NAMES = ["MKT", "SMB", "HML", "QMJ"]
+logger = logging.getLogger(__name__)
 
 
 def run_historical_beta(code: str, asset_type: str, start_date: str, end_date: str, window_size: int = 60):
-    market_factors_dao = MarketFactorsDao._instance
-    factor_df = market_factors_dao.select_dataframe_by_date(start_date, end_date)
+    factor_df = MarketFactorsDao._instance.select_dataframe_by_date(start_date, end_date).set_index("date")
     if asset_type == "fund_info":
         return_df = get_fund_daily_return_for_beta_regression(code, start_date, end_date)
     elif asset_type == "etf_info":
         return_df = get_etf_daily_return_for_beta_regression(code, start_date, end_date)
+    return_df = return_df.dropna(how="any")
+    if len(return_df) == 0:
+        raise RuntimeError("No daily return data")
     factor_df = factor_df.set_index("date", drop=True)
     factor_df.index = pd.to_datetime(factor_df.index)
     return_df.index = pd.to_datetime(return_df.index)
-    df = pd.merge(factor_df, return_df, on="date").sort_values("date")
+    df = factor_df.join(return_df).sort_index()
     df = df.dropna(how="any")
     df["intercept"] = 1.0
 
@@ -51,7 +56,6 @@ def run_historical_beta(code: str, asset_type: str, start_date: str, end_date: s
             code, idx_date.strftime("%Y-%m-%d"), beta_dict, P=kf.P
         )
 
-
 def run_realtime_update(fund_code: str, end_date: str = None, window_size: int = 60):
     latest_df = FundBetaDao.select_latest_by_code(fund_code)
     if latest_df.empty:
@@ -64,16 +68,19 @@ def run_realtime_update(fund_code: str, end_date: str = None, window_size: int =
         if pd.notna(latest.P_json)
         else np.diag([1.0, 1.0, 1.0, 1.0, 0.1])
     )
-    start_date = latest.date.strftime("%Y-%m-%d")
+    start_date = (latest.date + timedelta(days=1)).strftime("%Y-%m-%d")
     end_date = end_date or pd.Timestamp.today().strftime("%Y-%m-%d")
 
-    factor_df = MarketFactorsDao.select_dataframe_by_date(start_date, end_date)
+    # ========= 新增：在 start_date 当天计算前，重建第 n-1 天的 QR 状态 =========
+    # 这里把 ref_date 设为 start_date，这样会用 start_date 之前的 window_size 个交易日做窗口
+    qr = _bootstrap_qr_from_history(fund_code, ref_date=start_date, window_size=window_size)
+
+    factor_df = MarketFactorsDao._instance.select_dataframe_by_date(start_date, end_date).set_index("date")
     fund_df = get_fund_daily_return_for_beta_regression(fund_code, start_date, end_date)
-    df = pd.merge(factor_df, fund_df, on="date").sort_values("date")
+    df = factor_df.join(fund_df).sort_index()
     df["intercept"] = 1.0
 
     kf = KalmanFilter(state_dim=5, z0=z_prev, P0=P_prev)
-    qr = QREstimator(window_size=window_size)
 
     for _, row in df.iterrows():
         x = np.array([row[f] for f in FACTOR_NAMES] + [1.0])
@@ -85,22 +92,22 @@ def run_realtime_update(fund_code: str, end_date: str = None, window_size: int =
 
         beta_dict = dict(zip(FACTOR_NAMES + ["const"], z.flatten().tolist()))
         FundBetaDao.upsert_one(
-            fund_code, row["date"].strftime("%Y-%m-%d"), beta_dict, P=kf.P
+            fund_code, row.name.strftime("%Y-%m-%d"), beta_dict, P=kf.P
         )
 
 def run_historical_beta_batch(fund_codes: list[str], asset_type: str, start_date: str, end_date: str, window_size: int = 60):
     for code in fund_codes:
         try:
-            print(f"[历史回填] 正在处理基金 {code}...")
+            logger.info(f"[历史回填] 正在处理基金 {code}...")
             run_historical_beta(code, asset_type, start_date, end_date, window_size)
         except Exception as e:
-            print(f"[历史回填] 基金 {code} 处理失败: {e}")
+            logger.error(f"[历史回填] 基金 {code} 处理失败: {e}")
 
 
 def run_realtime_update_batch(fund_codes: list[str], end_date: str = None, window_size: int = 60):
     for code in fund_codes:
         try:
-            print(f"[实时更新] 正在处理基金 {code}...")
+            logger.info(f"[实时更新] 正在处理基金 {code}...")
             run_realtime_update(code, end_date, window_size)
         except Exception as e:
-            print(f"[实时更新] 基金 {code} 处理失败: {e}")
+            logger.error(f"[实时更新] 基金 {code} 处理失败: {e}")
