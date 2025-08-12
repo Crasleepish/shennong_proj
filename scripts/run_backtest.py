@@ -25,6 +25,7 @@ from app.data_fetcher.trade_calender_reader import TradeCalendarReader
 from app.backtest.backtest_engine import run_backtest as run_backtest_engine
 from app.backtest.backtest_engine import BacktestConfig
 from app.dao.betas_dao import FundBetaDao
+from app.service.portfolio_crud import query_weights_by_date, store_portfolio
 
 app = create_app()
 logger = logging.getLogger(__name__)
@@ -117,7 +118,7 @@ def build_price_df(asset_source_map: dict, start: str, end: str) -> pd.DataFrame
 def run_backtest(start="2025-08-07", end="2025-08-08", window=20):
     out_dir = f"./fund_portfolio_bt_result/{datetime.today().strftime('%Y%m%d_%H%M%S')}"
     os.makedirs(out_dir, exist_ok=True)
-    with app.app_context(), get_db() as db:
+    with app.app_context():
         print("🔁 开始构建价格数据")
         price_df = build_price_df(asset_source_map, start, end)
         all_dates = price_df.index
@@ -144,11 +145,8 @@ def run_backtest(start="2025-08-07", end="2025-08-08", window=20):
                         prev_trade_date = trade_dates[-2]
                     else:
                         raise ValueError("交易日不足，无法执行权重平滑")
-                    prev_row = db.query(PortfolioWeights).filter_by(
-                        portfolio_id=portfolio_id,
-                        date=prev_trade_date
-                    ).first()
-                    prev_weights = json.loads(prev_row.weights_ewma) if prev_row else w_today
+                    
+                    prev_weights = query_weights_by_date(prev_trade_date)
 
                 all_codes = set(w_today.keys()).union(prev_weights.keys())
                 w_ewma = {
@@ -158,20 +156,12 @@ def run_backtest(start="2025-08-07", end="2025-08-08", window=20):
 
                 weights_df.loc[dt] = pd.Series(w_ewma)
                 prev_weights = w_ewma.copy()
-
-                # 入库
-                pw = PortfolioWeights(
-                    portfolio_id=portfolio_id,
-                    date=pd.Timestamp(dt),
-                    weights=json.dumps(w_today),
-                    weights_ewma=json.dumps(w_ewma)
-                )
-                db.merge(pw)
+                
+                store_portfolio(portfolio_id, dt, w_today, w_ewma, cov_matrix)
 
             except Exception as e:
                 logger.warning(f"⚠️ {dt.strftime('%Y-%m-%d')} 调仓失败: {e}")
                 continue
-        db.commit()  # ✅ 提交所有权重记录
 
         weights_df = weights_df.infer_objects(copy=False).dropna(how='all').fillna(0)
         price_df = price_df.loc[weights_df.index]

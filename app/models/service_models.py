@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, DateTime, Text, PrimaryKeyConstraint
+from sqlalchemy import Column, BigInteger, DateTime, Text, PrimaryKeyConstraint, LargeBinary
 from app.database import Base
 
 class PortfolioWeights(Base):
@@ -6,8 +6,11 @@ class PortfolioWeights(Base):
     
     portfolio_id = Column(BigInteger, nullable=False)
     date = Column(DateTime, nullable=False)
+    codes = Column(Text, nullable=True)
     weights = Column(Text, nullable=True)
     weights_ewma = Column(Text, nullable=True)
+    cov_meta = Column(Text, nullable=True)              # 存储元信息，如 shape、dtype 等
+    cov_matrix = Column(LargeBinary, nullable=True)     # 新增 BLOB 字段
 
     __table_args__ = (
         PrimaryKeyConstraint('portfolio_id', 'date', name='portfolio_weights_pk'),

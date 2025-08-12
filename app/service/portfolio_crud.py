@@ -2,6 +2,11 @@ from app.models.service_models import PortfolioWeights
 from app.database import get_db
 import json
 import pandas as pd
+import numpy as np
+from app.utils.cov_packer import pack_covariance
+import logging
+
+logger = logging.getLogger(__name__)
 
 def query_weights_by_date(date: str, portfolio_id: int = 1) -> dict:
     """
@@ -19,21 +24,23 @@ def query_weights_by_date(date: str, portfolio_id: int = 1) -> dict:
             date=query_date
         ).first()
 
-        if row is None or not row.weights_ewma:
+        if row is None or not row.codes or not row.weights_ewma:
             return { "weights": {} }
 
         try:
-            weights_dict = json.loads(row.weights_ewma)
+            codes = json.loads(row.codes)
+            weights = json.loads(row.weights_ewma)
+            weights_dict = dict(zip(codes, weights))
         except Exception:
             weights_dict = {}
 
         return { "weights": weights_dict }
     
-    
+
 from typing import Optional
 from sqlalchemy import desc
 
-def query_latest_portfolio_by_id(portfolio_id: int) -> pd.Series:
+def query_latest_portfolio_by_id(portfolio_id: int, as_of_date: str = None) -> pd.Series:
     """
     查询指定 portfolio_id 最新一条组合权重记录
     返回: pd.Series，包含 fields: date, weights, weights_ewma
@@ -41,9 +48,12 @@ def query_latest_portfolio_by_id(portfolio_id: int) -> pd.Series:
     - 若查无记录，返回空 Series
     """
     with get_db() as db:
+        condition = [PortfolioWeights.portfolio_id == portfolio_id]
+        if as_of_date:
+            condition.append(PortfolioWeights.date < as_of_date)
         row: Optional[PortfolioWeights] = (
             db.query(PortfolioWeights)
-              .filter(PortfolioWeights.portfolio_id == portfolio_id)
+              .filter(*condition)
               .order_by(desc(PortfolioWeights.date))
               .first()
         )
@@ -51,19 +61,22 @@ def query_latest_portfolio_by_id(portfolio_id: int) -> pd.Series:
         if not row:
             return pd.Series(dtype=object)
 
-        def _loads_or_none(s: Optional[str]):
-            if not s:
+        def _loads_or_none(c: Optional[str], w: Optional[str]):
+            if not c or not w:
                 return None
             try:
-                return json.loads(s)
+                codes = json.loads(c)
+                weights = json.loads(w)
+                d = dict(zip(codes, weights))
+                return d
             except Exception:
                 # 若不是合法 JSON，原样返回字符串，避免报错
-                return s
+                return "invalid json"
 
         return pd.Series({
             "date": row.date,
-            "weights": _loads_or_none(row.weights),
-            "weights_ewma": _loads_or_none(row.weights_ewma),
+            "weights": _loads_or_none(row.codes, row.weights),
+            "weights_ewma": _loads_or_none(row.codes, row.weights_ewma),
         })
 
 from app.data.helper import get_fund_current_prices_by_code_list
@@ -246,3 +259,27 @@ def query_fund_names_by_codes(codes: List[str]) -> Dict[str, str]:
     df = FundInfoDao._instance.select_dataframe_by_code(codes)
     df = df.dropna(subset=["fund_code", "fund_name"])
     return dict(zip(df["fund_code"], df["fund_name"]))
+
+def store_portfolio(portfolio_id: int, trade_date: str, weights_raw: dict, weights_ewma: dict, cov_matrix: np.ndarray):
+    codes_smooth = list(weights_ewma.keys())
+    weights_smooth = list(weights_ewma.values())
+
+    weights_today = [weights_raw.get(c, 0.0) for c in codes_smooth]
+
+    cov_matrix_packed, meta_json = pack_covariance(cov_matrix)
+
+    # 入库
+    with get_db() as db:
+        new_row = PortfolioWeights(
+            portfolio_id=portfolio_id,
+            date=pd.Timestamp(trade_date),
+            codes = json.dumps(codes_smooth),
+            weights = json.dumps(weights_today),
+            weights_ewma = json.dumps(weights_smooth),
+            cov_matrix=cov_matrix_packed,
+            cov_meta=meta_json
+        )
+        db.merge(new_row)
+        db.commit()
+
+        logger.info(f"✅ 已写入平滑后组合权重，日期: {trade_date}")

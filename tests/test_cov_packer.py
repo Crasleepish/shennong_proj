@@ -19,22 +19,18 @@ def make_spd_matrix(n: int, seed: int = 7) -> np.ndarray:
 @pytest.mark.parametrize("n", [3, 5, 15])
 def test_pack_unpack_roundtrip_basic(n):
     cov = make_spd_matrix(n, seed=42)
-    codes = [f"ASSET_{i:02d}" for i in range(n)]
 
-    packed = pack_covariance(cov, codes)
+    buf, meta_json = pack_covariance(cov)
 
     # 基础元信息检查
-    meta = json.loads(packed)
+    meta = json.loads(meta_json)
     assert meta["n"] == n
-    assert meta["pack"] == "zlib+base64"
-    assert meta["codes"] == codes
-    assert isinstance(meta["data"], str) and len(meta["data"]) > 0
+    assert meta["dtype"] == "float32"
 
-    cov_unpacked, codes_unpacked = unpack_covariance(packed)
+    cov_unpacked = unpack_covariance(buf, meta_json)
 
     # 维度、codes、一致性检查
     assert cov_unpacked.shape == (n, n)
-    assert codes_unpacked == codes
 
     # 对称&dtype
     assert np.allclose(cov_unpacked, cov_unpacked.T, atol=0, rtol=0)

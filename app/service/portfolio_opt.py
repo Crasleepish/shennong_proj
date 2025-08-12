@@ -22,6 +22,7 @@ from app.dao.betas_dao import FundBetaDao
 from app.service.portfolio_crud import query_latest_portfolio_by_id
 from app.data_fetcher import CalendarFetcher
 from app.ml.black_litterman_opt_util import load_fund_betas, compute_prior_mu_sigma, compute_prior_mu_fixed_window, build_bl_views, compute_bl_posterior, optimize_mean_variance
+from app.service.portfolio_crud import query_weights_by_date, store_portfolio
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +132,8 @@ def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str, wi
         'weights': dict(zip(fund_codes, weights)),
         'expected_return': expected_return,
         'expected_volatility': expected_vol,
-        'sharpe_ratio': expected_return / expected_vol
+        'sharpe_ratio': expected_return / expected_vol,
+        'cov_matrix': Sigma_full
     }
 
 def optimize_portfolio_realtime():
@@ -514,50 +516,39 @@ def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict
         'weights': dict(zip(fund_codes, weights)),
         'expected_return': expected_return,
         'expected_volatility': expected_vol,
-        'sharpe_ratio': expected_return / expected_vol
+        'sharpe_ratio': expected_return / expected_vol,
+        'cov_matrix': Sigma_full,
     }
 
 def output_optimized_portfolio(portfolio_plan):
     """保存或打印最终最优组合权重，并将 ewma 平滑后的结果写入数据库"""
-    with get_db() as db:
-        # 获取当前和前一交易日
-        trade_dates = TradeCalendarReader.get_trade_dates(end=datetime.today().strftime("%Y%m%d"))
-        if len(trade_dates) < 2:
-            raise ValueError("交易日不足，无法执行权重平滑")
+    # 获取当前和前一交易日
+    trade_dates = TradeCalendarReader.get_trade_dates(end=datetime.today().strftime("%Y%m%d"))
+    if len(trade_dates) < 2:
+        raise ValueError("交易日不足，无法执行权重平滑")
 
-        prev_date = trade_dates[-2]
-        today_date = trade_dates[-1]
+    prev_date = trade_dates[-2]
+    today_date = trade_dates[-1]
 
-        # 查询昨日权重
-        prev_row = db.query(PortfolioWeights).filter_by(portfolio_id=portfolio_id, date=prev_date).first()
-        if not prev_row:
-            raise ValueError("前一交易日权重不存在，无法执行权重平滑")
-        w_prev = json.loads(prev_row.weights_ewma) if prev_row and prev_row.weights_ewma else {}
+    # 查询昨日权重
+    w_prev = query_weights_by_date(date=prev_date, portfolio_id=portfolio_id)
 
-        # 当前权重
-        w_today = portfolio_plan["weights"]
+    # 当前权重
+    w_today = portfolio_plan["weights"]
 
-        # 合并资产列表
-        all_assets = set(w_today.keys()).union(w_prev.keys())
+    # 合并资产列表
+    all_assets = set(w_today.keys()).union(w_prev.keys())
 
-        # 计算平滑权重
-        w_smooth = {
-            code: round(alpha * w_today.get(code, 0.0) + (1 - alpha) * w_prev.get(code, 0.0), 8)
-            for code in all_assets
-        }
+    # 计算平滑权重
+    w_smooth = {
+        code: round(alpha * w_today.get(code, 0.0) + (1 - alpha) * w_prev.get(code, 0.0), 8)
+        for code in all_assets
+    }
 
-        # 入库
-        new_row = PortfolioWeights(
-            portfolio_id=portfolio_id,
-            date=pd.Timestamp(today_date),
-            weights=json.dumps(w_today),
-            weights_ewma=json.dumps(w_smooth),
-        )
-        db.merge(new_row)
-        db.commit()
+    cov_matrix = portfolio_id['cov_matrix']
 
-        print(f"✅ 已写入平滑后组合权重，日期: {today_date.strftime('%Y-%m-%d')}")
-        return w_smooth
+    store_portfolio(portfolio_id, pd.to_datetime("today").strftime("%Y-%m-%d"), w_today, w_smooth, cov_matrix)
+    return w_smooth
 
 
 factor_data_reader = FactorDataReader()
@@ -641,54 +632,49 @@ def optimize_portfolio_history(start_date: str = None, end_date: str = None):
 
     logging.info("🔁 获取最后一次优化的组合权重")
 
-    latest_portfolio = query_latest_portfolio_by_id(1)
+    latest_portfolio = query_latest_portfolio_by_id(1, start_date)
     if latest_portfolio.empty:
         if not start_date:
             raise ValueError("没有历史优化权重，请指定起始日期")
     
     start_date = (pd.to_datetime(latest_portfolio["date"]) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-    logging.info(f"使用最后一次优化的日期的T+1日 {start_date} 作为起始日期")
     
-    with get_db() as db:
-        all_dates = CalendarFetcher().get_trade_date(start=start_date.replace("-", ""), end=end_date.replace("-", ""), format="%Y-%m-%d", ascending=True)
-        if latest_portfolio.empty:
-            prev_weights = None
-        else:
-            prev_weights = latest_portfolio["weights_ewma"]
+    all_dates = CalendarFetcher().get_trade_date(start=start_date.replace("-", ""), end=end_date.replace("-", ""), format="%Y-%m-%d", ascending=True)
+    logging.info(f"使用最后一次优化的日期的T+1日 {all_dates[0]} 作为起始日期")
 
-        logging.info("📊 开始每日 optimize + ewma 平滑 + 入库")
-        for dt in tqdm(all_dates):
-            try:
-                w_today = optimize(
-                    asset_source_map=asset_source_map,
-                    code_factors_map=code_factors_map,
-                    trade_date=dt,
-                    window=20,
-                    view_codes=view_codes
-                )["weights"]
-                
-                if prev_weights is None:
-                    prev_weights = w_today
-                
-                all_codes = set(w_today.keys()).union(prev_weights.keys())
+    if latest_portfolio.empty:
+        prev_weights = None
+    else:
+        prev_weights = latest_portfolio["weights_ewma"]
 
-                w_ewma = {
-                    code: round(alpha * w_today.get(code, 0.0) + (1 - alpha) * prev_weights.get(code, 0.0), 8)
-                    for code in all_codes
-                }
+    logging.info("📊 开始每日 optimize + ewma 平滑 + 入库")
+    for dt in tqdm(all_dates):
+        try:
+            optimize_result = optimize(
+                asset_source_map=asset_source_map,
+                code_factors_map=code_factors_map,
+                trade_date=dt,
+                window=20,
+                view_codes=view_codes
+            )
 
-                prev_weights = w_ewma.copy()
+            w_today = optimize_result["weights"]
+            cov_matrix = optimize_result["cov_matrix"]
+            
+            if prev_weights is None:
+                prev_weights = w_today
+            
+            all_codes = set(w_today.keys()).union(prev_weights.keys())
 
-                # 入库
-                pw = PortfolioWeights(
-                    portfolio_id=portfolio_id,
-                    date=pd.Timestamp(dt),
-                    weights=json.dumps(w_today),
-                    weights_ewma=json.dumps(w_ewma)
-                )
-                db.merge(pw)
+            w_ewma = {
+                code: round(alpha * w_today.get(code, 0.0) + (1 - alpha) * prev_weights.get(code, 0.0), 8)
+                for code in all_codes
+            }
 
-            except Exception as e:
-                logger.warning(f"⚠️ {dt} 调仓失败: {e}")
-                continue
-        db.commit()
+            prev_weights = w_ewma.copy()
+
+            store_portfolio(portfolio_id, dt, w_today, w_ewma, cov_matrix)
+
+        except Exception as e:
+            logger.warning(f"⚠️ {dt} 调仓失败: {e}")
+            continue
