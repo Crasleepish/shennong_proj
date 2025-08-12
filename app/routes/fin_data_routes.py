@@ -722,6 +722,8 @@ def update_all_fin_data():
         mode = data.get("mode")
         if not start or not end:
             return jsonify({"status": "error", "message": "start_date 和 end_date 必须提供"}), 400
+        if not mode:
+            return jsonify({"status": "error", "message": "mode 必须提供 (realtime/history) "}), 400
         
         trade_dates = calender_fetcher.get_trade_date(start, end, format="%Y%m%d")
         
@@ -746,14 +748,13 @@ def update_all_fin_data():
         etf_data_fetcher = EtfDataFetcher()
         etf_data_fetcher.fetch_etf_hist_all_by_date(start, end)
 
-        start_date_obj = datetime.strptime(start, "%Y%m%d") - timedelta(days=183)
-        end_date_obj = datetime.strptime(end, "%Y%m%d")
+        start_date_fmt = pd.to_datetime(start, format="%Y%m%d").strftime("%Y-%m-%d")
+        end_date_fmt = pd.to_datetime(end, format="%Y%m%d").strftime("%Y-%m-%d")
 
-        factor_fetcher.fetch_all(start_date=start_date_obj.strftime("%Y-%m-%d"), 
-                                 end_date=end_date_obj.strftime("%Y-%m-%d"),
+        factor_fetcher.fetch_all(start_date=start_date_fmt, 
+                                 end_date=end_date_fmt,
                                  mode=mode)
         
-        MacroDataFetcher.fetch_all()
         return jsonify({"message": "success"})
     except Exception as e:
         logger.exception(str(e))
@@ -795,13 +796,18 @@ from app.data.helper import get_all_fund_codes_with_source
 
 @fin_data_bp.route("/dynamic_beta", methods=["POST"])
 def update_dynamic_beta():
+    """
+    fund_codes: list[str] 基金代码列表
+    asset_type: str 资产类型， fund_info/etf_info
+    end_date: str 结束日期 YYYY-MM-DD
+    """
     data = request.get_json()
     fund_codes = data.get("fund_codes")
     asset_type = data.get("asset_type")
     end_date = data.get("end_date")
 
     if not fund_codes:
-        df_all = get_all_fund_codes_with_source(asset_type)
+        df_all = get_all_fund_codes_with_source(asset_type, end_date)
         fund_codes = df_all["fund_code"].tolist()
 
     if not end_date:

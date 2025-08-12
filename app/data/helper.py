@@ -534,7 +534,7 @@ def get_etf_daily_return_for_beta_regression(etf_code: str, start_date: str = No
 from app.dao.fund_info_dao import FundInfoDao
 from app.data_fetcher.etf_data_fetcher import EtfDataFetcher
 
-def get_all_fund_codes_with_source(asset_type: str) -> pd.DataFrame:
+def get_all_fund_codes_with_source(asset_type: str, end_date: str) -> pd.DataFrame:
     """
     合并 FundInfo 和 EtfInfo，输出所有基金代码及其来源。
     返回：
@@ -562,7 +562,7 @@ def get_all_fund_codes_with_source(asset_type: str) -> pd.DataFrame:
             df2 = pd.DataFrame(columns=["fund_code", "fund_type", "found_date", "source"])
 
         # 合并 & 去重
-        one_year_ago = (pd.to_datetime("today") - pd.DateOffset(years=1)).strftime('%Y-%m-%d')
+        one_year_ago = (pd.to_datetime(end_date) - pd.DateOffset(years=1)).strftime('%Y-%m-%d')
         df_all = pd.concat([df1, df2], ignore_index=True)
         df_all = df_all[(df_all["fund_type"]=="股票型") & (pd.to_datetime(df_all["found_date"]) <= pd.to_datetime(one_year_ago))]
         df_all = df_all.drop_duplicates(subset=["fund_code"]).reset_index(drop=True)

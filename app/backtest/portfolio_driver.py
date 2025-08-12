@@ -181,6 +181,8 @@ def build_all_portfolios(start_date: str, end_date: str, mode: str):
 
             if use_hist_weight_flag:
                 weight_df = pd.concat([pd.DataFrame([init_weight], index=[pd.to_datetime(prev_start_date)]), weight_df])
+        else:
+            weight_df = pd.DataFrame([init_weight], index=[pd.to_datetime(prev_start_date)])
             
         del records
 

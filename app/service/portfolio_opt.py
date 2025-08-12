@@ -155,31 +155,8 @@ def optimize_portfolio_realtime():
     }
     est_index_values = estimate_intraday_index_value(index_to_etf)
 
-    # Step 5: 读取历史因子收益率（用于特征构造）
+    # Step 5: 构造出实时因子数据及实时资产收益数据（用于特征构造）
     additonal_factor_df, additonal_map = build_real_time_date(realtime_factors, est_index_values)
-
-    # today = datetime.strftime(TradeCalendarReader.get_trade_dates(end=datetime.strftime(datetime.today(), "%Y%m%d"))[-1], "%Y-%m-%d")
-    # additonal_factor_df = pd.DataFrame([{
-    #     "MKT": 0.012,
-    #     "SMB": -0.004,
-    #     "HML": 0.006,
-    #     "QMJ": -0.001
-    # }], index=[today])
-    # additonal_factor_df.index = pd.to_datetime(additonal_factor_df.index, format='%Y-%m-%d').date
-    # additonal_factor_df.index.name = "date"
-
-    # additonal_df = pd.DataFrame([{
-    #     "index_code": "H11004.CSI",
-    #     "date": today,
-    #     "open": 105.55,
-    #     "close": 105.55,
-    #     "high": 105.55,
-    #     "low": 105.55,
-    #     "change_percent": 0.1,
-    #     "change": 10
-    # }])
-    # additonal_df["date"] = pd.to_datetime(additonal_df["date"], format='%Y-%m-%d').dt.date
-    # additonal_map = {"H11004.CSI": additonal_df}
 
     # Step 6: 执行组合优化，输出最优资产权重
     asset_source_map = {
@@ -251,23 +228,21 @@ def compute_portfolio_returns(market_data):
 
     # 获取 bt_result 下最新日期目录
     bt_root = "bt_result"
-    all_dates = sorted([d for d in os.listdir(bt_root) if os.path.isdir(os.path.join(bt_root, d))])
-    latest_date_dir = os.path.join(bt_root, all_dates[-1])
 
     # 所需组合名称列表
     target_portfolios = [
-        "portfolio_OP_B_H_portfolio.csv",
-        "portfolio_OP_S_H_portfolio.csv",
-        "portfolio_OP_B_M_portfolio.csv",
-        "portfolio_OP_S_M_portfolio.csv",
-        "portfolio_OP_B_L_portfolio.csv",
-        "portfolio_OP_S_L_portfolio.csv",
-        "portfolio_BM_B_H_portfolio.csv",
-        "portfolio_BM_S_H_portfolio.csv",
-        "portfolio_BM_B_M_portfolio.csv",
-        "portfolio_BM_S_M_portfolio.csv",
-        "portfolio_BM_B_L_portfolio.csv",
-        "portfolio_BM_S_L_portfolio.csv",
+        "bm_BH_weights.csv",
+        "bm_BL_weights.csv",
+        "bm_BM_weights.csv",
+        "bm_SH_weights.csv",
+        "bm_SL_weights.csv",
+        "bm_SM_weights.csv",
+        "qmj_BH_weights.csv",
+        "qmj_BL_weights.csv",
+        "qmj_BM_weights.csv",
+        "qmj_SH_weights.csv",
+        "qmj_SL_weights.csv",
+        "qmj_SM_weights.csv"
     ]
 
     # 获取实时行情 close
@@ -288,7 +263,7 @@ def compute_portfolio_returns(market_data):
     result = {}
 
     for fname in target_portfolios:
-        fpath = os.path.join(latest_date_dir, fname)
+        fpath = os.path.join(bt_root, fname)
         if not os.path.exists(fpath):
             continue
 
@@ -304,7 +279,7 @@ def compute_portfolio_returns(market_data):
             yesterday_value = sum([weights[code] * price_map_yesterday.get(code, 0) for code in codes])
             today_value = sum([weights[code] * price_map_rt.get(code, 0) for code in codes])
             portfolio_ret = today_value / yesterday_value - 1
-            result[fname.replace(".csv", "")] = portfolio_ret
+            result[fname.replace("_weights.csv", "")] = portfolio_ret
         except Exception as e:
             import logging
             logging.warning(f"组合收益计算失败：{fname}，错误：{e}")
@@ -316,9 +291,9 @@ def calculate_intraday_factors(portfolio_returns, index_rt):
     import pandas as pd
     from app.data_fetcher.index_data_reader import IndexDataReader
 
-    def _mean_diff(group1_prefix: str, group2_prefix: str) -> float:
-        g1 = portfolio_returns[[k for k in portfolio_returns.index if k.startswith(group1_prefix)]]
-        g2 = portfolio_returns[[k for k in portfolio_returns.index if k.startswith(group2_prefix)]]
+    def _mean_diff(factor_group1: List[str], factor_group2: List[str]) -> float:
+        g1 = portfolio_returns[factor_group1]
+        g2 = portfolio_returns[factor_group2]
         return g1.mean() - g2.mean() if not g1.empty and not g2.empty else float("nan")
 
     # 获取中证全指昨日收盘价
@@ -331,19 +306,10 @@ def calculate_intraday_factors(portfolio_returns, index_rt):
 
     factors = {
         "MKT": today_close / pre_close - 1,
-        "SMB": _mean_diff("portfolio_BM_S_", "portfolio_BM_B_"),
-        "HML": float("nan"),
-        "QMJ": float("nan"),
+        "SMB": _mean_diff(["bm_SH", "bm_SM", "bm_SL", "qmj_SH", "qmj_SM", "qmj_SL"], ["bm_BH", "bm_BM", "bm_BL", "qmj_BH", "qmj_BM", "qmj_BL"]),
+        "HML": _mean_diff(["bm_BH", "bm_SH"], ["bm_BL", "bm_SL"]),
+        "QMJ": _mean_diff(["qmj_BH", "qmj_SH"], ["qmj_BL", "qmj_SL"]),
     }
-
-    # 特殊处理 HML 和 QMJ 的 H/L 分组
-    hml_high = portfolio_returns[[k for k in portfolio_returns.index if k.startswith("portfolio_BM_") and k.endswith("_H_portfolio")]].mean()
-    hml_low = portfolio_returns[[k for k in portfolio_returns.index if k.startswith("portfolio_BM_") and k.endswith("_L_portfolio")]].mean()
-    qmj_high = portfolio_returns[[k for k in portfolio_returns.index if k.startswith("portfolio_OP_") and k.endswith("_H_portfolio")]].mean()
-    qmj_low = portfolio_returns[[k for k in portfolio_returns.index if k.startswith("portfolio_OP_") and k.endswith("_L_portfolio")]].mean()
-
-    factors["HML"] = hml_high - hml_low if not pd.isna(hml_high) and not pd.isna(hml_low) else float("nan")
-    factors["QMJ"] = qmj_high - qmj_low if not pd.isna(qmj_high) and not pd.isna(qmj_low) else float("nan")
 
     return pd.Series(factors)
 
