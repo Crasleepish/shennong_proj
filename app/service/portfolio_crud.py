@@ -260,11 +260,10 @@ def query_fund_names_by_codes(codes: List[str]) -> Dict[str, str]:
     df = df.dropna(subset=["fund_code", "fund_name"])
     return dict(zip(df["fund_code"], df["fund_name"]))
 
-def store_portfolio(portfolio_id: int, trade_date: str, weights_raw: dict, weights_ewma: dict, cov_matrix: np.ndarray):
-    codes_smooth = list(weights_ewma.keys())
-    weights_smooth = list(weights_ewma.values())
+def store_portfolio(portfolio_id: int, trade_date: str, weights_raw: dict, weights_ewma: dict, cov_matrix: np.ndarray, codes: List[str]):
+    weights_smooth = [weights_ewma.get(c, 0.0) for c in codes]
 
-    weights_today = [weights_raw.get(c, 0.0) for c in codes_smooth]
+    weights_today = [weights_raw.get(c, 0.0) for c in codes]
 
     cov_matrix_packed, meta_json = pack_covariance(cov_matrix)
 
@@ -273,7 +272,7 @@ def store_portfolio(portfolio_id: int, trade_date: str, weights_raw: dict, weigh
         new_row = PortfolioWeights(
             portfolio_id=portfolio_id,
             date=pd.Timestamp(trade_date),
-            codes = json.dumps(codes_smooth),
+            codes = json.dumps(codes),
             weights = json.dumps(weights_today),
             weights_ewma = json.dumps(weights_smooth),
             cov_matrix=cov_matrix_packed,

@@ -129,11 +129,12 @@ def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str, wi
     weights, expected_return, expected_vol = optimize_mean_variance(mu_post_full, Sigma_full, 0.0006)
 
     return {
+        'codes': fund_codes,
         'weights': dict(zip(fund_codes, weights)),
         'expected_return': expected_return,
         'expected_volatility': expected_vol,
         'sharpe_ratio': expected_return / expected_vol,
-        'cov_matrix': Sigma_full
+        'cov_matrix': Sigma_full,
     }
 
 def optimize_portfolio_realtime():
@@ -513,6 +514,7 @@ def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict
     weights, expected_return, expected_vol = optimize_mean_variance(mu_post_full, Sigma_full, 0.0006)
 
     return {
+        'codes': fund_codes,
         'weights': dict(zip(fund_codes, weights)),
         'expected_return': expected_return,
         'expected_volatility': expected_vol,
@@ -546,6 +548,7 @@ def output_optimized_portfolio(portfolio_plan):
     }
 
     cov_matrix = portfolio_id['cov_matrix']
+    codes = portfolio_id['codes']
 
     store_portfolio(portfolio_id, pd.to_datetime("today").strftime("%Y-%m-%d"), w_today, w_smooth, cov_matrix)
     return w_smooth
@@ -660,6 +663,7 @@ def optimize_portfolio_history(start_date: str = None, end_date: str = None):
 
             w_today = optimize_result["weights"]
             cov_matrix = optimize_result["cov_matrix"]
+            codes = optimize_result["codes"]
             
             if prev_weights is None:
                 prev_weights = w_today
@@ -673,7 +677,7 @@ def optimize_portfolio_history(start_date: str = None, end_date: str = None):
 
             prev_weights = w_ewma.copy()
 
-            store_portfolio(portfolio_id, dt, w_today, w_ewma, cov_matrix)
+            store_portfolio(portfolio_id, dt, w_today, w_ewma, cov_matrix, codes)
 
         except Exception as e:
             logger.warning(f"⚠️ {dt} 调仓失败: {e}")

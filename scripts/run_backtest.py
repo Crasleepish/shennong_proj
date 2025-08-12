@@ -130,13 +130,17 @@ def run_backtest(start="2025-08-07", end="2025-08-08", window=20):
         print("📊 开始每日 optimize + ewma 平滑 + 入库")
         for dt in tqdm(all_dates):
             try:
-                w_today = optimize(
+                portfolio_plan = optimize(
                     asset_source_map=asset_source_map,
                     code_factors_map=code_factors_map,
                     trade_date=dt.strftime('%Y-%m-%d'),
                     window=window,
                     view_codes=view_codes
-                )["weights"]
+                )
+
+                w_today = portfolio_plan["weights"]
+                cov_matrix = portfolio_plan["cov_matrix"]
+                codes = portfolio_plan["codes"]
 
                 # 如果第一天，从数据库尝试读取前一日平滑值
                 if prev_weights is None:
@@ -157,7 +161,7 @@ def run_backtest(start="2025-08-07", end="2025-08-08", window=20):
                 weights_df.loc[dt] = pd.Series(w_ewma)
                 prev_weights = w_ewma.copy()
                 
-                store_portfolio(portfolio_id, dt, w_today, w_ewma, cov_matrix)
+                store_portfolio(portfolio_id, dt, w_today, w_ewma, cov_matrix, codes)
 
             except Exception as e:
                 logger.warning(f"⚠️ {dt.strftime('%Y-%m-%d')} 调仓失败: {e}")
