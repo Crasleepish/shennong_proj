@@ -10,3 +10,4 @@ ml_results
 /api_key.py
 fund_portfolio_bt_result
 log
+/shennong-opt/.env
