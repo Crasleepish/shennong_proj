@@ -533,7 +533,7 @@ def output_optimized_portfolio(portfolio_plan):
     today_date = trade_dates[-1]
 
     # 查询昨日权重
-    w_prev = query_weights_by_date(date=prev_date, portfolio_id=portfolio_id)
+    w_prev = query_weights_by_date(date=prev_date, portfolio_id=portfolio_id)["weights"]
 
     # 当前权重
     w_today = portfolio_plan["weights"]
@@ -547,10 +547,10 @@ def output_optimized_portfolio(portfolio_plan):
         for code in all_assets
     }
 
-    cov_matrix = portfolio_id['cov_matrix']
-    codes = portfolio_id['codes']
+    cov_matrix = portfolio_plan['cov_matrix']
+    codes = portfolio_plan['codes']
 
-    store_portfolio(portfolio_id, pd.to_datetime("today").strftime("%Y-%m-%d"), w_today, w_smooth, cov_matrix)
+    store_portfolio(portfolio_id, pd.to_datetime("today").strftime("%Y-%m-%d"), w_today, w_smooth, cov_matrix, codes)
     return w_smooth
 
 

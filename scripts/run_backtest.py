@@ -150,7 +150,7 @@ def run_backtest(start="2025-08-07", end="2025-08-08", window=20):
                     else:
                         raise ValueError("交易日不足，无法执行权重平滑")
                     
-                    prev_weights = query_weights_by_date(prev_trade_date)
+                    prev_weights = query_weights_by_date(prev_trade_date)["weights"]
 
                 all_codes = set(w_today.keys()).union(prev_weights.keys())
                 w_ewma = {
