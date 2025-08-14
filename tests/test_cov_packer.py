@@ -4,7 +4,14 @@ import numpy as np
 import pytest
 
 from app.utils.cov_packer import pack_covariance, unpack_covariance
+from app.service.portfolio_opt import compute_diverge
+from app import create_app
+from app.config import Config
 
+@pytest.fixture
+def app():
+    app = create_app(config_class=Config)
+    yield app
 
 def make_spd_matrix(n: int, seed: int = 7) -> np.ndarray:
     """
@@ -66,3 +73,44 @@ def test_nonsquare_raises():
     codes = ["A", "B", "C", "D", "E"]
     with pytest.raises(AssertionError):
         _ = pack_covariance(cov_rect, codes, sig=4)
+
+def test_compute_diverge(app):
+    portfolio_id = 1
+    trade_date = "2025-08-13"
+    current_w = {
+        "008114.OF": 0.07680478,
+        "006342.OF": 4e-8,
+        "110003.OF": 0.0,
+        "019702.OF": 0.0,
+        "011041.OF": 0.0,
+        "020466.OF": 0.00236983,
+        "019311.OF": 4e-8,
+        "270004.OF": 0.02067287,
+        "002236.OF": 0.00686659,
+        "006712.OF": 4e-8,
+        "018732.OF": 0.02849554,
+        "019918.OF": 0.108306,
+        "Au99.99.SGE": 0.29684363,
+        "020602.OF": 0.0537684,
+        "H11004.CSI": 0.40587236
+    }
+    target_w = {
+        "008114.OF": 0.05711707,
+        "006342.OF": 4e-8,
+        "110003.OF": 0.0,
+        "019702.OF": 0.0,
+        "011041.OF": 0.0,
+        "020466.OF": 0.00056829,
+        "019311.OF": 4e-8,
+        "270004.OF": 0.00916007,
+        "002236.OF": 0.00203395,
+        "006712.OF": 4e-8,
+        "018732.OF": 0.02208354,
+        "019918.OF": 0.07996696,
+        "Au99.99.SGE": 0.37924829,
+        "020602.OF": 0.03962734,
+        "H11004.CSI": 0.41019449
+    }
+    
+    diverge = compute_diverge(portfolio_id, trade_date, current_w, target_w)
+    print(diverge)

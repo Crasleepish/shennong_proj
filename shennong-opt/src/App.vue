@@ -11,11 +11,131 @@
         <el-button :disabled="syncing" type="primary" @click="onSync">{{ syncing ? '同步中...' : '开始同步' }}</el-button>
         <el-button type="default" @click="onSkipSync">跳过</el-button>
       </div>
+      <!-- 1.b 基本面数据同步：按季度 -->
+      <div class="mt-6 space-y-2 border-t pt-4">
+        <h3 class="font-semibold">基本面数据同步（按季度）</h3>
+
+        <div class="flex flex-wrap items-center gap-3">
+          <span>从</span>
+          <!-- 起始：年份输入 -->
+          <el-input-number
+            v-model="fundStartYear"
+            :min="1990" :max="2100" :step="1"
+            placeholder="年份"
+            controls-position="right"
+            style="width:120px"
+          />
+          <span>年</span>
+
+          <!-- 起始：季度选择 -->
+          <el-select v-model="fundStartQuarter" placeholder="季度" style="width:120px">
+            <el-option v-for="q in quarterOptions" :key="'s'+q.value" :label="q.label" :value="q.value" />
+          </el-select>
+          <span>季度</span>
+
+          <span class="ml-4">到</span>
+
+          <!-- 截止：年份输入 -->
+          <el-input-number
+            v-model="fundEndYear"
+            :min="1990" :max="2100" :step="1"
+            placeholder="年份"
+            controls-position="right"
+            style="width:120px"
+          />
+          <span>年</span>
+
+          <!-- 截止：季度选择 -->
+          <el-select v-model="fundEndQuarter" placeholder="季度" style="width:120px">
+            <el-option v-for="q in quarterOptions" :key="'e'+q.value" :label="q.label" :value="q.value" />
+          </el-select>
+          <span>季度</span>
+
+          <el-button
+            type="primary"
+            :disabled="fundSyncing"
+            @click="onSyncFundamental"
+          >
+            {{ fundSyncing ? '同步中...' : '同步' }}
+          </el-button>
+        </div>
+
+        <p class="text-xs text-gray-500">
+          规则：Q1→YYYY0331，Q2→YYYY0630，Q3→YYYY0930，Q4→YYYY1231；将作为 <code>start_period</code>/<code>end_period</code> 传给后端。
+        </p>
+      </div>
+
+      <div class="mt-6 space-y-2 border-t pt-4">
+        <h3 class="font-semibold">同步 Beta（按日期）</h3>
+
+        <div class="flex flex-wrap items-center gap-3">
+          <span>开始日期：</span>
+          <el-date-picker
+            v-model="betaStartDate"
+            type="date"
+            placeholder="选择开始日期"
+          />
+
+          <span>结束日期：</span>
+          <el-date-picker
+            v-model="betaEndDate"
+            type="date"
+            placeholder="选择结束日期"
+          />
+
+          <el-button
+            type="primary"
+            :disabled="betaSyncing"
+            @click="onSyncBeta"
+          >
+            {{ betaSyncing ? '同步中...' : '同步' }}
+          </el-button>
+        </div>
+
+        <p class="text-xs text-gray-500">
+          将把起止日期以 <code>YYYY-MM-DD</code> 传入 <code>start_date</code>/<code>end_date</code>；
+          <code>asset_type</code> 固定为 <code>fund_info</code>。
+        </p>
+      </div>
+
     </section>
 
     <!-- 2. 优化组合 -->
     <section v-if="syncFinished">
       <h2 class="text-xl font-bold">二、优化当日组合</h2>
+      <!-- 2.b 优化历史组合 -->
+      <div class="mt-6 space-y-2 border-t pt-4">
+        <h3 class="font-semibold">优化历史组合</h3>
+
+        <div class="flex flex-wrap items-center gap-3">
+          <span>开始日期：</span>
+          <el-date-picker
+            v-model="optHistStartDate"
+            type="date"
+            placeholder="可留空"
+          />
+
+          <span>截止至：</span>
+          <el-date-picker
+            v-model="optHistEndDate"
+            type="date"
+            placeholder="选择截止日期"
+          />
+
+          <el-button
+            type="primary"
+            :disabled="optHistRunning"
+            @click="onOptimizeHistory"
+          >
+            {{ optHistRunning ? '优化中...' : '开始优化' }}
+          </el-button>
+        </div>
+
+        <p class="text-xs text-gray-500">
+          将从最近一次已优化的结果开始，依次补齐至所选日期；请求体：<code>{ end_date: 'YYYY-MM-DD' }</code>。
+        </p>
+      </div>
+      <h3 class="font-semibold">优化今日组合</h3>
       <el-button :disabled="optimizing" type="primary" @click="onOptimize">{{ optimizing ? '优化中...' : '开始优化' }}</el-button>
       <el-button type="default" @click="onSkipOptimize">跳过</el-button>
     </section>
@@ -61,8 +181,8 @@
         </div>
       </div>
 
-      <div class="mt-2" :style="{ color: parseFloat(deviationRateDisplay) > 0.12 ? 'red' : 'black' }">
-        当前偏离度：{{ deviationRateDisplay }}<span v-if="parseFloat(deviationRateDisplay) > 0.12">，建议调仓</span>
+      <div class="mt-2" :style="{ color: parseFloat(deviationRateDisplay) > 0.002 ? 'red' : 'black' }">
+        当前偏离度：{{ deviationRateDisplay }}<span v-if="parseFloat(deviationRateDisplay) > 0.002">，建议调仓</span>
       </div>
 
       <!-- 校验提示 -->
@@ -114,25 +234,45 @@ const mergedHoldings = ref([])
 const rebalanceResult = ref([])
 const percentValid = ref(true)
 
-const deviationRateRaw = computed(() => {
-  const threshold = 3
-  let total = 0
-  let count = 0
-  for (const row of mergedHoldings.value) {
-    const target = parseFloat(row.target_percent || 0)
-    const current = parseFloat(row.current_percent || 0)
-    if (current >= threshold) {
-      const ratio = current > target ? Math.max(current - target, 0) / current : 0
-      if (isFinite(ratio)) {
-        total += ratio
-        count += 1
-      }
-    }
-  }
-  return count > 0 ? total / count : 0
-})
+// === 基本面同步（季度）状态 ===
+const fundSyncing = ref(false)
+const fundStartYear = ref()
+const fundStartQuarter = ref()
+const fundEndYear = ref()
+const fundEndQuarter = ref()
 
-const deviationRateDisplay = computed(() => deviationRateRaw.value.toFixed(2))
+const quarterOptions = [
+  { label: '一季度', value: 1 },
+  { label: '二季度', value: 2 },
+  { label: '三季度', value: 3 },
+  { label: '四季度', value: 4 },
+]
+
+const betaSyncing = ref(false)
+const betaStartDate = ref(null)
+const betaEndDate = ref(null)
+
+const optHistStartDate = ref(null)
+const optHistEndDate = ref(null)
+const optHistRunning = ref(false)
+
+// 将 (year, quarter) → 'YYYYMMDD'（季末日）
+function quarterEndDateStr(year, quarter) {
+  if (!year || !quarter) return null
+  const y = String(year).padStart(4, '0')
+  switch (Number(quarter)) {
+    case 1: return `${y}0331`
+    case 2: return `${y}0630`
+    case 3: return `${y}0930`
+    case 4: return `${y}1231`
+    default: return null
+  }
+}
+
+// 由后端返回的 TE（偏离度）
+const deviationRateRaw = ref(0)
+
+const deviationRateDisplay = computed(() => deviationRateRaw.value.toFixed(6))
 
 
 function formatDate(dateObj) {
@@ -242,6 +382,7 @@ function onCellChange(row, prop) {
   }
   validatePercent()
   mergedHoldings.value = [...mergedHoldings.value]
+  triggerComputeDeviationDebounced()
 }
 
 function updateCurrentPercent(row) {
@@ -297,6 +438,7 @@ async function onSync() {
         'Authorization': authHeader
       },
       body: JSON.stringify({
+        mode: "realtime",
         start_date: formatDate(syncStartDate.value).replace(/-/g, ''),
         end_date: formatDate(syncEndDate.value).replace(/-/g, '')
       })
@@ -314,6 +456,132 @@ async function onSync() {
 function onSkipSync() {
   syncFinished.value = true
   ElMessage.info('已跳过同步')
+}
+
+async function onSyncFundamental() {
+  // 基础校验
+  if (!fundStartYear.value || !fundStartQuarter.value || !fundEndYear.value || !fundEndQuarter.value) {
+    ElMessage.warning('请完整选择起始与截止的 年份 和 季度')
+    return
+  }
+
+  const start_period = quarterEndDateStr(fundStartYear.value, fundStartQuarter.value)
+  const end_period = quarterEndDateStr(fundEndYear.value, fundEndQuarter.value)
+
+  if (!start_period || !end_period) {
+    ElMessage.error('季度参数不合法，请重新选择')
+    return
+  }
+  if (Number(start_period) > Number(end_period)) {
+    ElMessage.warning('起始季度不能晚于截止季度')
+    return
+  }
+
+  fundSyncing.value = true
+  try {
+    const res = await fetch(`${baseUrl}/fin_data/fundamental/sync_one_period`, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        start_period,
+        end_period
+      })
+    })
+
+    if (!res.ok) {
+      const msg = await res.text().catch(() => '')
+      throw new Error(`HTTP ${res.status} ${msg}`)
+    }
+
+    ElMessage.success(`基本面数据同步成功（${start_period} ~ ${end_period}）`)
+  } catch (err) {
+    console.error('基本面数据同步失败', err)
+    ElMessage.error('基本面数据同步失败：请查看控制台日志')
+  } finally {
+    fundSyncing.value = false
+  }
+}
+
+async function onOptimizeHistory() {
+  if (!optHistEndDate.value) {
+    ElMessage.warning('请先选择截止日期')
+    return
+  }
+  const payload = {
+    end_date: formatDate(optHistEndDate.value)
+  }
+  if (optHistStartDate.value) {
+    payload.start_date = formatDate(optHistStartDate.value)
+  }
+
+  optHistRunning.value = true
+  try {
+    const res = await fetch(`${baseUrl}/service/portfolio_opt_hist`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': authHeader
+      },
+      body: JSON.stringify(payload)
+    })
+    if (!res.ok) {
+      const msg = await res.text().catch(() => '')
+      throw new Error(`HTTP ${res.status} ${msg}`)
+    }
+    ElMessage.success('历史组合优化完成')
+  } catch (err) {
+    console.error('历史组合优化失败', err)
+    ElMessage.error('历史组合优化失败：请查看控制台日志')
+  } finally {
+    optHistRunning.value = false
+  }
+}
+
+async function onSyncBeta() {
+  if (!betaStartDate.value || !betaEndDate.value) {
+    ElMessage.warning('请先选择开始和结束日期')
+    return
+  }
+
+  const start_date = formatDate(betaStartDate.value)  // 复用现有工具，输出 YYYY-MM-DD
+  const end_date = formatDate(betaEndDate.value)
+
+  // 简单时序校验
+  if (new Date(start_date) > new Date(end_date)) {
+    ElMessage.warning('开始日期不能晚于结束日期')
+    return
+  }
+
+  betaSyncing.value = true
+  try {
+    const res = await fetch(`${baseUrl}/fin_data/dynamic_beta`, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        asset_type: 'fund_info',
+        start_date,
+        end_date
+      })
+    })
+
+    if (!res.ok) {
+      const msg = await res.text().catch(() => '')
+      throw new Error(`HTTP ${res.status} ${msg}`)
+    }
+
+    ElMessage.success(`Beta 同步成功（${start_date} ~ ${end_date}）`)
+  } catch (err) {
+    console.error('同步 Beta 失败', err)
+    ElMessage.error('同步 Beta 失败：请查看控制台日志')
+  } finally {
+    betaSyncing.value = false
+  }
 }
 
 async function onOptimize() {
@@ -394,6 +662,7 @@ async function loadHoldingsAndTargets(weightsData) {
   }
 
   validatePercent()
+  triggerComputeDeviationDebounced(0)
 }
 
 async function onCalculateRebalance() {
@@ -523,6 +792,74 @@ function convertWeightsToPercent(weightsObj) {
   }
   return converted
 }
+
+function buildWeightMapsFromTable() {
+  const current_w = {}
+  const target_w = {}
+
+  for (const row of mergedHoldings.value) {
+    const asset = (row.asset || '').trim()
+    if (!asset) continue
+
+    const cp = parseFloat(row.current_percent || 0) // 百分数
+    const tp = parseFloat(row.target_percent || 0)  // 百分数
+
+    // 百分数 -> 权重（0~1），同名 asset 累加
+    const cw = isFinite(cp) ? cp / 100 : 0
+    const tw = isFinite(tp) ? tp / 100 : 0
+
+    current_w[asset] = (current_w[asset] || 0) + cw
+    target_w[asset]  = (target_w[asset]  || 0) + tw
+  }
+
+  return { current_w, target_w }
+}
+
+let _computeTimer = null
+function triggerComputeDeviationDebounced(delay = 500) {
+  clearTimeout(_computeTimer)
+  _computeTimer = setTimeout(computeDeviation, delay)
+}
+
+async function computeDeviation() {
+  // 需要有选定日期与至少一行有效数据
+  if (!selectedDate.value || !mergedHoldings.value?.length) return
+  const trade_date = formatDate(selectedDate.value) // YYYY-MM-DD
+  const { current_w, target_w } = buildWeightMapsFromTable()
+
+  try {
+    const res = await fetch(`${baseUrl}/service/compute_diverge`, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        portfolio_id: 1,
+        trade_date,
+        current_w,
+        target_w
+      })
+    })
+    // 容错：不同后端字段名
+    const data = await res.json()
+    const val = data?.data ?? data?.te ?? data?.value
+    if (typeof val === 'number' && isFinite(val)) {
+      deviationRateRaw.value = val
+    } else {
+      // 如果没有明确数值，保留原值并给出提示
+      console.warn('compute_diverge: 返回值未包含有效数值字段', data)
+    }
+  } catch (e) {
+    console.error('compute_diverge 调用失败', e)
+  }
+}
+
+watch(selectedDate, () => {
+  if (mergedHoldings.value?.length) {
+    triggerComputeDeviationDebounced(0)
+  }
+})
 
 </script>
 

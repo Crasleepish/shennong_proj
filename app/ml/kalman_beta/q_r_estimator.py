@@ -56,7 +56,7 @@ def _bootstrap_qr_from_history(fund_code: str, ref_date: str, window_size: int =
     """
     # 1) 找到 ref_date 之前的交易日列表（严格小于 ref_date）
     trade_dates = CalendarFetcher().get_trade_date(start="19900101", end=ref_date.replace("-", ""), format="%Y-%m-%d", limit=window_size, ascending=False)
-    trade_dates = [td for td in trade_dates if pd.to_datetime(td) <= pd.to_datetime(ref_date)]
+    trade_dates = [td for td in trade_dates if pd.to_datetime(td) < pd.to_datetime(ref_date)]
     if len(trade_dates) == 0:
         return QREstimator(window_size=window_size)
 
@@ -69,7 +69,6 @@ def _bootstrap_qr_from_history(fund_code: str, ref_date: str, window_size: int =
     factor_df = MarketFactorsDao._instance.select_dataframe_by_date(start_hist, end_hist).set_index("date")
     fund_df = get_fund_daily_return_for_beta_regression(fund_code, start_hist, end_hist)
 
-    # 注意：有可能 date 既是列又是索引，所以统一 reset_index 再 merge
     df_hist = factor_df.join(fund_df).sort_index()
     df_hist = df_hist.dropna(how="any")
     if df_hist.empty or len(df_hist) < window_size:

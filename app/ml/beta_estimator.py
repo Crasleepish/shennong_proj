@@ -10,6 +10,7 @@ from app.ml.kalman_beta import QREstimator
 from app.ml.kalman_beta.q_r_estimator import _bootstrap_qr_from_history
 import logging
 from datetime import timedelta
+from app.data_fetcher import CalendarFetcher
 
 FACTOR_NAMES = ["MKT", "SMB", "HML", "QMJ"]
 logger = logging.getLogger(__name__)
@@ -56,12 +57,19 @@ def run_historical_beta(code: str, asset_type: str, start_date: str, end_date: s
             code, idx_date.strftime("%Y-%m-%d"), beta_dict, P=kf.P
         )
 
-def run_realtime_update(fund_code: str, end_date: str = None, window_size: int = 60):
-    latest_df = FundBetaDao.select_latest_by_code(fund_code)
-    if latest_df.empty:
-        raise ValueError("未找到基金的历史状态记录，请先运行 run_historical_beta")
-
-    latest = latest_df.iloc[0]
+def run_realtime_update(fund_code: str, start_date: str = None, end_date: str = None, window_size: int = 60):
+    if start_date:
+        pre_date = CalendarFetcher().get_prev_trade_date(start_date.replace("-", ""))
+        latest_df = FundBetaDao.select_by_code_date(fund_code, pre_date)
+        if latest_df.empty:
+            raise ValueError("未找到基金的历史状态记录，确认start_date是合理的数据日期，并确认存在start_date之前的历史数据")
+        latest = latest_df.iloc[0]
+    else:
+        latest_df = FundBetaDao.select_latest_by_code(fund_code)
+        if latest_df.empty:
+            raise ValueError("未找到基金的历史状态记录，请先运行 run_historical_beta")
+        latest = latest_df.iloc[0]
+        
     z_prev = np.array([latest.MKT, latest.SMB, latest.HML, latest.QMJ, latest.const]).reshape(-1, 1)
     P_prev = (
         np.array(json.loads(latest.P_json))
@@ -104,10 +112,10 @@ def run_historical_beta_batch(fund_codes: list[str], asset_type: str, start_date
             logger.error(f"[历史回填] 基金 {code} 处理失败: {e}")
 
 
-def run_realtime_update_batch(fund_codes: list[str], end_date: str = None, window_size: int = 60):
+def run_realtime_update_batch(fund_codes: list[str], start_date: str = None, end_date: str = None, window_size: int = 60):
     for code in fund_codes:
         try:
             logger.info(f"[实时更新] 正在处理基金 {code}...")
-            run_realtime_update(code, end_date, window_size)
+            run_realtime_update(code, start_date, end_date, window_size)
         except Exception as e:
             logger.error(f"[实时更新] 基金 {code} 处理失败: {e}")

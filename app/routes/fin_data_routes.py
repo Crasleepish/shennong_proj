@@ -799,11 +799,13 @@ def update_dynamic_beta():
     """
     fund_codes: list[str] 基金代码列表
     asset_type: str 资产类型， fund_info/etf_info
-    end_date: str 结束日期 YYYY-MM-DD
+    start_date: str 开始日期 YYYY-MM-DD，若为空，则寻找上一次同步的日期后下一个交易日
+    end_date: str 结束日期 YYYY-MM-DD，若为空，则使用当前日期的最近一个交易日
     """
     data = request.get_json()
     fund_codes = data.get("fund_codes")
     asset_type = data.get("asset_type")
+    start_date = data.get("start_date", None)
     end_date = data.get("end_date")
 
     if not fund_codes:
@@ -822,7 +824,7 @@ def update_dynamic_beta():
         end_date = latest_trade_date[0]
 
     try:
-        run_realtime_update_batch(fund_codes, end_date=end_date)
+        run_realtime_update_batch(fund_codes, start_date=start_date, end_date=end_date)
         logging.info(f"[实时更新] 基金betas处理完成，处理{len(fund_codes)}个基金")
         return jsonify({
             "status": "success",
@@ -830,3 +832,4 @@ def update_dynamic_beta():
             })
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+    

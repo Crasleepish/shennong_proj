@@ -3,7 +3,7 @@ from app.database import get_db
 import json
 import pandas as pd
 import numpy as np
-from app.utils.cov_packer import pack_covariance
+from app.utils.cov_packer import pack_covariance, unpack_covariance
 import logging
 
 logger = logging.getLogger(__name__)
@@ -78,6 +78,32 @@ def query_latest_portfolio_by_id(portfolio_id: int, as_of_date: str = None) -> p
             "weights": _loads_or_none(row.codes, row.weights),
             "weights_ewma": _loads_or_none(row.codes, row.weights_ewma),
         })
+    
+def query_cov_matrix_by_date(date: str, portfolio_id: int = 1) -> np.ndarray:
+    """
+    :param date: 形如 '2024-07-20'
+    :param portfolio_id: 默认组合ID为 1
+    :return: codes, numpy.ndarray
+    """
+    query_date = pd.to_datetime(date).date()
+
+    with get_db() as db:
+        row = db.query(PortfolioWeights).filter_by(
+            portfolio_id=portfolio_id,
+            date=query_date
+        ).first()
+
+        if row is None or not row.codes or not row.weights_ewma:
+            return None
+
+        try:
+            codes = json.loads(row.codes)
+            cov_matrix = unpack_covariance(row.cov_matrix, row.cov_meta)
+        except Exception:
+            logger.error(f"fail to fetch cov matrix on {date}")
+            cov_matrix = None
+
+        return codes, cov_matrix
 
 from app.data.helper import get_fund_current_prices_by_code_list
 from app.data_fetcher.trade_calender_reader import TradeCalendarReader

@@ -22,7 +22,7 @@ from app.dao.betas_dao import FundBetaDao
 from app.service.portfolio_crud import query_latest_portfolio_by_id
 from app.data_fetcher import CalendarFetcher
 from app.ml.black_litterman_opt_util import load_fund_betas, compute_prior_mu_sigma, compute_prior_mu_fixed_window, build_bl_views, compute_bl_posterior, optimize_mean_variance
-from app.service.portfolio_crud import query_weights_by_date, store_portfolio
+from app.service.portfolio_crud import query_weights_by_date, store_portfolio, query_cov_matrix_by_date
 
 logger = logging.getLogger(__name__)
 
@@ -682,3 +682,28 @@ def optimize_portfolio_history(start_date: str = None, end_date: str = None):
         except Exception as e:
             logger.warning(f"⚠️ {dt} 调仓失败: {e}")
             continue
+
+def compute_diverge(portfolio_id: int, trade_date: str, current_w: dict, target_w: dict) -> float:
+    """
+    计算当前组合和目标组合之间的偏离度（跟踪误差）
+    TE = sqrt((w - w*)^T Σ (w - w*))
+
+    :param portfolio_id: 组合 ID
+    :param trade_date: 日期（格式 'YYYY-MM-DD'）
+    :param current_w: 当前组合权重 dict[asset] = weight
+    :param target_w: 目标组合权重 dict[asset] = weight
+    :return: 跟踪误差（Tracking Error）
+    """
+    codes, cov = query_cov_matrix_by_date(trade_date, portfolio_id)
+
+    # 将当前和目标权重映射到 codes 顺序的向量（没有的设为 0）
+    current_vec = np.array([current_w.get(code, 0.0) for code in codes])
+    target_vec = np.array([target_w.get(code, 0.0) for code in codes])
+
+    # 计算差异向量
+    diff = current_vec - target_vec
+
+    # TE = sqrt(diff.T * Σ * diff)
+    tracking_error = np.sqrt(diff.T @ cov @ diff)
+
+    return tracking_error

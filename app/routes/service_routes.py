@@ -192,3 +192,20 @@ def get_fund_prices():
     except Exception as e:
         logger.error(f"获取价格失败: {e}")
         return jsonify({"message": "error", "data": str(e)}), 500
+    
+
+from app.service.portfolio_opt import compute_diverge
+
+@service_bp.route("/compute_diverge", methods=["POST"])
+def update_dynamic_beta():
+    try:
+        data = request.get_json()
+        portfolio_id = data.get("portfolio_id")
+        trade_date = data.get("trade_date")
+        current_w = data.get("current_w")
+        target_w = data.get("target_w")
+        diverge = compute_diverge(portfolio_id, trade_date, current_w, target_w)
+        return jsonify({"message": "ok", "data": diverge})
+    except Exception as e:
+        logger.error(f"计算跟踪误差失败: {e}")
+        return jsonify({"message": "error", "data": str(e)}), 500
