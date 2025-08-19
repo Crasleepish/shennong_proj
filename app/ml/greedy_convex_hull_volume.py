@@ -28,6 +28,9 @@ from math import pi
 from math import gamma as gamma_func
 from scipy.optimize import linprog
 
+# --------- numeric guard for 1/h -----------
+H_MIN = 1e-12  # unify small floor for h to avoid overflow in 1/h
+
 
 # ------------------------------- Utilities -------------------------------
 
@@ -58,17 +61,17 @@ def dual_lp_support_theta(A: np.ndarray, theta: np.ndarray) -> Tuple[float, Opti
         ok : True if LP solved (bounded optimum); False if unbounded/infeasible.
     """
     d = A.shape[1]
-    c = -theta.astype(float)              # maximize θ^T y == minimize -θ^T y
-    A_ub = A.astype(float)                # Ay <= 1
+    c = -theta.astype(float)           # maximize θ^T y == minimize -θ^T y
+    A_ub = A.astype(float)             # Ay <= 1
     b_ub = np.ones(A.shape[0], dtype=float)
     res = linprog(c=c, A_ub=A_ub, b_ub=b_ub, bounds=[(None, None)] * d, method="highs")
     if res.status == 0:
         y_opt = res.x
         h = float(theta @ y_opt)
         return h, y_opt, True
-    elif res.status == 3:                 # unbounded
+    elif res.status == 3:              # unbounded
         return np.inf, None, False
-    else:                                  # infeasible/other => treat as unbounded for our purpose
+    else:                              # infeasible/other => treat as unbounded for our purpose
         return np.inf, None, False
 
 
@@ -127,7 +130,7 @@ class RadialVolumeAccumulator:
         self.dim = int(dim)
         self.rho = np.asarray(rho, dtype=float)
         self.M = self.rho.size
-        self.rho_pow = self.rho ** self.dim
+        self.rho_pow = self.rho ** self.dim           # rho^d
         self.mean_rho_pow = float(self.rho_pow.mean())
         self.area_over_d = sphere_area(self.dim) / self.dim
 
@@ -204,7 +207,7 @@ def select_representatives(
             continue
         h, y_opt, ok = dual_lp_support_theta(A, thetas[m])
         if ok:
-            rho[m] = 1.0 / max(h, 1e-300)
+            rho[m] = 1.0 / max(h, H_MIN)
             Y[m] = y_opt
             bounded[m] = True
         else:
@@ -224,43 +227,55 @@ def select_representatives(
         if cand_idx.size == 0:
             break
 
-        # -------- 粗筛：score = Σ ρ^(d+1) * (u^T y*(θ) - 1)_+ --------
-        U = X[cand_idx]                       # (C, d)
-        dots = U @ Y.T                        # (C, M)
+        # -------- 粗筛：综合打分 = 有界一阶近似 + 无界对齐度 --------
+        U = X[cand_idx]                                # (C, d)
+        dots = U @ Y.T                                 # (C, M)
         viol = np.maximum(dots - (1.0 + violation_tol), 0.0)   # (C, M)
 
-        rho_pow_d1 = acc.rho_pow * acc.rho   # ρ^(d+1), shape (M,)
+        # 有界部分：Σ ρ^(d+1) * (u^T y*(θ) - 1)_+
+        rho_pow_d1 = acc.rho_pow * acc.rho             # (M,)
         if clip_rhopow is not None:
             rho_pow_d1 = np.minimum(rho_pow_d1, float(clip_rhopow))
         if clip_viol is not None:
             viol = np.minimum(viol, float(clip_viol))
+        score_bounded = (viol * rho_pow_d1[None, :]).sum(axis=1)   # (C,)
 
-        scores = (viol * rho_pow_d1[None, :]).sum(axis=1)      # (C,)
-        scores = np.nan_to_num(scores, nan=0.0,
-                                posinf=np.finfo(float).max/4,
-                                neginf=0.0)
-
-        # 若分数全 0，但仍存在无界方向，则用“与无界方向正向对齐度”做二级排序，避免误停
-        order = None
-        if np.all(scores <= 0.0) and (~bounded).any():
-            ub_idx = np.where(~bounded)[0]                         # 无界方向
-            # 与这些方向的正向对齐度：max(⟨u, θ⟩, 0) 求和
-            align = np.maximum(U @ thetas[ub_idx].T, 0.0).sum(axis=1)  # (C,)
-            order = np.argsort(-align)
+        # 无界部分：对齐余弦（无量纲）× λ，λ ~ median(ρ^d)
+        ub_mask = ~bounded                                           # (M,)
+        if np.any(ub_mask):
+            U_norm = np.linalg.norm(U, axis=1, keepdims=True) + 1e-12
+            cos_align = np.maximum((U @ thetas[ub_mask].T) / U_norm, 0.0)  # (C, #unbounded)
+            score_unbd_raw = cos_align.sum(axis=1)                          # (C,)
+            lam = float(np.median(acc.rho_pow[acc.rho_pow > 0])) if np.any(acc.rho_pow > 0) else 1.0
+            score = score_bounded + lam * score_unbd_raw
         else:
-            order = np.argsort(-scores)
+            score_unbd_raw = np.zeros(U.shape[0], dtype=float)
+            score = score_bounded
 
+        score = np.nan_to_num(score, nan=0.0,
+                              posinf=np.finfo(float).max/4, neginf=0.0)
+
+        # 主序：按综合分数排序；并为“封无界潜力强”的候选预留名额
+        order_main = np.argsort(-score)
+        reserve_unbounded = 0 if not np.any(ub_mask) else max(5, (topk_per_iter or 64)//4)
+        order_unbd = np.argsort(-score_unbd_raw)[:reserve_unbounded]
+
+        # 合并 + 稳定去重（保留第一次出现的顺序）
+        order_list = np.concatenate([order_unbd, order_main]).tolist()
+        seen = set()
+        order = np.array([i for i in order_list if (i not in seen and not seen.add(i))], dtype=int)
+
+        # 截断到 topK
         if topk_per_iter is not None:
             order = order[: min(topk_per_iter, order.size)]
 
         cand_idx_ordered = cand_idx[order]
-        scores_top = scores[order]
 
-        # 注意：只有在“没有候选”且“也不存在无界方向”时才可安全早停
-        if cand_idx_ordered.size == 0 and not (~bounded).any():
+        # 若没有候选且也不存在无界方向，才可早停
+        if cand_idx_ordered.size == 0 and not np.any(ub_mask):
             break
 
-        # -------- 精算前K：只在“违约方向 + 当前无界且可能受新约束影响的方向”上重解 LP --------
+        # -------- 精算前K：在“违约方向 + 与 u 对齐的无界方向”上重解 LP --------
         best_delta = -np.inf
         best_i = None
         best_idx_m = None
@@ -270,19 +285,17 @@ def select_representatives(
 
         for idx_i in cand_idx_ordered:
             u = X[idx_i]
-            # 1) 违约方向
+            # 1) 有界：违约方向
             dots_u = u @ Y.T
             mask_vio = dots_u > (1.0 + violation_tol)
-
-            # 2) 当前无界方向里，挑“与 u 有正向对齐”的子集尝试（启发式降开销）
-            if (~bounded).any():
-                ub_idx = np.where(~bounded)[0]
+            # 2) 无界：与 u 正向对齐的子集（可能被 u 封住）
+            if np.any(ub_mask):
+                ub_idx = np.where(ub_mask)[0]
                 align_mask = (thetas[ub_idx] @ u) > 1e-12
                 if np.any(align_mask):
-                    add_idx = ub_idx[align_mask]
-                    mask_add = np.zeros(M, dtype=bool)
-                    mask_add[add_idx] = True
-                    mask_vio = np.logical_or(mask_vio, mask_add)
+                    mask_extra = np.zeros(M, dtype=bool)
+                    mask_extra[ub_idx[align_mask]] = True
+                    mask_vio = np.logical_or(mask_vio, mask_extra)
 
             if not np.any(mask_vio):
                 continue
@@ -296,12 +309,12 @@ def select_representatives(
             for j, m in enumerate(idx_m):
                 h2, y2, ok2 = dual_lp_support_theta(A_aug, thetas[m])
                 if ok2:                                 # 变为有界或仍有界
-                    new_rho_m[j] = 1.0 / max(h2, 1e-300)
+                    new_rho_m[j] = 1.0 / max(h2, H_MIN)
                     new_Y_m[j] = y2
                     new_bounded_flags[j] = True
                 else:                                   # 仍无界
                     new_rho_m[j] = 0.0
-                    new_Y_m[j] = Y[m]                  # 占位（不影响）
+                    new_Y_m[j] = Y[m]  # placeholder
                     new_bounded_flags[j] = False
 
             delta = acc.delta_from_update(idx_m, new_rho_m)
@@ -315,7 +328,6 @@ def select_representatives(
                 best_new_bounded_flags = new_bounded_flags
 
         if best_i is None or best_delta <= 0.0:
-            # 若连无界方向也无法带来正增量，则（几乎总是）可以退出
             break
 
         # 相对增益阈值
@@ -329,7 +341,7 @@ def select_representatives(
         S = np.vstack([S, X[best_i]])
         A = S.copy()
 
-        # 同步方向：rho/rho^d via accumulator；Y；bounded 标志
+        # 同步方向
         acc.apply_update(best_idx_m, best_new_rho_m)
         Y[best_idx_m] = best_new_Y_m
         bounded[best_idx_m] = best_new_bounded_flags
