@@ -18,7 +18,6 @@ Notes:
     - Dual LP per direction: maximize θ^T y s.t. A y <= 1, where A = X_S (rows are selected vectors).
     - For a candidate u, only directions violating u^T y*(θ) <= 1 need re-solving.
 
-Author: (you)
 """
 
 from __future__ import annotations
@@ -27,6 +26,7 @@ import numpy as np
 from math import pi
 from math import gamma as gamma_func
 from scipy.optimize import linprog
+import logging
 
 # --------- numeric guard for 1/h -----------
 H_MIN = 1e-12  # unify small floor for h to avoid overflow in 1/h
@@ -53,7 +53,7 @@ def sample_sphere_uniform(dim: int, M: int, rng: np.random.Generator) -> np.ndar
 
 def dual_lp_support_theta(A: np.ndarray, theta: np.ndarray) -> Tuple[float, Optional[np.ndarray], bool]:
     """
-    Solve h_{K°}(theta) = max_y theta^T y s.t. A y <= 1.
+    Solve h_{K°}(theta) = max_y θ^T y s.t. A y <= 1.
     A: (m, d) matrix, each row is a constraint vector x_i^T.
     Returns:
         h  : optimal value in [0, +inf] (np.inf if unbounded),
@@ -156,7 +156,28 @@ class RadialVolumeAccumulator:
         self.rho[idx] = np.asarray(new_rho_vals, float)
         self.rho_pow[idx] = new_pow
         self.mean_rho_pow += sum_diff / self.M
-        # 体积 = self.volume()  按需读取
+
+
+# ------------------------- Logger helper -------------------------
+
+def _get_logger(logger: Optional[logging.Logger], debug: bool) -> logging.Logger:
+    if logger is not None:
+        return logger
+    log = logging.getLogger("greedy_convex")
+    if debug:
+        if not log.handlers:
+            h = logging.StreamHandler()
+            fmt = logging.Formatter("[%(levelname)s] %(message)s")
+            h.setFormatter(fmt)
+            log.addHandler(h)
+        log.setLevel(logging.DEBUG)
+    else:
+        # keep silent unless parent config says otherwise
+        log.addHandler(logging.NullHandler())
+    return log
+
+
+# ------------------------- Main greedy selection -------------------------
 
 def select_representatives(
     X: np.ndarray,
@@ -169,10 +190,16 @@ def select_representatives(
     max_iters: Optional[int] = None,
     clip_rhopow: Optional[float] = None,
     clip_viol: Optional[float] = None,
+    debug: bool = False,
+    logger: Optional[logging.Logger] = None,
+    log_topk: int = 5,
 ) -> np.ndarray:
     """
     Greedy selection under Scenario A (conv({0} ∪ S)) with radial accumulator.
+    Set debug=True (or pass a logger) to print per-iteration diagnostics.
     """
+    log = _get_logger(logger, debug)
+
     assert X.ndim == 2 and X.shape[0] >= 1
     N, d = X.shape
     rng = np.random.default_rng(rng_seed)
@@ -195,7 +222,7 @@ def select_representatives(
     used_mask = np.zeros(X.shape[0], dtype=bool)
     used_mask[S_idx] = True
 
-    # 初始 rho 与 Y(θ)（极化 LP），并记录哪些方向当前有界
+    # 初始 rho 与 Y(θ)，并记录哪些方向当前有界
     rho = np.zeros(M, dtype=float)
     Y = np.zeros((M, d), dtype=float)
     bounded = np.zeros(M, dtype=bool)  # True: h<∞（ok）；False: 无界（rho=0）
@@ -217,14 +244,19 @@ def select_representatives(
     acc = RadialVolumeAccumulator(d, rho)
     vol = acc.volume()
 
+    log.debug(f"Init: N={X.shape[0]} d={d} M={M} rank_init=|S|={len(S_idx)} "
+              f"bounded={bounded.sum()} unbounded={(~bounded).sum()} vol≈{vol:.6g}")
+
     iter_count = 0
     while True:
         iter_count += 1
         if max_iters is not None and iter_count > max_iters:
+            log.debug("Stop: reached max_iters")
             break
 
         cand_idx = np.where(~used_mask)[0]
         if cand_idx.size == 0:
+            log.debug("Stop: no remaining candidates")
             break
 
         # -------- 粗筛：综合打分 = 有界一阶近似 + 无界对齐度 --------
@@ -243,7 +275,7 @@ def select_representatives(
         # 无界部分：对齐余弦（无量纲）× λ，λ ~ median(ρ^d)
         ub_mask = ~bounded                                           # (M,)
         if np.any(ub_mask):
-            U_norm = np.linalg.norm(U, axis=1, keepdims=True) + 1e-12
+            U_norm = np.linalg.norm(U, axis=1, keepdims=True) + H_MIN
             cos_align = np.maximum((U @ thetas[ub_mask].T) / U_norm, 0.0)  # (C, #unbounded)
             score_unbd_raw = cos_align.sum(axis=1)                          # (C,)
             lam = float(np.median(acc.rho_pow[acc.rho_pow > 0])) if np.any(acc.rho_pow > 0) else 1.0
@@ -272,7 +304,22 @@ def select_representatives(
         cand_idx_ordered = cand_idx[order]
 
         # 若没有候选且也不存在无界方向，才可早停
+        if debug:
+            kshow = min(log_topk, cand_idx_ordered.size)
+            log.debug(f"[Iter {iter_count}] candidates={cand_idx.size} "
+                      f"bounded={bounded.sum()} unbounded={(~bounded).sum()} "
+                      f"vol≈{vol:.6g}")
+            if kshow > 0:
+                top_ids = cand_idx_ordered[:kshow]
+                sb = score_bounded[order][:kshow]
+                su = (score - score_bounded)[order][:kshow]
+                st = score[order][:kshow]
+                log.debug("  TopK (idx_in_X, score_bounded, score_unbounded, total): " +
+                          ", ".join([f"({int(i)}, {b:.3g}, {u:.3g}, {t:.3g})"
+                                     for i, b, u, t in zip(top_ids, sb, su, st)]))
+
         if cand_idx_ordered.size == 0 and not np.any(ub_mask):
+            log.debug("Stop: no candidate passes coarse screen and no unbounded directions")
             break
 
         # -------- 精算前K：在“违约方向 + 与 u 对齐的无界方向”上重解 LP --------
@@ -283,12 +330,13 @@ def select_representatives(
         best_new_Y_m = None
         best_new_bounded_flags = None
 
+        total_lp = 0
         for idx_i in cand_idx_ordered:
             u = X[idx_i]
             # 1) 有界：违约方向
             dots_u = u @ Y.T
             mask_vio = dots_u > (1.0 + violation_tol)
-            # 2) 无界：与 u 正向对齐的子集（可能被 u 封住）
+            # 2) 无界：与 u 正向对齐的子集
             if np.any(ub_mask):
                 ub_idx = np.where(ub_mask)[0]
                 align_mask = (thetas[ub_idx] @ u) > 1e-12
@@ -306,18 +354,28 @@ def select_representatives(
             new_Y_m = np.empty((idx_m.size, d), dtype=float)
             new_bounded_flags = np.zeros(idx_m.size, dtype=bool)
 
+            # 记录分解：有界/无界切到的数量
+            if debug:
+                nb_v = int((mask_vio & bounded).sum())
+                nu_v = int((mask_vio & (~bounded)).sum())
+
             for j, m in enumerate(idx_m):
                 h2, y2, ok2 = dual_lp_support_theta(A_aug, thetas[m])
-                if ok2:                                 # 变为有界或仍有界
+                if ok2:
                     new_rho_m[j] = 1.0 / max(h2, H_MIN)
                     new_Y_m[j] = y2
                     new_bounded_flags[j] = True
-                else:                                   # 仍无界
+                else:
                     new_rho_m[j] = 0.0
                     new_Y_m[j] = Y[m]  # placeholder
                     new_bounded_flags[j] = False
+            total_lp += idx_m.size
 
             delta = acc.delta_from_update(idx_m, new_rho_m)
+
+            if debug:
+                log.debug(f"    cand={int(idx_i)}  LPs={idx_m.size} "
+                          f"(bounded_cut={nb_v}, unbounded_try={nu_v})  Δ≈{delta:.6g}")
 
             if delta > best_delta:
                 best_delta = float(delta)
@@ -328,11 +386,15 @@ def select_representatives(
                 best_new_bounded_flags = new_bounded_flags
 
         if best_i is None or best_delta <= 0.0:
+            log.debug("Stop: no candidate yields positive Δ in fine evaluation")
             break
 
-        # 相对增益阈值
-        rel_gain = best_delta / max(vol, 1e-300)
+        rel_gain = best_delta / max(vol, H_MIN)
+        log.debug(f"[Iter {iter_count}] pick idx={best_i}  Δ≈{best_delta:.6g} "
+                  f"rel_gain≈{rel_gain:.3%}  LP_solved={total_lp}")
+
         if rel_gain < epsilon:
+            log.debug(f"Stop: relative gain {rel_gain:.3%} < epsilon {epsilon:.3%}")
             break
 
         # -------- 接受最佳候选：提交更新 --------
@@ -340,11 +402,39 @@ def select_representatives(
         S_idx.append(best_i)
         S = np.vstack([S, X[best_i]])
         A = S.copy()
-
         # 同步方向
         acc.apply_update(best_idx_m, best_new_rho_m)
         Y[best_idx_m] = best_new_Y_m
         bounded[best_idx_m] = best_new_bounded_flags
         vol = acc.volume()
 
+        # 全量刷新仍标记为无界的方向
+        ub_rest = np.where(~bounded)[0]
+        if ub_rest.size:
+            new_rho_rest = np.empty(ub_rest.size, dtype=float)
+            new_Y_rest   = np.empty((ub_rest.size, d), dtype=float)
+            new_bounded_rest = np.zeros(ub_rest.size, dtype=bool)
+            for j, m in enumerate(ub_rest):
+                h3, y3, ok3 = dual_lp_support_theta(A, thetas[m])
+                if ok3:
+                    new_rho_rest[j] = 1.0 / max(h3, H_MIN)
+                    new_Y_rest[j]   = y3
+                    new_bounded_rest[j] = True
+                else:
+                    new_rho_rest[j] = 0.0
+                    new_Y_rest[j]   = Y[m]  # keep placeholder
+                    new_bounded_rest[j] = False
+
+            # 用累加器一次性提交这批更新（可能把 rho 从 0 提到正值）
+            acc.apply_update(ub_rest, new_rho_rest)
+            Y[ub_rest]       = new_Y_rest
+            bounded[ub_rest] = new_bounded_rest
+            vol = acc.volume()
+            if debug:
+                n_fixed = int(new_bounded_rest.sum())
+                _msg = f"    refreshed unbounded={ub_rest.size}, now fixed={n_fixed}, bounded={bounded.sum()}"
+                log.debug(_msg)
+        log.debug(f"    |S|={len(S_idx)}  new_vol≈{vol:.6g}")
+
+    log.debug(f"Done. selected |S|={len(S_idx)}")
     return S
