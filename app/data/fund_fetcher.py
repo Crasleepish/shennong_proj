@@ -303,7 +303,7 @@ class FundHistSynchronizer:
             logger.info("Found %d funds to sync", self.fund_list_size)
 
             # 批量处理，每次最多 100 个基金代码
-            batch_size = 100
+            batch_size = 500
             for i in range(0, len(fund_list), batch_size):
                 fund_batch = fund_list[i:i + batch_size]
                 fund_codes = [f.fund_code for f in fund_batch]
@@ -326,13 +326,9 @@ class FundHistSynchronizer:
                     df = df.drop_duplicates(subset=['ts_code', 'nav_date'], keep='last')
                     df.set_index(['ts_code'], inplace=True)
 
-                    # 2. 查询每只基金的上一交易日 net_value
-                    prev_date_str = calender_fetcher.get_prev_trade_date(trade_date)
-                    if prev_date_str:
-                        prev_date = datetime.datetime.strptime(prev_date_str, "%Y%m%d").date()
-                    else:
-                        prev_date = None
-                    prev_nav_df = self.fund_hist_dao.select_dataframe_by_code_and_date(
+                    # 2. 查询trade_date之前最新的 net_value
+                    prev_date = (pd.to_datetime(trade_date) - pd.Timedelta(days=1)).date()
+                    prev_nav_df = self.fund_hist_dao.get_latest_fund_hist_by_code_and_date(
                         fund_codes, prev_date
                     )
                     prev_nav_map = prev_nav_df.set_index("fund_code")["net_value"].to_dict()

@@ -163,17 +163,9 @@ class RadialVolumeAccumulator:
 def _get_logger(logger: Optional[logging.Logger], debug: bool) -> logging.Logger:
     if logger is not None:
         return logger
-    log = logging.getLogger("greedy_convex")
-    if debug:
-        if not log.handlers:
-            h = logging.StreamHandler()
-            fmt = logging.Formatter("[%(levelname)s] %(message)s")
-            h.setFormatter(fmt)
-            log.addHandler(h)
-        log.setLevel(logging.DEBUG)
-    else:
-        # keep silent unless parent config says otherwise
-        log.addHandler(logging.NullHandler())
+    log = logging.getLogger(__name__)
+    log.propagate = True
+    log.setLevel(logging.DEBUG if debug else logging.NOTSET)
     return log
 
 
@@ -197,6 +189,11 @@ def select_representatives(
     """
     Greedy selection under Scenario A (conv({0} ∪ S)) with radial accumulator.
     Set debug=True (or pass a logger) to print per-iteration diagnostics.
+    
+    Returns
+    -------
+    idx : np.ndarray, shape (k,), dtype=int
+        被选中的向量在**输入 X（原始，未去零）**中的行索引（按加入顺序）。
     """
     log = _get_logger(logger, debug)
 
@@ -204,9 +201,10 @@ def select_representatives(
     N, d = X.shape
     rng = np.random.default_rng(rng_seed)
 
-    # 去零向量
+    # --- 去零向量，并建立 “过滤后索引 -> 原始索引” 的映射 ---
     norms = np.linalg.norm(X, axis=1)
     keep = norms > 0.0
+    orig_idx_map = np.arange(N)[keep]         # 过滤后第 i 行对应的原始行号
     X = X[keep]
     if X.shape[0] == 0:
         return np.zeros((0, d), dtype=float)
@@ -215,8 +213,8 @@ def select_representatives(
     thetas = sample_sphere_uniform(d, M, rng)  # (M, d)
 
     # 初始化 S（补满秩）
-    init_idxs = pivoted_qr_init_indices(X, d)
-    S_idx: List[int] = list(init_idxs)
+    init_idxs = pivoted_qr_init_indices(X, d)  # 这些是 “过滤后 X” 的行号
+    S_idx: List[int] = list(init_idxs)         # 维护为过滤后索引
     S = X[S_idx]
     A = S.copy()
     used_mask = np.zeros(X.shape[0], dtype=bool)
@@ -339,7 +337,8 @@ def select_representatives(
             # 2) 无界：与 u 正向对齐的子集
             if np.any(ub_mask):
                 ub_idx = np.where(ub_mask)[0]
-                align_mask = (thetas[ub_idx] @ u) > 1e-12
+                u_norm = np.linalg.norm(u) + 1e-12
+                align_mask = (thetas[ub_idx] @ u) / u_norm > 0.1
                 if np.any(align_mask):
                     mask_extra = np.zeros(M, dtype=bool)
                     mask_extra[ub_idx[align_mask]] = True
@@ -437,4 +436,7 @@ def select_representatives(
         log.debug(f"    |S|={len(S_idx)}  new_vol≈{vol:.6g}")
 
     log.debug(f"Done. selected |S|={len(S_idx)}")
-    return S
+
+    # —— 把过滤后索引映射回“原始 X 的行号”，按加入顺序返回 ——
+    selected_idx = orig_idx_map[np.array(S_idx, dtype=int)]
+    return selected_idx

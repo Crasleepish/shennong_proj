@@ -1,6 +1,8 @@
 from typing import List, Union
-from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import or_, tuple_
+from sqlalchemy.orm import Session, joinedload, aliased
+from sqlalchemy import or_, tuple_, select, func, desc, and_, literal_column
+from sqlalchemy.sql import literal
+from sqlalchemy.dialects.postgresql import insert
 from app.models.fund_models import FundInfo, FundHist
 from app.database import get_db
 from app.utils.data_utils import process_in_batches
@@ -195,6 +197,50 @@ class FundHistDao:
         except Exception as e:
             logger.error("Error querying fund_hist for previous date: %s", e)
             return pd.DataFrame()
+
+    def get_latest_fund_hist_by_code_and_date(
+        self, fund_codes: List[str], date: datetime.date
+    ) -> pd.DataFrame:
+        
+        with get_db() as db:
+            # 表定义（ORM 或 Table）
+            fi = aliased(FundInfo)
+            fh = aliased(FundHist)
+
+            # 子查询：每只基金最近的一条历史记录（按 date 降序）
+            latest_hist_subq = (
+                select(
+                    fh.fund_code.label("fund_code"),
+                    fh.date.label("date"),
+                    fh.value.label("value"),
+                    fh.net_value.label("net_value"),
+                    fh.change_percent.label("change_percent")
+                )
+                .where(
+                    fh.fund_code == fi.fund_code,
+                    fh.date <= date
+                )
+                .order_by(desc(fh.date))
+                .limit(1)
+                .lateral()
+            )
+
+            # 主查询
+            stmt = (
+                select(
+                    fi.fund_code.label("fund_code"),
+                    literal_column("fc.date").label("date"),
+                    literal_column("fc.value").label("value"),
+                    literal_column("fc.net_value").label("net_value"),
+                    literal_column("fc.change_percent").label("change_percent"),
+                )
+                .select_from(fi)
+                .join(latest_hist_subq.alias("fc"), literal_column("true"), isouter=True)
+                .where(fi.fund_code.in_(fund_codes))
+            )
+            df = pd.read_sql(stmt, db.bind)
+        return df
+
         
 
 

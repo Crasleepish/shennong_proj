@@ -541,13 +541,14 @@ async function onOptimizeHistory() {
 }
 
 async function onSyncBeta() {
-  if (!betaStartDate.value || !betaEndDate.value) {
-    ElMessage.warning('请先选择开始和结束日期')
-    return
+  let start_date = null
+  let end_date = null
+  if (betaStartDate.value) {
+    start_date = formatDate(betaStartDate.value)  // 复用现有工具，输出 YYYY-MM-DD
   }
-
-  const start_date = formatDate(betaStartDate.value)  // 复用现有工具，输出 YYYY-MM-DD
-  const end_date = formatDate(betaEndDate.value)
+  if (betaEndDate.value) {
+    end_date = formatDate(betaEndDate.value)
+  }
 
   // 简单时序校验
   if (new Date(start_date) > new Date(end_date)) {

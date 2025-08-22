@@ -52,7 +52,8 @@ class FundBetaDao:
     def get_latest_fund_betas(
         fund_type_list=None,
         invest_type_list=None,
-        found_date_limit: str = None
+        found_date_limit: str = None,
+        as_of_date: str = None,
     ) -> pd.DataFrame:
         with get_db() as db:
             fi = aliased(FundInfo)
@@ -62,6 +63,9 @@ class FundBetaDao:
                 select(
                     fb.code,
                     func.max(fb.date).label("max_date")
+                )
+                .where(
+                    fb.date <= pd.to_datetime(as_of_date) if as_of_date is not None else True
                 )
                 .group_by(fb.code)
                 .subquery()

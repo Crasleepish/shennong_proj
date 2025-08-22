@@ -15,6 +15,9 @@ from app.data_fetcher import CalendarFetcher
 FACTOR_NAMES = ["MKT", "SMB", "HML", "QMJ"]
 logger = logging.getLogger(__name__)
 
+def safe_value(val):
+    return None if pd.isna(val) else val
+
 
 def run_historical_beta(code: str, asset_type: str, start_date: str, end_date: str, window_size: int = 60):
     factor_df = MarketFactorsDao._instance.select_dataframe_by_date(start_date, end_date).set_index("date")
@@ -99,6 +102,7 @@ def run_realtime_update(fund_code: str, start_date: str = None, end_date: str = 
         z = kf.step(H=x.reshape(-1, 1), y=y, Q=Q, R=R)
 
         beta_dict = dict(zip(FACTOR_NAMES + ["const"], z.flatten().tolist()))
+        beta_dict = {k: safe_value(v) for k, v in beta_dict.items()}
         FundBetaDao.upsert_one(
             fund_code, row.name.strftime("%Y-%m-%d"), beta_dict, P=kf.P
         )
