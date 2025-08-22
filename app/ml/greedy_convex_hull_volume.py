@@ -185,6 +185,7 @@ def select_representatives(
     debug: bool = False,
     logger: Optional[logging.Logger] = None,
     log_topk: int = 5,
+    diversity_beta: float = 1.5
 ) -> np.ndarray:
     """
     Greedy selection under Scenario A (conv({0} ∪ S)) with radial accumulator.
@@ -278,6 +279,14 @@ def select_representatives(
             score_unbd_raw = cos_align.sum(axis=1)                          # (C,)
             lam = float(np.median(acc.rho_pow[acc.rho_pow > 0])) if np.any(acc.rho_pow > 0) else 1.0
             score = score_bounded + lam * score_unbd_raw
+            # ----- 多样性权重：惩罚与 S 同向的重合 -----
+            U_unit = U / U_norm
+            S_unit = S / (np.linalg.norm(S, axis=1, keepdims=True) + H_MIN)
+            cos_US = U_unit @ S_unit.T
+            cos_US_pos = np.clip(cos_US, 0.0, 1.0)  # 只惩罚同向
+            maxcos = cos_US_pos.max(axis=1) if cos_US_pos.size else 0.0
+            w_div = (1.0 - maxcos)**diversity_beta + H_MIN
+            score *= w_div
         else:
             score_unbd_raw = np.zeros(U.shape[0], dtype=float)
             score = score_bounded
@@ -310,11 +319,10 @@ def select_representatives(
             if kshow > 0:
                 top_ids = cand_idx_ordered[:kshow]
                 sb = score_bounded[order][:kshow]
-                su = (score - score_bounded)[order][:kshow]
                 st = score[order][:kshow]
-                log.debug("  TopK (idx_in_X, score_bounded, score_unbounded, total): " +
-                          ", ".join([f"({int(i)}, {b:.3g}, {u:.3g}, {t:.3g})"
-                                     for i, b, u, t in zip(top_ids, sb, su, st)]))
+                log.debug("  TopK (idx_in_X, score_bounded, total): " +
+                          ", ".join([f"({int(i)}, {b:.3g}, {t:.3g})"
+                                     for i, b, t in zip(top_ids, sb, st)]))
 
         if cand_idx_ordered.size == 0 and not np.any(ub_mask):
             log.debug("Stop: no candidate passes coarse screen and no unbounded directions")

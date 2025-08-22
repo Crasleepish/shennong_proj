@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 FACTOR_COLS = ["MKT", "SMB", "HML", "QMJ"]  # 仅用前四个因子作为 X
 P_VAR_SUM_THRESH = 0.2                      # diag(P[:4,:4]) 之和阈值
+CONST_THRESH = -0.005
 
 
 def _load_latest_betas_asof(trade_date: str) -> pd.DataFrame:
@@ -94,7 +95,7 @@ def _stable_mask_and_matrix(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, L
                 keep_mask.append(False)
                 continue
 
-            keep_mask.append(diag_sum < P_VAR_SUM_THRESH and const > -5e-4)
+            keep_mask.append(diag_sum < P_VAR_SUM_THRESH and const > CONST_THRESH)
 
         except Exception:
             keep_mask.append(False)

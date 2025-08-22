@@ -23,5 +23,5 @@ def app():
 def test_find_support_assets(app):
     logger = logging.getLogger(__name__)
     logger.info("Starting test_find_support_assets")
-    find_support_assets('2025-08-13', epsilon=0.03, M=4096, topk_per_iter=32, debug=True)
+    find_support_assets('2025-08-21', epsilon=0.03, M=4096, topk_per_iter=32, debug=True)
 
