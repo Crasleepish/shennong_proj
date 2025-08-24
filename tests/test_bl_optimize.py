@@ -6,6 +6,7 @@ from app.config import Config
 
 # 假设 get_ttm_value 函数已经定义
 from scripts.optimize_portfolio import build_bl_views, optimize
+from app.service.portfolio_assets_service import get_portfolio_assets
 
 @pytest.fixture
 def app():
@@ -24,35 +25,13 @@ def test_build_bl_views(app):
 
 def test_optimize(app):
     # 创建测试数据
-    asset_source_map = {
-        'H11004.CSI': 'index',
-        'Au99.99.SGE': 'index',
-        '008114.OF': 'factor',
-        '020602.OF': 'factor',
-        '019918.OF': 'factor', 
-        '002236.OF': 'factor',
-        '019311.OF': 'factor',
-        '006712.OF': 'factor',
-        '011041.OF': 'factor',
-        '110003.OF': 'factor',
-        '019702.OF': 'factor',
-    }
-    code_factors_map = {
-        "008114.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "020602.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "019918.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "002236.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "019311.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "006712.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "011041.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "110003.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "019702.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "H11004.CSI": ["10YBOND"], 
-        "Au99.99.SGE": ["GOLD"]
-    }
+    portfolio_id = 1
+    asset_info = get_portfolio_assets(portfolio_id)
+    asset_source_map = asset_info["asset_source_map"]
+    code_factors_map = asset_info["code_factors_map"]
+    view_codes = asset_info["view_codes"]
     trade_date = '2025-06-13'
     window = 20
-    view_codes = ['H11004.CSI', 'Au99.99.SGE', '008114.OF', '020602.OF', '019918.OF', '002236.OF', '019311.OF', '006712.OF', '011041.OF', '110003.OF', '019702.OF']
     portfolio_plan = optimize(asset_source_map, code_factors_map, trade_date, window, view_codes)
     print(portfolio_plan)
     

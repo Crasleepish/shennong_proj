@@ -16,8 +16,9 @@ def portfolio_opt_hist():
     data = request.get_json()
     start_date = data.get("start_date", None)
     end_date = data.get("end_date", None)
+    portfolio_id = int(data.get("portfolio_id"))
     try:
-        optimize_portfolio_history(start_date, end_date)
+        optimize_portfolio_history(portfolio_id, start_date, end_date)
         return jsonify({"message": "success"})
     except Exception as e:
         return jsonify({"message": "error", "data": str(e)})
@@ -27,8 +28,10 @@ def portfolio_opt_rt():
     """
     Optimize portfolio realtime
     """
+    data = request.get_json()
+    portfolio_id = int(data.get("portfolio_id"))
     try:
-        portfolio_plan = optimize_portfolio_realtime()
+        portfolio_plan = optimize_portfolio_realtime(portfolio_id)
         return jsonify({"message": "success", "data": portfolio_plan})
     except Exception as e:
         logger.error(e)
@@ -55,13 +58,13 @@ def get_weights_by_date():
 
 from app.service.portfolio_crud import query_current_position
 
-@service_bp.route("/current_position", methods=["GET"])
-def get_current_position():
+@service_bp.route("/current_position/<int:portfolio_id>", methods=["GET"])
+def get_current_position(portfolio_id: int):
     """
     查询当前持仓（包括 asset, code, name, amount, price）
     """
     try:
-        result = query_current_position()
+        result = query_current_position(portfolio_id)
         return jsonify(result)
     except Exception as e:
         logger.error(f"查询当前持仓失败: {e}")
@@ -127,6 +130,7 @@ def submit_rebalance():
         payload = request.get_json()
         transfers = payload.get("rebalance", [])
         holdings = payload.get("new_holdings", [])
+        portfolio_id = int(payload.get("portfolio_id"))
 
         if not transfers:
             return jsonify({"message": "缺少调仓内容"}), 400
@@ -135,7 +139,7 @@ def submit_rebalance():
             return jsonify({"message": "缺少目标持仓内容"}), 400
 
         save_transfer_logs(transfers)
-        save_current_holdings(holdings)
+        save_current_holdings(portfolio_id, holdings)
 
         return jsonify({"message": "调仓记录与持仓已保存", "status": "ok"})
     except Exception as e:
@@ -209,3 +213,57 @@ def update_dynamic_beta():
     except Exception as e:
         logger.error(f"计算跟踪误差失败: {e}")
         return jsonify({"message": "error", "data": str(e)}), 500
+    
+from werkzeug.exceptions import BadRequest
+from app.service.portfolio_assets_service import (
+    upsert_portfolio_assets,
+    get_portfolio_assets,
+)
+
+@service_bp.route("/portfolio_assets_upsert/<int:portfolio_id>", methods=["POST"])
+def route_portfolio_assets_upsert(portfolio_id: int):
+    """不存在则插入；存在则更新。请求体 JSON：
+    {
+      "asset_source_map": {"008114.OF": "factor", ...},
+      "code_factors_map": {"008114.OF": ["MKT","SMB","HML","QMJ"], ...},
+      "view_codes": ["008114.OF", ...]
+    }
+    """
+    body = request.get_json(silent=True) or {}
+    try:
+        result = upsert_portfolio_assets(
+            portfolio_id=portfolio_id,
+            asset_source_map=body.get("asset_source_map") or {},
+            code_factors_map=body.get("code_factors_map") or {},
+            view_codes=body.get("view_codes") or [],
+        )
+    except (ValueError, BadRequest) as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(result), 200
+
+
+@service_bp.route("/portfolio_assets_query/<int:portfolio_id>", methods=["GET"])
+def route_portfolio_assets_query(portfolio_id: int):
+    data = get_portfolio_assets(portfolio_id)
+    if not data:
+        return jsonify({"error": "portfolio_id 不存在"}), 404
+    return jsonify(data), 200
+
+
+from app.ml.support_asset import find_support_assets
+from app.data_fetcher import CalendarFetcher
+import pandas as pd
+
+@service_bp.route("/portfolio_assets/find_support_assets", methods=["POST"])
+def route_find_support_assets():
+    data = request.get_json()
+    asof_date = data.get("asof_date", None)
+    if asof_date:
+        asof_date_str = pd.to_datetime(asof_date).date().strftime("%Y%m%d")
+    else:
+        asof_date_str = pd.to_datetime("today").date().strftime("%Y%m%d")
+    asof_trade_date_str = CalendarFetcher().get_trade_date(start="19900101", end=asof_date_str, format="%Y-%m-%d", limit=1, ascending=False)[0]
+    asset_list = find_support_assets(asof_trade_date_str, epsilon=0.03, M=4096, topk_per_iter=32, debug=True)
+    if not asset_list:
+        return jsonify({"message": "发现支撑资产失败"}), 200
+    return jsonify({"message": "succuess", "data": asset_list}), 200

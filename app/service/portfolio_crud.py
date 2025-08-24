@@ -130,12 +130,12 @@ def query_price_by_codes(codes: list[str]) -> dict[str, float]:
 from app.models.service_models import CurrentHolding
 from app.database import get_db
 
-def query_current_position() -> list[dict]:
+def query_current_position(portfolio_id: int) -> list[dict]:
     """
     查询当前持仓，包括 asset, code, name, amount, price（由行情接口补充）
     """
     with get_db() as db:
-        rows = db.query(CurrentHolding).all()
+        rows = db.query(CurrentHolding).filter(CurrentHolding.portfolio_id == portfolio_id).all()
 
     code_list = [row.code for row in rows]
     price_map = query_price_by_codes(code_list)
@@ -236,7 +236,7 @@ from app.data_fetcher.trade_calender_reader import TradeCalendarReader
 from app.database import get_db
 
 
-def save_current_holdings(new_holdings: list[dict]) -> None:
+def save_current_holdings(portfolio_id: int, new_holdings: list[dict]) -> None:
     """
     保存目标持仓至 current_holdings 表。入库为最新交易日。
     每行包括 asset, code, name, amount。
@@ -248,7 +248,7 @@ def save_current_holdings(new_holdings: list[dict]) -> None:
 
     with get_db() as db:
         # 先删除该交易日已有记录
-        db.query(CurrentHolding).delete()
+        db.query(CurrentHolding).filter(CurrentHolding.portfolio_id == portfolio_id).delete()
 
         for row in new_holdings:
             record = CurrentHolding(
@@ -256,6 +256,7 @@ def save_current_holdings(new_holdings: list[dict]) -> None:
                 code=row["code"],
                 name=row["name"],
                 amount=row["amount"],
+                portfolio_id=portfolio_id,
             )
             db.add(record)
         db.commit()

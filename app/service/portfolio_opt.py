@@ -23,12 +23,12 @@ from app.service.portfolio_crud import query_latest_portfolio_by_id
 from app.data_fetcher import CalendarFetcher
 from app.ml.black_litterman_opt_util import load_fund_betas, compute_prior_mu_sigma, compute_prior_mu_fixed_window, build_bl_views, compute_bl_posterior, optimize_mean_variance
 from app.service.portfolio_crud import query_weights_by_date, store_portfolio, query_cov_matrix_by_date
+from app.service.portfolio_assets_service import get_portfolio_assets
 
 logger = logging.getLogger(__name__)
 
-POST_VIEW_TAU = 0.07
+POST_VIEW_TAU = 0.3
 alpha = 0.1  # EWMA 平滑因子，可调
-portfolio_id = 1
 
 def _load_betas_by_code(code):
     df = FundBetaDao.select_by_code_date(code, None)
@@ -126,7 +126,7 @@ def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str, wi
 
     # 4. Max Sharpe 组合优化
     # weights, expected_return, expected_vol = optimize_max_sharpe(mu_post_full, Sigma_full)
-    weights, expected_return, expected_vol = optimize_mean_variance(mu_post_full, Sigma_full, 0.0006)
+    weights, expected_return, expected_vol = optimize_mean_variance(mu_post_full, Sigma_full, 0.01)
 
     return {
         'codes': fund_codes,
@@ -137,7 +137,7 @@ def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str, wi
         'cov_matrix': Sigma_full,
     }
 
-def optimize_portfolio_realtime():
+def optimize_portfolio_realtime(portfolio_id: int):
     """
     实时组合优化主流程：完成从数据获取、因子计算、预测、优化的全过程。
     """
@@ -162,45 +162,15 @@ def optimize_portfolio_realtime():
     additonal_factor_df, additonal_map = build_real_time_date(realtime_factors, est_index_values)
 
     # Step 6: 执行组合优化，输出最优资产权重
-    asset_source_map = {
-        'H11004.CSI': 'index',
-        'Au99.99.SGE': 'index',
-        '008114.OF': 'factor',
-        '020602.OF': 'factor',
-        '019918.OF': 'factor', 
-        '002236.OF': 'factor',
-        '019311.OF': 'factor',
-        '006712.OF': 'factor',
-        '011041.OF': 'factor',
-        '110003.OF': 'factor',
-        '019702.OF': 'factor',
-        '006342.OF': 'factor',
-        '020466.OF': 'factor',
-        '018732.OF': 'factor',
-        '270004.OF': 'cash',
-    }
-    code_factors_map = {
-        "H11004.CSI": ["10YBOND"], 
-        "Au99.99.SGE": ["GOLD"],
-        "008114.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "020602.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "019918.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "002236.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "019311.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "006712.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "011041.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "110003.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "019702.OF": ["MKT", "SMB", "HML", "QMJ"],
-        '006342.OF': ["MKT", "SMB", "HML", "QMJ"],
-        '020466.OF': ["MKT", "SMB", "HML", "QMJ"],
-        '018732.OF': ["MKT", "SMB", "HML", "QMJ"],
-    }
-    view_codes = ["H11004.CSI", "Au99.99.SGE", "008114.OF", "020602.OF", "019918.OF", "002236.OF", "019311.OF", "006712.OF", "011041.OF", "110003.OF", "019702.OF", "006342.OF", "020466.OF", "018732.OF"]
+    asset_info = get_portfolio_assets(portfolio_id)
+    asset_source_map = asset_info["asset_source_map"]
+    code_factors_map = asset_info["code_factors_map"]
+    view_codes = asset_info["view_codes"]
     trade_date = datetime.strftime(TradeCalendarReader.get_trade_dates(end=datetime.strftime(datetime.today(), "%Y%m%d"))[-1], "%Y-%m-%d")
     portfolio_plan = optimize_allocation(additonal_factor_df, additonal_map, asset_source_map, code_factors_map, trade_date, view_codes)
 
     # 输出或保存优化结果
-    w_smooth = output_optimized_portfolio(portfolio_plan)
+    w_smooth = output_optimized_portfolio(portfolio_id, portfolio_plan)
 
     return w_smooth
 
@@ -511,7 +481,7 @@ def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict
 
     # 4. Max Sharpe 组合优化
     # weights, expected_return, expected_vol = optimize_max_sharpe(mu_post_full, Sigma_full)
-    weights, expected_return, expected_vol = optimize_mean_variance(mu_post_full, Sigma_full, 0.0006)
+    weights, expected_return, expected_vol = optimize_mean_variance(mu_post_full, Sigma_full, 0.01)
 
     return {
         'codes': fund_codes,
@@ -522,7 +492,7 @@ def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict
         'cov_matrix': Sigma_full,
     }
 
-def output_optimized_portfolio(portfolio_plan):
+def output_optimized_portfolio(portfolio_id: int, portfolio_plan):
     """保存或打印最终最优组合权重，并将 ewma 平滑后的结果写入数据库"""
     # 获取当前和前一交易日
     trade_dates = TradeCalendarReader.get_trade_dates(end=datetime.today().strftime("%Y%m%d"))
@@ -594,56 +564,26 @@ def build_price_df(asset_source_map: dict, start: str, end: str) -> pd.DataFrame
     return net_value_df.ffill()
 
 
-def optimize_portfolio_history(start_date: str = None, end_date: str = None):
-    asset_source_map = {
-        'H11004.CSI': 'index',
-        'Au99.99.SGE': 'index',
-        '008114.OF': 'factor',
-        '020602.OF': 'factor',
-        '019918.OF': 'factor', 
-        '002236.OF': 'factor',
-        '019311.OF': 'factor',
-        '006712.OF': 'factor',
-        '011041.OF': 'factor',
-        '110003.OF': 'factor',
-        '019702.OF': 'factor',
-        '006342.OF': 'factor',
-        '020466.OF': 'factor',
-        '018732.OF': 'factor',
-        '270004.OF': 'cash',
-    }
-    code_factors_map = {
-        "H11004.CSI": ["10YBOND"], 
-        "Au99.99.SGE": ["GOLD"],
-        "008114.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "020602.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "019918.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "002236.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "019311.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "006712.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "011041.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "110003.OF": ["MKT", "SMB", "HML", "QMJ"],
-        "019702.OF": ["MKT", "SMB", "HML", "QMJ"],
-        '006342.OF': ["MKT", "SMB", "HML", "QMJ"],
-        '020466.OF': ["MKT", "SMB", "HML", "QMJ"],
-        '018732.OF': ["MKT", "SMB", "HML", "QMJ"],
-    }
-    view_codes = ["H11004.CSI", "Au99.99.SGE", "008114.OF", "020602.OF", "019918.OF", "002236.OF", "019311.OF", "006712.OF", "011041.OF", "110003.OF", "019702.OF", "006342.OF", "020466.OF", "018732.OF"]
+def optimize_portfolio_history(portfolio_id: int, start_date: str = None, end_date: str = None):
+    asset_info = get_portfolio_assets(portfolio_id)
+    asset_source_map = asset_info["asset_source_map"]
+    code_factors_map = asset_info["code_factors_map"]
+    view_codes = asset_info["view_codes"]
 
     if not end_date:
         end_date = CalendarFetcher().get_trade_date(end=pd.to_datetime("today").strftime("%Y%m%d"), format="%Y-%m-%d", limit=1, ascending=False)[0]
 
     logging.info("🔁 获取最后一次优化的组合权重")
 
-    latest_portfolio = query_latest_portfolio_by_id(1, start_date)
+    latest_portfolio = query_latest_portfolio_by_id(portfolio_id, start_date)
     if latest_portfolio.empty:
         if not start_date:
             raise ValueError("没有历史优化权重，请指定起始日期")
-    
-    start_date = (pd.to_datetime(latest_portfolio["date"]) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    else:
+        start_date = (pd.to_datetime(latest_portfolio["date"]) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        logging.info(f"使用最后一次优化的日期的T+1日 {start_date} 作为起始日期")
     
     all_dates = CalendarFetcher().get_trade_date(start=start_date.replace("-", ""), end=end_date.replace("-", ""), format="%Y-%m-%d", ascending=True)
-    logging.info(f"使用最后一次优化的日期的T+1日 {all_dates[0]} 作为起始日期")
 
     if latest_portfolio.empty:
         prev_weights = None

@@ -26,6 +26,7 @@ from app.backtest.backtest_engine import run_backtest as run_backtest_engine
 from app.backtest.backtest_engine import BacktestConfig
 from app.dao.betas_dao import FundBetaDao
 from app.service.portfolio_crud import query_weights_by_date, store_portfolio
+from app.service.portfolio_assets_service import get_portfolio_assets
 
 app = create_app()
 logger = logging.getLogger(__name__)
@@ -33,38 +34,19 @@ factor_data_reader = FactorDataReader()
 csi_index_data_fetcher = CSIIndexDataFetcher()
 sell_fee_rate = 0.0005
 slippage_rate = 0.0
-portfolio_id = 1
+portfolio_id = 2
 alpha = 0.1
 
 # 资产配置
-asset_source_map = {
-    'H11004.CSI': 'index',
-    'Au99.99.SGE': 'index',
-    '008114.OF': 'factor',
-    '020602.OF': 'factor',
-    '019918.OF': 'factor',
-    '002236.OF': 'factor',
-    '019311.OF': 'factor',
-    '006712.OF': 'factor',
-    '011041.OF': 'factor',
-    '110003.OF': 'factor',
-    '019702.OF': 'factor',
-    '006342.OF': 'factor',
-    '020466.OF': 'factor',
-    '018732.OF': 'factor',
-    '270004.OF': 'cash',
-}
-
-code_factors_map = {
-    "H11004.CSI": ["10YBOND"],
-    "Au99.99.SGE": ["GOLD"],
-}
+asset_info = get_portfolio_assets(portfolio_id)
+asset_source_map = asset_info["asset_source_map"]
+code_factors_map = asset_info["code_factors_map"]
 for code, src in asset_source_map.items():
     if src == "factor":
         code_factors_map[code] = ["MKT", "SMB", "HML", "QMJ"]
 
-view_codes = ["H11004.CSI", "Au99.99.SGE", "008114.OF", "020602.OF", "019918.OF", "002236.OF", "019311.OF", "006712.OF", "011041.OF", "110003.OF", "019702.OF", "006342.OF", "020466.OF", "018732.OF"]
-        
+view_codes = asset_info["view_codes"]
+
 def load_fund_betas(code):
     df = FundBetaDao.select_by_code_date(code, None)
     df = df.set_index("date", drop=True)
@@ -115,7 +97,7 @@ def build_price_df(asset_source_map: dict, start: str, end: str) -> pd.DataFrame
     return net_value_df.ffill()
 
 
-def run_backtest(start="2025-08-07", end="2025-08-08", window=20):
+def run_backtest(start="2024-08-22", end="2025-08-22", window=20):
     out_dir = f"./fund_portfolio_bt_result/{datetime.today().strftime('%Y%m%d_%H%M%S')}"
     os.makedirs(out_dir, exist_ok=True)
     with app.app_context():

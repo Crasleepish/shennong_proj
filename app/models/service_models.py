@@ -23,7 +23,7 @@ from sqlalchemy import Column, String, Float, Date, JSON
 from app.database import Base
 
 # 当前持仓信息表（逻辑资产到实际资产映射 + 当前份额）
-from sqlalchemy import Column, String, Float, PrimaryKeyConstraint
+from sqlalchemy import Column, String, Float, Integer, PrimaryKeyConstraint
 from app.database import Base
 
 class CurrentHolding(Base):
@@ -33,13 +33,14 @@ class CurrentHolding(Base):
     code = Column(String, nullable=False)
     name = Column(String, nullable=True)
     amount = Column(Float, nullable=True)
+    portfolio_id = Column(Integer, nullable=False)
 
     __table_args__ = (
-        PrimaryKeyConstraint('asset', 'code', name='current_holdings_pk'),
+        PrimaryKeyConstraint('portfolio_id', 'code', name='current_holdings_pk'),
     )
 
     def __repr__(self):
-        return f"<CurrentHolding(asset={self.asset}, code={self.code})>"
+        return f"<CurrentHolding(portfolio_id={self.portfolio_id}, asset={self.asset}, code={self.code})>"
 
 
 # 调仓记录日志表（记录每次调仓的明细变更）
