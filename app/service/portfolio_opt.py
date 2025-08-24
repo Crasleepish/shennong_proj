@@ -27,7 +27,7 @@ from app.service.portfolio_assets_service import get_portfolio_assets
 
 logger = logging.getLogger(__name__)
 
-POST_VIEW_TAU = 0.3
+POST_VIEW_TAU = 0.25
 alpha = 0.1  # EWMA 平滑因子，可调
 
 def _load_betas_by_code(code):

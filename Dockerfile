@@ -17,7 +17,6 @@ COPY run_strategy.py ./
 COPY api_key.py ./
 COPY docker-compose.yml ./
 COPY README.md ./
-COPY pytest.ini ./
 COPY scripts ./scripts
 COPY appendix ./appendix
 
