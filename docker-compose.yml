@@ -10,8 +10,6 @@ services:
       - ./bt_result:/app/bt_result
       - ./ml_results:/app/ml_results
       - ./models:/app/models
-      - ./output:/app/output
-      - ./.cache:/app/.cache
       - ./api_key.py:/app/api_key.py
       - ./app/log:/app/app/log
     restart: always

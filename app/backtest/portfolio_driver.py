@@ -203,8 +203,8 @@ def build_all_portfolios(start_date: str, end_date: str, mode: str):
         daily_return.to_csv(return_path, index_label="date")
 
         # 可视化（可选）
-        fig = result["nav"].vbt.plot(title="Portfolio Value Curve")
-        fig.write_html(os.path.join(output_path, f"{factor}_{name}_{start_date}_{end_date}_value_plot.html"))
+        # fig = result["nav"].vbt.plot(title="Portfolio Value Curve")
+        # fig.write_html(os.path.join(output_path, f"{factor}_{name}_{start_date}_{end_date}_value_plot.html"))
 
         # === 清理中间变量，控制内存 ===
         del weight_df, result
