@@ -20,6 +20,16 @@
         "purpose": ["debug-test"],
         "console": "integratedTerminal",
         "justMyCode": false
+      },
+      {
+        "name": "Debug plot_fund_fit (script)",
+        "type": "debugpy",
+        "request": "launch",
+        "program": "${workspaceFolder}/scripts/plot_fund_fit.py",
+        "args": ["013275.OF", "--start", "2024-01-01", "--end", "2025-08-01", "--out", "plot_013275.png"],
+        "justMyCode": false,
+        "cwd": "${workspaceFolder}",
+        "console": "integratedTerminal"
       }
     ]
   }

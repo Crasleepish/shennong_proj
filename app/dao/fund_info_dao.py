@@ -40,7 +40,7 @@ class FundInfoDao:
                 condition = or_(
                     FundInfo.invest_type.in_(['被动指数型', '增强指数型']),
                     FundInfo.fund_type == '商品型',
-                    FundInfo.fund_code.in_(['270004.OF', '009824.OF'])
+                    FundInfo.fund_code.in_(['270004.OF', '009824.OF', '000602.OF'])
                 )
                 fund_info_lst = db.query(FundInfo).filter(condition).all()
                 return fund_info_lst

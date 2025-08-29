@@ -27,6 +27,7 @@ from app.backtest.backtest_engine import BacktestConfig
 from app.dao.betas_dao import FundBetaDao
 from app.service.portfolio_crud import query_weights_by_date, store_portfolio
 from app.service.portfolio_assets_service import get_portfolio_assets
+from app.service.portfolio_opt import compute_diverge
 
 app = create_app()
 logger = logging.getLogger(__name__)
@@ -35,7 +36,6 @@ csi_index_data_fetcher = CSIIndexDataFetcher()
 sell_fee_rate = 0.0005
 slippage_rate = 0.0
 portfolio_id = 2
-alpha = 0.1
 
 # 资产配置
 asset_info = get_portfolio_assets(portfolio_id)
@@ -46,6 +46,13 @@ for code, src in asset_source_map.items():
         code_factors_map[code] = ["MKT", "SMB", "HML", "QMJ"]
 
 view_codes = asset_info["view_codes"]
+
+params = asset_info["params"]
+if params is None or "post_view_tau" not in params or "alpha" not in params or "variance" not in params:
+    raise Exception("Invalid params, please set post_view_tau and alpha and variance in params")
+post_view_tau = float(params["post_view_tau"])
+variance = float(params["variance"])
+alpha = float(params["alpha"])
 
 def load_fund_betas(code):
     df = FundBetaDao.select_by_code_date(code, None)
@@ -97,7 +104,7 @@ def build_price_df(asset_source_map: dict, start: str, end: str) -> pd.DataFrame
     return net_value_df.ffill()
 
 
-def run_backtest(start="2024-08-22", end="2025-08-22", window=20):
+def run_backtest(start="2022-12-22", end="2024-12-22", window=20):
     out_dir = f"./fund_portfolio_bt_result/{datetime.today().strftime('%Y%m%d_%H%M%S')}"
     os.makedirs(out_dir, exist_ok=True)
     with app.app_context():
@@ -105,7 +112,7 @@ def run_backtest(start="2024-08-22", end="2025-08-22", window=20):
         price_df = build_price_df(asset_source_map, start, end)
         all_dates = price_df.index
         assets = list(asset_source_map.keys())
-        weights_df = pd.DataFrame(index=all_dates, columns=assets)
+        weights_dict = {d: {} for d in all_dates}
 
         prev_weights = None  # 上一日的平滑权重
 
@@ -116,6 +123,8 @@ def run_backtest(start="2024-08-22", end="2025-08-22", window=20):
                     asset_source_map=asset_source_map,
                     code_factors_map=code_factors_map,
                     trade_date=dt.strftime('%Y-%m-%d'),
+                    post_view_tau = post_view_tau,
+                    variance = variance,
                     window=window,
                     view_codes=view_codes
                 )
@@ -132,7 +141,7 @@ def run_backtest(start="2024-08-22", end="2025-08-22", window=20):
                     else:
                         raise ValueError("交易日不足，无法执行权重平滑")
                     
-                    prev_weights = query_weights_by_date(prev_trade_date)["weights"]
+                    prev_weights = query_weights_by_date(prev_trade_date, portfolio_id)["weights"]
 
                 all_codes = set(w_today.keys()).union(prev_weights.keys())
                 w_ewma = {
@@ -140,28 +149,32 @@ def run_backtest(start="2024-08-22", end="2025-08-22", window=20):
                     for code in all_codes
                 }
 
-                weights_df.loc[dt] = pd.Series(w_ewma)
+                additional_assets = [code for code in all_codes if code not in portfolio_plan["codes"]]
+                # 将cov_matrix和codes按合并后的合并资产列表扩展，cov_matrix多出来的位置填充0]
+                additional_size = len(additional_assets)
+                cov_matrix = np.pad(cov_matrix, ((0, additional_size), (0, additional_size)), 'constant', constant_values=0.0)
+                codes = codes + additional_assets
+
+                weights_dict[dt] = pd.Series(w_ewma)
                 prev_weights = w_ewma.copy()
                 
-                store_portfolio(portfolio_id, dt, w_today, w_ewma, cov_matrix, codes)
+                # store_portfolio(portfolio_id, dt, w_today, w_ewma, cov_matrix, codes)
 
             except Exception as e:
                 logger.warning(f"⚠️ {dt.strftime('%Y-%m-%d')} 调仓失败: {e}")
                 continue
 
-        weights_df = weights_df.infer_objects(copy=False).dropna(how='all').fillna(0)
+        weights_df = pd.DataFrame.from_dict(weights_dict, orient='index')
+        weights_df = weights_df.dropna(how='all').fillna(0)
         price_df = price_df.loc[weights_df.index]
 
         # === 处理权重序列 ===
-        d = 0.12  # 偏差百分比阈值
+        d = 0.005  # 偏差百分比阈值
         rebalance_dates = [weights_df.index[0]]
         prev_weight = weights_df.iloc[0]
 
         for date, current_weight in weights_df.iloc[1:].iterrows():
-            denom = prev_weight.replace(0, np.nan)
-            denom = denom.where(denom >= 0.03, np.nan)
-            ratio = ((prev_weight - current_weight).clip(lower=0) / denom).replace([np.inf, -np.inf], np.nan)
-            avg_ratio = ratio.mean(skipna=True)
+            avg_ratio = compute_diverge(portfolio_id=portfolio_id, trade_date=date, current_w=prev_weight, target_w=current_weight)
 
             if avg_ratio > d:
                 rebalance_dates.append(date)

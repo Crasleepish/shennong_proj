@@ -27,15 +27,12 @@ from app.service.portfolio_assets_service import get_portfolio_assets
 
 logger = logging.getLogger(__name__)
 
-POST_VIEW_TAU = 0.25
-alpha = 0.1  # EWMA 平滑因子，可调
-
 def _load_betas_by_code(code):
     df = FundBetaDao.select_by_code_date(code, None)
     df = df.set_index("date", drop=True)
     return df[["MKT", "SMB", "HML", "QMJ"]]
 
-def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str, window: int = 20, view_codes: List[str] = None):
+def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str, post_view_tau: float, variance: float, window: int = 20, view_codes: List[str] = None):
     factor_data_reader = FactorDataReader()
     csi_index_data_fetcher = CSIIndexDataFetcher()
     # 1. 根据不同数据来源构造资产净值矩阵
@@ -47,7 +44,7 @@ def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str, wi
     net_value_df = pd.DataFrame()
 
     if factor_codes:
-        df_beta = load_fund_betas(factor_codes)
+        df_beta = load_fund_betas(factor_codes, trade_date, lookback_days=90)
         df_factors = factor_data_reader.read_daily_factors(end=trade_date)[["MKT", "SMB", "HML", "QMJ"]].dropna()
         for code in factor_codes:
             beta = df_beta.loc[code].values
@@ -55,19 +52,19 @@ def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str, wi
             net_value_df[code] = (1 + pd.Series(cumret, index=df_factors.index)).cumprod()
 
     for code in index_codes:
-        df = csi_index_data_fetcher.get_data_by_code_and_date(code=code)
+        df = csi_index_data_fetcher.get_data_by_code_and_date(code=code, end=trade_date)
         df = df[["date", "close"]].dropna().set_index("date")
         df = df.sort_index()
         net_value_df[code] = df["close"]
 
     dao = FundHistDao._instance
     for code in hist_codes:
-        df = dao.select_dataframe_by_code(code)
+        df = dao.select_dataframe_by_code(code, end_date=trade_date)
         df = df[["date", "net_value"]].dropna().set_index("date").sort_index()
         net_value_df[code] = df["net_value"]
 
     for code in cash_codes:
-        df = dao.select_dataframe_by_code(code)
+        df = dao.select_dataframe_by_code(code, end_date=trade_date)
         df = df[["date", "net_value"]].dropna().set_index("date").sort_index()
         net_value_df[code] = df["net_value"]
 
@@ -91,7 +88,7 @@ def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str, wi
     mu_prior_full = mu_prior[fund_indices]
     Sigma_full = Sigma[np.ix_(fund_indices, fund_indices)]
 
-    if POST_VIEW_TAU > 0:
+    if post_view_tau > 0:
         # 3. 构造观点（P, q, omega）（仅使用 view_codes 子集）
         if not view_codes:
             view_asset_source_map = asset_source_map
@@ -113,7 +110,7 @@ def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str, wi
             P=P,
             q=q,
             omega=omega,
-            tau=POST_VIEW_TAU
+            tau=post_view_tau
         )
 
         # 将后验结果更新到完整序列中，顺序与fund_codes保持一致
@@ -126,7 +123,7 @@ def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str, wi
 
     # 4. Max Sharpe 组合优化
     # weights, expected_return, expected_vol = optimize_max_sharpe(mu_post_full, Sigma_full)
-    weights, expected_return, expected_vol = optimize_mean_variance(mu_post_full, Sigma_full, 0.01)
+    weights, expected_return, expected_vol = optimize_mean_variance(mu_post_full, Sigma_full, variance)
 
     return {
         'codes': fund_codes,
@@ -166,11 +163,17 @@ def optimize_portfolio_realtime(portfolio_id: int):
     asset_source_map = asset_info["asset_source_map"]
     code_factors_map = asset_info["code_factors_map"]
     view_codes = asset_info["view_codes"]
+    params = asset_info["params"]
+    if params is None or "post_view_tau" not in params or "alpha" not in params or "variance" not in params:
+        raise Exception("Invalid params, please set post_view_tau and alpha and variance in params")
+    post_view_tau = float(params["post_view_tau"])
+    variance = float(params["variance"])
+    alpha = float(params["alpha"])
     trade_date = datetime.strftime(TradeCalendarReader.get_trade_dates(end=datetime.strftime(datetime.today(), "%Y%m%d"))[-1], "%Y-%m-%d")
-    portfolio_plan = optimize_allocation(additonal_factor_df, additonal_map, asset_source_map, code_factors_map, trade_date, view_codes)
+    portfolio_plan = optimize_allocation(additonal_factor_df, additonal_map, asset_source_map, code_factors_map, trade_date, post_view_tau, variance, view_codes)
 
     # 输出或保存优化结果
-    w_smooth = output_optimized_portfolio(portfolio_id, portfolio_plan)
+    w_smooth = output_optimized_portfolio(portfolio_id, portfolio_plan, alpha)
 
     return w_smooth
 
@@ -374,7 +377,7 @@ def build_real_time_date(intraday_factors, est_index_values):
     return additional_factor_df, additional_map
 
 
-def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict[str, pd.DataFrame], asset_source_map: dict, code_factors_map: dict, trade_date: str, view_codes: List[str] = None):
+def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict[str, pd.DataFrame], asset_source_map: dict, code_factors_map: dict, trade_date: str, post_view_tau: float, variance: float, view_codes: List[str] = None):
     """根据预测收益执行组合优化，输出最优权重
         additional_factor_df: pd.DataFrame - 额外的因子数据
         additional_map: dict[str, pd.DataFrame] - 额外的数据字典
@@ -402,7 +405,7 @@ def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict
     net_value_df = pd.DataFrame()
 
     if factor_codes:
-        df_beta = load_fund_betas(factor_codes)
+        df_beta = load_fund_betas(factor_codes, trade_date)
         df_factors = factor_data_reader.read_daily_factors(end=trade_date)[["MKT", "SMB", "HML", "QMJ"]].dropna()
         for code in factor_codes:
             beta = df_beta.loc[code].values
@@ -446,7 +449,7 @@ def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict
     mu_prior_full = mu_prior[fund_indices]
     Sigma_full = Sigma[np.ix_(fund_indices, fund_indices)]
 
-    if POST_VIEW_TAU > 0:
+    if post_view_tau > 0:
         # 3. 构造观点（P, q, omega）（仅使用 view_codes 子集）
         if not view_codes:
             view_asset_source_map = asset_source_map
@@ -468,7 +471,7 @@ def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict
             P=P,
             q=q,
             omega=omega,
-            tau=POST_VIEW_TAU
+            tau=post_view_tau
         )
 
         # 将后验结果更新到完整序列中，顺序与fund_codes保持一致
@@ -481,7 +484,7 @@ def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict
 
     # 4. Max Sharpe 组合优化
     # weights, expected_return, expected_vol = optimize_max_sharpe(mu_post_full, Sigma_full)
-    weights, expected_return, expected_vol = optimize_mean_variance(mu_post_full, Sigma_full, 0.01)
+    weights, expected_return, expected_vol = optimize_mean_variance(mu_post_full, Sigma_full, variance)
 
     return {
         'codes': fund_codes,
@@ -492,7 +495,7 @@ def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict
         'cov_matrix': Sigma_full,
     }
 
-def output_optimized_portfolio(portfolio_id: int, portfolio_plan):
+def output_optimized_portfolio(portfolio_id: int, portfolio_plan: dict, alpha: float = 0.1):
     """保存或打印最终最优组合权重，并将 ewma 平滑后的结果写入数据库"""
     # 获取当前和前一交易日
     trade_dates = TradeCalendarReader.get_trade_dates(end=datetime.today().strftime("%Y%m%d"))
@@ -519,6 +522,12 @@ def output_optimized_portfolio(portfolio_id: int, portfolio_plan):
 
     cov_matrix = portfolio_plan['cov_matrix']
     codes = portfolio_plan['codes']
+    additional_assets = [code for code in all_assets if code not in portfolio_plan['codes']]
+
+    # 将cov_matrix和codes按合并后的合并资产列表扩展，cov_matrix多出来的位置填充0
+    additional_size = len(additional_assets)
+    cov_matrix = np.pad(cov_matrix, ((0, additional_size), (0, additional_size)), 'constant', constant_values=0.0)
+    codes = codes + additional_assets
 
     store_portfolio(portfolio_id, pd.to_datetime("today").strftime("%Y-%m-%d"), w_today, w_smooth, cov_matrix, codes)
     return w_smooth
@@ -569,26 +578,33 @@ def optimize_portfolio_history(portfolio_id: int, start_date: str = None, end_da
     asset_source_map = asset_info["asset_source_map"]
     code_factors_map = asset_info["code_factors_map"]
     view_codes = asset_info["view_codes"]
+    params = asset_info["params"]
+    if params is None or "post_view_tau" not in params or "alpha" not in params or "variance" not in params:
+        raise Exception("Invalid params, please set post_view_tau and alpha and variance in params")
+    post_view_tau = float(params["post_view_tau"])
+    variance = float(params["variance"])
+    alpha = float(params["alpha"])
 
     if not end_date:
         end_date = CalendarFetcher().get_trade_date(end=pd.to_datetime("today").strftime("%Y%m%d"), format="%Y-%m-%d", limit=1, ascending=False)[0]
 
-    logging.info("🔁 获取最后一次优化的组合权重")
-
-    latest_portfolio = query_latest_portfolio_by_id(portfolio_id, start_date)
-    if latest_portfolio.empty:
-        if not start_date:
-            raise ValueError("没有历史优化权重，请指定起始日期")
-    else:
-        start_date = (pd.to_datetime(latest_portfolio["date"]) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-        logging.info(f"使用最后一次优化的日期的T+1日 {start_date} 作为起始日期")
-    
-    all_dates = CalendarFetcher().get_trade_date(start=start_date.replace("-", ""), end=end_date.replace("-", ""), format="%Y-%m-%d", ascending=True)
-
-    if latest_portfolio.empty:
-        prev_weights = None
-    else:
+    if not start_date:
+        latest_portfolio = query_latest_portfolio_by_id(portfolio_id)
+        logging.info("🔁 获取最后一次优化的组合权重")
+        if latest_portfolio.empty:
+            raise ValueError("没有历史优化权重")
         prev_weights = latest_portfolio["weights_ewma"]
+            
+        # start_date = (pd.to_datetime(latest_portfolio["date"]) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        start_date = CalendarFetcher().get_next_trade_date(pd.to_datetime(latest_portfolio["date"]).strftime("%Y%m%d"), format="%Y-%m-%d")
+        logging.info(f"使用最后一次优化的日期的T+1日 {start_date} 作为起始日期")
+    else:
+        latest_portfolio = query_latest_portfolio_by_id(portfolio_id, start_date)
+        if latest_portfolio.empty:
+            raise ValueError("没有历史优化权重")
+        prev_weights = latest_portfolio["weights_ewma"]
+
+    all_dates = CalendarFetcher().get_trade_date(start=start_date.replace("-", ""), end=end_date.replace("-", ""), format="%Y-%m-%d", ascending=True)
 
     logging.info("📊 开始每日 optimize + ewma 平滑 + 入库")
     for dt in tqdm(all_dates):
@@ -597,6 +613,8 @@ def optimize_portfolio_history(portfolio_id: int, start_date: str = None, end_da
                 asset_source_map=asset_source_map,
                 code_factors_map=code_factors_map,
                 trade_date=dt,
+                post_view_tau=post_view_tau,
+                variance=variance,
                 window=20,
                 view_codes=view_codes
             )
@@ -614,6 +632,12 @@ def optimize_portfolio_history(portfolio_id: int, start_date: str = None, end_da
                 code: round(alpha * w_today.get(code, 0.0) + (1 - alpha) * prev_weights.get(code, 0.0), 8)
                 for code in all_codes
             }
+
+            additional_assets = [code for code in all_codes if code not in optimize_result["codes"]]
+            # 将cov_matrix和codes按合并后的合并资产列表扩展，cov_matrix多出来的位置填充0
+            additional_size = len(additional_assets)
+            cov_matrix = np.pad(cov_matrix, ((0, additional_size), (0, additional_size)), 'constant', constant_values=0.0)
+            codes = codes + additional_assets
 
             prev_weights = w_ewma.copy()
 

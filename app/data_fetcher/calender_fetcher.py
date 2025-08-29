@@ -86,7 +86,24 @@ class CalendarFetcher:
         all_dates = self.get_trade_date("19900101", current_date, format=format, limit=2, ascending=False)
         formated_current_date = datetime.strptime(current_date, '%Y%m%d').strftime(format)
         if formated_current_date not in all_dates:
+            if len(all_dates) == 0:
+                return None
             return all_dates[0]
         if len(all_dates) < 2:
             return None  # 没有更早的交易日
+        return all_dates[1]
+    
+    def get_next_trade_date(self, current_date: str, format: str = "%Y%m%d") -> str:
+        """
+         获取下一交易日。
+         如果当前日期不是交易日，则返回下一最近的交易日。
+        """
+        all_dates = self.get_trade_date(start=current_date, format=format, limit=1, ascending=True)
+        formated_current_date = datetime.strptime(current_date, '%Y%m%d').strftime(format)
+        if formated_current_date not in all_dates: # 当前日期不在交易日列表中
+            if len(all_dates) == 0: # 没有交易日
+                return None
+            return all_dates[0]
+        if len(all_dates) < 2:
+            return None # 没有更晚的交易日
         return all_dates[1]

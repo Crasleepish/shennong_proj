@@ -8,7 +8,7 @@ import vectorbt as vbt
 import os
 
 from app.config import TestConfig
-from app.backtest.value_strategy import backtest_strategy
+from app.backtest.legacy.value_strategy import backtest_strategy
 
 @pytest.fixture
 def app():

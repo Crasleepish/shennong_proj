@@ -9,6 +9,7 @@ from app.database import get_db
 from app.models.fund_models import FundBeta
 from app.models.fund_models import FundInfo
 from app.models.etf_model import EtfInfo
+from app.utils.cov_packer import pack_covariance, unpack_covariance
 import logging
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,17 @@ class FundBetaDao:
                 ))
             )
             df = pd.read_sql(stmt, db.bind)
+        return df
+ 
+    @staticmethod
+    def select_all_by_code_date(code: str, start_date: str = None, end_date: str = None) -> pd.DataFrame:
+        with get_db() as db:
+            query = db.query(FundBeta).filter(FundBeta.code == code)
+            if start_date:
+                query = query.filter(FundBeta.date >= pd.to_datetime(start_date))
+            if end_date:
+                query = query.filter(FundBeta.date <= pd.to_datetime(end_date))
+            df = pd.read_sql(query.statement, db.bind)
         return df
 
     @staticmethod
@@ -136,7 +148,8 @@ class FundBetaDao:
             **betas
         }
         if P is not None:
-            data["P_json"] = json.dumps(P.tolist())
+            P_binary, _ = pack_covariance(P)
+            data["P_bin"] = P_binary
             
         obj = FundBeta(**data)
         with get_db() as db:

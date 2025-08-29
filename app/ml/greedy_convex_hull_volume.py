@@ -397,7 +397,7 @@ def select_representatives(
             break
 
         rel_gain = best_delta / max(vol, H_MIN)
-        log.debug(f"[Iter {iter_count}] pick idx={best_i}  Δ≈{best_delta:.6g} "
+        log.info(f"[Iter {iter_count}] pick idx={best_i}  Δ≈{best_delta:.6g} "
                   f"rel_gain≈{rel_gain:.3%}  LP_solved={total_lp}")
 
         if rel_gain < epsilon:

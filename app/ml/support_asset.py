@@ -9,6 +9,7 @@ import pandas as pd
 
 from app.dao.betas_dao import FundBetaDao
 from app.ml.greedy_convex_hull_volume import select_representatives
+from app.utils.cov_packer import unpack_covariance
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ def _stable_mask_and_matrix(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, L
     df = df.dropna(how="any")
 
     # 提前准备暴露矩阵和代码
-    missing_cols = [c for c in FACTOR_COLS + ["code", "P_json"] if c not in df.columns]
+    missing_cols = [c for c in FACTOR_COLS + ["code", "P_bin"] if c not in df.columns]
     if missing_cols:
         raise RuntimeError(f"FundBeta 数据缺少必要列: {missing_cols}")
 
@@ -73,7 +74,7 @@ def _stable_mask_and_matrix(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, L
     keep_mask = []
     for i, row in df.iterrows():
         try:
-            P = row["P_json"]
+            P = unpack_covariance(row["P_bin"], "{\"dtype\": \"float32\", \"n\": 5}")
             const = row["const"]
             if isinstance(P, str):
                 P = json.loads(P)
@@ -134,6 +135,7 @@ def find_support_assets(
     ----
     选中资产的 fund_code 列表（按加入顺序）。若无可选，返回空列表。
     """
+    logger.info("开始筛选支撑资产: trade_date=%s, epsilon=%s, M=%s, topk_per_iter=%s", trade_date, epsilon, M, topk_per_iter)
     df = _load_latest_betas_asof(trade_date)
     if df is None or df.empty:
         logger and logger.warning("截至 %s 未获取到任何基金的因子暴露记录。", trade_date)

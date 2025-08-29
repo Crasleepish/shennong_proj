@@ -18,6 +18,7 @@ class PortfolioAssets(Base):
     asset_source_map = Column(JSONType, nullable=False)
     code_factors_map = Column(JSONType, nullable=False)
     view_codes = Column(JSONType, nullable=False)
+    params = Column(JSONType, nullable=True)
 
     def to_dict(self) -> dict:
         return {
@@ -25,4 +26,5 @@ class PortfolioAssets(Base):
             "asset_source_map": self.asset_source_map or {},
             "code_factors_map": self.code_factors_map or {},
             "view_codes": self.view_codes or [],
+            "params": self.params or {},
         }

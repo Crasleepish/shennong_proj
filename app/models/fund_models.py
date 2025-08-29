@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Float, Date, BigInteger, Index, Integer, Numeric, Sequence, Text, desc
+from sqlalchemy import Column, String, Float, Date, BigInteger, Index, Integer, Numeric, Sequence, Text, LargeBinary, desc
 from app.database import Base
 
 
@@ -47,6 +47,7 @@ class FundBeta(Base):
     const = Column("const", Float, nullable=True)
 
     P_json = Column("P_json", Text, nullable=True)
+    P_bin = Column("P_bin", LargeBinary, nullable=True)
 
     __table_args__ = (
         Index("idx_fund_beta_date", "date"),  # 新增索引

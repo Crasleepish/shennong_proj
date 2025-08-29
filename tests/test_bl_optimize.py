@@ -30,8 +30,11 @@ def test_optimize(app):
     asset_source_map = asset_info["asset_source_map"]
     code_factors_map = asset_info["code_factors_map"]
     view_codes = asset_info["view_codes"]
+    params = asset_info["params"]
+    post_view_tau = float(params["post_view_tau"])
+    variance = float(params["variance"])
     trade_date = '2025-06-13'
     window = 20
-    portfolio_plan = optimize(asset_source_map, code_factors_map, trade_date, window, view_codes)
+    portfolio_plan = optimize(asset_source_map, code_factors_map, trade_date, post_view_tau, variance, window, view_codes)
     print(portfolio_plan)
     

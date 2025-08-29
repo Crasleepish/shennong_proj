@@ -821,7 +821,7 @@ async function onViewLatestTransfer() {
       return
     }
     const dateStr = formatDate(selectedDate.value)
-    const res = await fetch(`${baseUrl}/service/weights?date=${dateStr}`, {
+    const res = await fetch(`${baseUrl}/service/weights/${encodeURIComponent(portfolioId.value)}?date=${dateStr}`, {
       headers: { 'Authorization': authHeader }
     })
     const data = await res.json()

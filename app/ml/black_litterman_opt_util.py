@@ -10,13 +10,13 @@ from scipy.optimize import minimize
 from app.ml.dataset_builder import DatasetBuilder
 from app.dao.betas_dao import FundBetaDao
 
-def load_fund_betas(codes: List[str]) -> pd.DataFrame:
+def load_fund_betas(codes: List[str], trade_date: str, lookback_days: int = 365) -> pd.DataFrame:
     """
     从 output/fund_factors.csv 中读取指定 code 的因子暴露数据。
     返回包含 ['code', 'MKT', 'SMB', 'HML', 'QMJ'] 的 DataFrame。
     """
-    one_year_ago = (pd.to_datetime("today") - pd.DateOffset(years=1)).strftime('%Y-%m-%d')
-    df = FundBetaDao.get_latest_fund_betas(fund_type_list=["股票型"], invest_type_list=["被动指数型", "增强指数型"], found_date_limit=one_year_ago)
+    some_days_ago = (pd.to_datetime(trade_date) - pd.DateOffset(days=lookback_days)).strftime('%Y-%m-%d')
+    df = FundBetaDao.get_latest_fund_betas(fund_type_list=["股票型"], invest_type_list=["被动指数型", "增强指数型"], found_date_limit=some_days_ago, as_of_date=trade_date)
     df = df.set_index("code", drop=True)
     df = df[df.index.isin(codes)]
     return df[["MKT", "SMB", "HML", "QMJ"]]
@@ -34,7 +34,7 @@ def build_bl_views(
     softprob_dict = get_softprob_dict(trade_date, dataset_builder=dataset_builder)
     label_to_ret = get_label_to_ret(trade_date)
     factor_type_keys = [k for k, v in code_type_map.items() if v == "factor"]
-    df_beta_all = load_fund_betas(factor_type_keys)
+    df_beta_all = load_fund_betas(factor_type_keys, trade_date, lookback_days=90)
 
     # 收集所有出现过的因子，并排序统一列顺序
     all_factors = sorted({f for fs in code_factors_map.values() for f in fs})

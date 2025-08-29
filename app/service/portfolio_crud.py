@@ -8,7 +8,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def query_weights_by_date(date: str, portfolio_id: int = 1) -> dict:
+def query_weights_by_date(date: str, portfolio_id: int) -> dict:
     """
     查询某一日期的平滑后组合权重（weights_ewma 字段）
 
@@ -287,25 +287,90 @@ def query_fund_names_by_codes(codes: List[str]) -> Dict[str, str]:
     df = df.dropna(subset=["fund_code", "fund_name"])
     return dict(zip(df["fund_code"], df["fund_name"]))
 
-def store_portfolio(portfolio_id: int, trade_date: str, weights_raw: dict, weights_ewma: dict, cov_matrix: np.ndarray, codes: List[str]):
-    weights_smooth = [weights_ewma.get(c, 0.0) for c in codes]
+def store_portfolio(
+    portfolio_id: int,
+    trade_date: str,
+    weights_raw: Dict[str, float],
+    weights_ewma: Dict[str, float],
+    cov_matrix: np.ndarray,
+    codes: List[str],
+    eps: float = 1e-4,
+) -> None:
+    """
+    将组合信息入库，并在入库前做“同步清理”：
+    若第 i 个资产满足：
+        |weights_today[i]| < eps 且 |weights_smooth[i]| < eps 且 |cov_matrix[i,i]| < eps
+    则删除该资产（即同时从 codes / weights / 协方差矩阵中移除该位置），
+    且必须保证 **相对顺序** 不变。
 
-    weights_today = [weights_raw.get(c, 0.0) for c in codes]
+    最终入库的 weights / weights_ewma / cov_matrix 的顺序与清理后的 codes 完全一致。
 
-    cov_matrix_packed, meta_json = pack_covariance(cov_matrix)
+    参数
+    ----
+    portfolio_id : int
+    trade_date   : 'YYYY-MM-DD'
+    weights_raw  : dict[code] -> weight
+    weights_ewma : dict[code] -> weight
+    cov_matrix   : np.ndarray  (方阵，形状与 codes 对应)
+    codes        : List[str]   (与 cov_matrix 的行列顺序一致)
+    eps          : float       (近零阈值)
+    """
 
-    # 入库
+    # 1) 按 codes 顺序构造两条权重向量
+    w_today  = np.array([weights_raw.get(c, 0.0)  for c in codes], dtype=float)
+    w_smooth = np.array([weights_ewma.get(c, 0.0) for c in codes], dtype=float)
+
+    # 基础校验：cov 矩阵维度应与 codes 长度一致
+    n = len(codes)
+    if cov_matrix.shape != (n, n):
+        raise ValueError(f"cov_matrix shape {cov_matrix.shape} does not match codes length {n}")
+
+    # 2) 计算要保留的索引（满足“非同时近零”）
+    diag = np.diag(cov_matrix)
+    keep_mask = ~(
+        (np.abs(w_today)  < eps) &
+        (np.abs(w_smooth) < eps) &
+        (np.abs(diag)     < eps)
+    )
+    # 保留索引，保持原始顺序
+    keep_idx = np.nonzero(keep_mask)[0].tolist()
+
+    # 3) 若全部被过滤，容错：此处可根据业务选择报错或保留最小集
+    if len(keep_idx) == 0:
+        logger.warning(
+            f"[store_portfolio] All assets filtered out by eps={eps}. "
+            f"portfolio_id={portfolio_id}, date={trade_date}. "
+            f"Will store empty codes & empty cov."
+        )
+        codes_kept = []
+        weights_today_kept = []
+        weights_smooth_kept = []
+        cov_kept = np.zeros((0, 0), dtype=np.float32)
+    else:
+        # 4) 按同一 keep_idx 子集化，严格保持相对顺序一致
+        codes_kept = [codes[i] for i in keep_idx]
+        weights_today_kept  = w_today[keep_idx].tolist()
+        weights_smooth_kept = w_smooth[keep_idx].tolist()
+        cov_kept = cov_matrix[np.ix_(keep_idx, keep_idx)]
+
+    # 5) 协方差矩阵仅保存下三角（float32 + BLOB），并存入 meta
+    cov_blob, meta_json = pack_covariance(cov_kept.astype(np.float32, copy=False))
+
+    # 6) 入库（merge upsert）
     with get_db() as db:
         new_row = PortfolioWeights(
             portfolio_id=portfolio_id,
             date=pd.Timestamp(trade_date),
-            codes = json.dumps(codes),
-            weights = json.dumps(weights_today),
-            weights_ewma = json.dumps(weights_smooth),
-            cov_matrix=cov_matrix_packed,
-            cov_meta=meta_json
+            codes=json.dumps(codes_kept, ensure_ascii=False),
+            weights=json.dumps(weights_today_kept, ensure_ascii=False),
+            weights_ewma=json.dumps(weights_smooth_kept, ensure_ascii=False),
+            cov_matrix=cov_blob,
+            cov_meta=meta_json,
         )
         db.merge(new_row)
         db.commit()
 
-        logger.info(f"✅ 已写入平滑后组合权重，日期: {trade_date}")
+    logger.info(
+        f"✅ store_portfolio done | pid={portfolio_id} date={trade_date} "
+        f"kept={len(codes_kept)}/{len(codes)} eps={eps}"
+    )

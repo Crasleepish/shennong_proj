@@ -39,8 +39,8 @@ def portfolio_opt_rt():
     
 from app.service.portfolio_crud import query_weights_by_date
 
-@service_bp.route("/weights", methods=["GET"])
-def get_weights_by_date():
+@service_bp.route("/weights/<int:portfolio_id>", methods=["GET"])
+def get_weights_by_date(portfolio_id: int):
     """
     查询指定交易日的组合权重（ewma平滑后）
     """
@@ -49,7 +49,7 @@ def get_weights_by_date():
         if not date:
             return jsonify({"message": "缺少参数: date"}), 400
 
-        result = query_weights_by_date(date)
+        result = query_weights_by_date(date, portfolio_id)
         return jsonify(result)
 
     except Exception as e:
@@ -226,8 +226,12 @@ def route_portfolio_assets_upsert(portfolio_id: int):
     {
       "asset_source_map": {"008114.OF": "factor", ...},
       "code_factors_map": {"008114.OF": ["MKT","SMB","HML","QMJ"], ...},
-      "view_codes": ["008114.OF", ...]
+      "view_codes": ["008114.OF", ...],
+      "params": {"post_view_tau": "0.07", "alpha": "0.1", "variance": "0.01"}
     }
+    post_view_tau: black-litterman后验观点融合系数，越大代表预测观点对模型结果影响越强，通常取0.05-0.3
+    alpha: 每日权重的移动平滑系数，通常取0.01-0.2
+    variance: 组合优化的方差约束，表示最大能容忍的方差（注意不是标准差，是标准差的平方），通常取0.0006-0.1
     """
     body = request.get_json(silent=True) or {}
     try:
@@ -236,6 +240,7 @@ def route_portfolio_assets_upsert(portfolio_id: int):
             asset_source_map=body.get("asset_source_map") or {},
             code_factors_map=body.get("code_factors_map") or {},
             view_codes=body.get("view_codes") or [],
+            params=body.get("params"),
         )
     except (ValueError, BadRequest) as e:
         return jsonify({"error": str(e)}), 400
@@ -266,4 +271,5 @@ def route_find_support_assets():
     asset_list = find_support_assets(asof_trade_date_str, epsilon=0.03, M=4096, topk_per_iter=32, debug=True)
     if not asset_list:
         return jsonify({"message": "发现支撑资产失败"}), 200
+    logger.info(f"发现支持资产: {asset_list}")
     return jsonify({"message": "succuess", "data": asset_list}), 200

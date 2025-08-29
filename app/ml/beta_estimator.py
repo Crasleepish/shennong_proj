@@ -11,6 +11,7 @@ from app.ml.kalman_beta.q_r_estimator import _bootstrap_qr_from_history
 import logging
 from datetime import timedelta
 from app.data_fetcher import CalendarFetcher
+from app.utils.cov_packer import unpack_covariance
 
 FACTOR_NAMES = ["MKT", "SMB", "HML", "QMJ"]
 logger = logging.getLogger(__name__)
@@ -75,8 +76,8 @@ def run_realtime_update(fund_code: str, start_date: str = None, end_date: str = 
         
     z_prev = np.array([latest.MKT, latest.SMB, latest.HML, latest.QMJ, latest.const]).reshape(-1, 1)
     P_prev = (
-        np.array(json.loads(latest.P_json))
-        if pd.notna(latest.P_json)
+        unpack_covariance(latest.P_bin, "{\"dtype\": \"float32\", \"n\": 5}")
+        if pd.notna(latest.P_bin)
         else np.diag([1.0, 1.0, 1.0, 1.0, 0.1])
     )
     start_date = (latest.date + timedelta(days=1)).strftime("%Y-%m-%d")

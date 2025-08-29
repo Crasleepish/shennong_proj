@@ -49,6 +49,17 @@
         placeholder='例如：["H11004.CSI","Au99.99.SGE","008114.OF"]'
       />
     </div>
+
+    <!-- view_codes -->
+    <div>
+      <div class="font-semibold mb-1">params</div>
+      <el-input
+        v-model="paramsText"
+        type="textarea"
+        :autosize="{ minRows: 5 }"
+        placeholder='例如：{"post_view_tau": 0.07, "alpha": 0.1, "variance": 0.01}'
+      />
+    </div>
   </div>
   <!-- 查找全市场支撑资产 -->
   <div class="mt-8 border-t pt-4">
@@ -92,6 +103,7 @@ const saving = ref(false)
 const assetSourceMapText = ref<string>('')
 const codeFactorsMapText = ref<string>('')
 const viewCodesText = ref<string>('')
+const paramsText = ref<string>('')
 
 // 接口响应中的 portfolio_id
 const respPortfolioId = ref<number | undefined>(undefined)
@@ -137,9 +149,11 @@ function formatAll() {
   const a = safeParseJSON(assetSourceMapText.value || '{}', 'asset_source_map')
   const b = safeParseJSON(codeFactorsMapText.value || '{}', 'code_factors_map')
   const c = safeParseJSON(viewCodesText.value || '[]', 'view_codes')
+  const d = safeParseJSON(paramsText.value || '{}', 'params')
   if (a) assetSourceMapText.value = prettyJSON(a)
   if (b) codeFactorsMapText.value = prettyJSON(b)
   if (c) viewCodesText.value = prettyJSON(c)
+  if (d) paramsText.value = prettyJSON(d)
 }
 
 // --- 查询 ---
@@ -168,6 +182,7 @@ async function onQuery() {
     assetSourceMapText.value = prettyJSON(data?.asset_source_map ?? {})
     codeFactorsMapText.value = prettyJSON(data?.code_factors_map ?? {})
     viewCodesText.value = prettyJSON(data?.view_codes ?? [])
+    paramsText.value = prettyJSON(data?.params ?? {})
 
     ElMessage.success('查询成功')
   } catch (e) {
@@ -184,8 +199,9 @@ async function onSubmit() {
   const assetSourceMap = safeParseJSON(assetSourceMapText.value || '{}', 'asset_source_map')
   const codeFactorsMap = safeParseJSON(codeFactorsMapText.value || '{}', 'code_factors_map')
   const viewCodes = safeParseJSON(viewCodesText.value || '[]', 'view_codes')
+  const params = safeParseJSON(paramsText.value || '{}', 'params')
 
-  if (!assetSourceMap || !codeFactorsMap || !viewCodes) return
+  if (!assetSourceMap || !codeFactorsMap || !viewCodes || !params) return
 
   // 基本类型校验（可按需再严格一些）
   if (!isRecordStringString(assetSourceMap)) {
@@ -198,6 +214,10 @@ async function onSubmit() {
   }
   if (!isStringArray(viewCodes)) {
     ElMessage.error('view_codes 必须是 string[]')
+    return
+  }
+  if (!isRecordStringString(params)) {
+    ElMessage.error('params 必须是 { [code: string]: string }')
     return
   }
 
@@ -218,7 +238,8 @@ async function onSubmit() {
       body: JSON.stringify({
         asset_source_map: assetSourceMap,
         code_factors_map: codeFactorsMap,
-        view_codes: viewCodes
+        view_codes: viewCodes,
+        params: params
       })
     })
     if (!res.ok) {
