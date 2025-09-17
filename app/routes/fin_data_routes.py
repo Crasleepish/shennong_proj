@@ -773,8 +773,10 @@ def update_historical_dynamic_beta():
     end_date = data.get("end_date")
 
     if not fund_codes:
-        df_all = get_all_fund_codes_with_source(asset_type)
+        df_all = get_all_fund_codes_with_source(asset_type, end_date=end_date)
         type_codes_map = df_all.groupby("source")["fund_code"].apply(list).to_dict()
+    else:
+        type_codes_map = {asset_type: fund_codes}
 
     if not start_date or not end_date:
         return jsonify({"status": "error", "message": "请提供 start_date 和 end_date"}), 400

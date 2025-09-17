@@ -3,7 +3,7 @@
 import pandas as pd
 import numpy as np
 import json
-from sqlalchemy import select, func, desc, and_, literal_column
+from sqlalchemy import select, func, desc, and_, literal_column, literal
 from sqlalchemy.orm import aliased
 from app.database import get_db
 from app.models.fund_models import FundBeta
@@ -71,27 +71,39 @@ class FundBetaDao:
             fi = aliased(FundInfo)
             fb = aliased(FundBeta)
 
-            subq = (
-                select(
-                    fb.code,
-                    func.max(fb.date).label("max_date")
-                )
-                .where(
-                    fb.date <= pd.to_datetime(as_of_date) if as_of_date is not None else True
-                )
-                .group_by(fb.code)
-                .subquery()
-            )
-
-            stmt = (
+            # 子查询：每个基金最新的一条 beta 记录
+            latest_beta_subq = (
                 select(fb)
-                .join(fi, fi.fund_code == fb.code)
-                .join(subq, and_(
-                    fb.code == subq.c.code,
-                    fb.date == subq.c.max_date
-                ))
+                .where(
+                    fb.code == fi.fund_code,
+                    fb.date <= pd.to_datetime(as_of_date) if as_of_date else literal(True)
+                )
+                .order_by(desc(fb.date))
+                .limit(1)
+                .lateral()
             )
 
+            # 主查询
+            stmt = (
+                select(
+                    fi.fund_code,
+                    fi.fund_name,
+                    fi.fund_type,
+                    fi.invest_type,
+                    fi.found_date,
+                    literal_column("fb.code").label("code"),
+                    literal_column("fb.\"date\"").label("date"),
+                    literal_column("fb.\"MKT\"").label("MKT"),
+                    literal_column("fb.\"SMB\"").label("SMB"),
+                    literal_column("fb.\"HML\"").label("HML"),
+                    literal_column("fb.\"QMJ\"").label("QMJ"),
+                    literal_column("fb.const").label("const"),
+                )
+                .select_from(fi)
+                .join(latest_beta_subq.alias("fb"), literal_column("true"), isouter=False)
+            )
+
+            # 过滤条件
             if fund_type_list:
                 stmt = stmt.where(fi.fund_type.in_(fund_type_list))
             if invest_type_list:
@@ -99,6 +111,7 @@ class FundBetaDao:
             if found_date_limit:
                 stmt = stmt.where(fi.found_date <= pd.to_datetime(found_date_limit))
 
+            # 查询为 DataFrame
             df = pd.read_sql(stmt, db.bind)
         return df
 
@@ -141,7 +154,7 @@ class FundBetaDao:
         return df
 
     @staticmethod
-    def upsert_one(code: str, date: str, betas: dict, P: np.ndarray = None):
+    def upsert_one(code: str, date: str, betas: dict, P: np.ndarray = None, log_nav_true: float = None, log_nav_fit: float = None, output_p_json: bool = True):
         data = {
             "code": code,
             "date": pd.to_datetime(date),
@@ -150,23 +163,17 @@ class FundBetaDao:
         if P is not None:
             P_binary, _ = pack_covariance(P)
             data["P_bin"] = P_binary
+            if output_p_json:
+                data["P_json"] = json.dumps(P.tolist())
+        
+        if log_nav_true is not None:
+            data["log_nav_true"] = log_nav_true
+        
+        if log_nav_fit is not None:
+            data["log_nav_fit"] = log_nav_fit
             
         obj = FundBeta(**data)
         with get_db() as db:
             db.merge(obj)
             db.commit()
 
-    @staticmethod
-    def upsert_batch(df: pd.DataFrame):
-        if df.empty:
-            logger.warning("空 DataFrame，跳过批量 upsert")
-            return
-        with get_db() as db:
-            count = 0
-            for _, row in df.iterrows():
-                clean_row = row.dropna().to_dict()
-                obj = FundBeta(**clean_row)
-                db.merge(obj)
-                count += 1
-            db.commit()
-            logger.info("批量 upsert FundBeta 共 %d 条", count)

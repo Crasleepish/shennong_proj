@@ -44,7 +44,7 @@ def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str, po
     net_value_df = pd.DataFrame()
 
     if factor_codes:
-        df_beta = load_fund_betas(factor_codes, trade_date, lookback_days=90)
+        df_beta = load_fund_betas(factor_codes, trade_date, lookback_days=365)
         df_factors = factor_data_reader.read_daily_factors(end=trade_date)[["MKT", "SMB", "HML", "QMJ"]].dropna()
         for code in factor_codes:
             beta = df_beta.loc[code].values
@@ -96,7 +96,7 @@ def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str, po
         else:
             view_asset_source_map = {code: asset_source_map[code] for code in view_codes if code in asset_source_map}
             view_code_factors_map = {code: code_factors_map[code] for code in view_codes if code in code_factors_map}
-        P, q, omega, code_list_view = build_bl_views(view_asset_source_map, view_code_factors_map, trade_date, dict(zip(code_list_mu, mu_prior)))
+        P, q, omega, code_list_view = build_bl_views(view_asset_source_map, view_code_factors_map, trade_date, dict(zip(code_list_mu, mu_prior)), window=window)
 
         # 提取观点相关子集，将先验mu和Sigma调整与顺序与code_list_view一致
         view_indices = [fund_codes.index(code) for code in code_list_view]
@@ -377,7 +377,7 @@ def build_real_time_date(intraday_factors, est_index_values):
     return additional_factor_df, additional_map
 
 
-def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict[str, pd.DataFrame], asset_source_map: dict, code_factors_map: dict, trade_date: str, post_view_tau: float, variance: float, view_codes: List[str] = None):
+def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict[str, pd.DataFrame], asset_source_map: dict, code_factors_map: dict, trade_date: str, post_view_tau: float, variance: float, view_codes: List[str] = None, window: int = 20):
     """根据预测收益执行组合优化，输出最优权重
         additional_factor_df: pd.DataFrame - 额外的因子数据
         additional_map: dict[str, pd.DataFrame] - 额外的数据字典
@@ -432,11 +432,11 @@ def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict
     net_value_df = net_value_df.ffill().sort_index()
 
     # 2. 构造先验收益与协方差矩阵（使用净值曲线）
-    mu_prior, Sigma, code_list_mu = compute_prior_mu_sigma(net_value_df, window=20, method="linear")
+    mu_prior, Sigma, code_list_mu = compute_prior_mu_sigma(net_value_df, window=window, method="linear")
 
     # 计算现金类资产的平均收益仅用滚动最近一年的数据进行计算，由于计算方式与其它资产不同，这里单独处理
     cash_net_value_df = net_value_df[cash_codes]
-    cash_mu_series = compute_prior_mu_fixed_window(cash_net_value_df, window=20, lookback_days=252, method="linear")
+    cash_mu_series = compute_prior_mu_fixed_window(cash_net_value_df, window=window, lookback_days=252, method="linear")
     cash_mu_idx = [code_list_mu.index(x) for x in cash_codes]
     for cash_code_idx, fund_code_idx in enumerate(cash_mu_idx):
         mu_prior[fund_code_idx] = cash_mu_series[cash_codes[cash_code_idx]]
@@ -457,7 +457,7 @@ def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict
         else:
             view_asset_source_map = {code: asset_source_map[code] for code in view_codes if code in asset_source_map}
             view_code_factors_map = {code: code_factors_map[code] for code in view_codes if code in code_factors_map}
-        P, q, omega, code_list_view = build_bl_views(view_asset_source_map, view_code_factors_map, trade_date, dict(zip(code_list_mu, mu_prior)), dataset_builder)
+        P, q, omega, code_list_view = build_bl_views(view_asset_source_map, view_code_factors_map, trade_date, dict(zip(code_list_mu, mu_prior)), dataset_builder, window=window)
 
         # 提取观点相关子集，将先验mu和Sigma调整与顺序与code_list_view一致
         view_indices = [fund_codes.index(code) for code in code_list_view]

@@ -16,7 +16,7 @@ def upsert_portfolio_assets(
     asset_source_map: Dict[str, str],
     code_factors_map: Dict[str, List[str]],
     view_codes: List[str],
-    params: Optional[Dict[str, Any]] = None,   # ← 新增
+    params: Optional[Dict[str, Any]] = None,
 ) -> dict:
     """不存在则插入，存在则整体更新。"""
 

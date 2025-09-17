@@ -48,6 +48,9 @@ class FundBeta(Base):
 
     P_json = Column("P_json", Text, nullable=True)
     P_bin = Column("P_bin", LargeBinary, nullable=True)
+    log_nav_fit = Column("log_nav_fit", Float, nullable=True) #历史累计对数收益
+    log_nav_true = Column("log_nav_true", Float, nullable=True)  #拟合的历史累计收益，用于ECM（误差修正项，在观测里加净值偏差）
+    gamma = Column("gamma", Float, nullable=True)
 
     __table_args__ = (
         Index("idx_fund_beta_date", "date"),  # 新增索引

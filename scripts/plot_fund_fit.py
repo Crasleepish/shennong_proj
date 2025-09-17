@@ -47,6 +47,8 @@ def load_data(fund_code: str, start: str | None, end: str | None) -> tuple[pd.Da
     beta_df = beta_df.reset_index() if 'date' not in beta_df.columns else beta_df
     beta_df['date'] = pd.to_datetime(beta_df['date'])
     beta_df = beta_df.set_index("date", drop=False)
+    beta_df = beta_df.sort_index()
+    #beta_df[:] = beta_df.iloc[-1,:]
 
     need_cols = ['date'] + FACTOR_COLS + ["const"]
     missing = [c for c in need_cols if c not in beta_df.columns]
@@ -68,7 +70,7 @@ def build_curves(fund_ret_df: pd.DataFrame, factor_df: pd.DataFrame, beta_df: pd
       nav_fit:  拟合累计净值（起点归一到1.0）
     """
     # 先把因子与β合并（按同一日期）
-    df = pd.merge(factor_df, beta_df, left_index=True, right_index=True, how='inner', suffixes=('', '_beta')).sort_index()
+    df = pd.merge(factor_df, beta_df, left_index=True, right_index=True, how='left', suffixes=('', '_beta')).sort_index()
     # 再与基金真实日收益合并，取三者共有区间
     df = pd.merge(df, fund_ret_df, left_index=True, right_index=True, how='inner').sort_index()
 
@@ -77,7 +79,7 @@ def build_curves(fund_ret_df: pd.DataFrame, factor_df: pd.DataFrame, beta_df: pd
     beta_mat = df[[c for c in BETA_COLS]].to_numpy(dtype=float)  # [MKT,SMB,HML,QMJ,const]
     factor_mat = df[FACTOR_COLS].to_numpy(dtype=float)          # [MKT,SMB,HML,QMJ]
 
-    r_fit = (beta_mat[:, :4] * factor_mat).sum(axis=1)
+    r_fit = (beta_mat[:, :4] * factor_mat).sum(axis=1) + beta_mat[:, 4]
     df['r_fit'] = r_fit.astype(float)
 
     # 实际与拟合累计净值（归一到1.0）

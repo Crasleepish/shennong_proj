@@ -9,7 +9,9 @@ def build_view_matrix(
     softprob_dict: Dict[str, np.ndarray],
     label_to_ret: Dict[str, List[float]],
     mu_prior: Dict[str, float],
-    asset_codes: List[str] = None
+    asset_codes: List[str] = None,
+    window: int = 20,
+    eps_var: float = 1e-10
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]:
     """
     构造 Black–Litterman 所需的 P, q, omega，仅使用“绝对观点”。
@@ -34,16 +36,16 @@ def build_view_matrix(
 
     pred_mu = {}
     pred_var = {}
+    valid_factors = ["MKT", "SMB", "HML", "QMJ"]
 
     for code in code_list:
         mu = 0
         var = 0
-        valid_factors = df_beta.columns[df_beta.loc[code] != 0].tolist()
         for f in valid_factors:
-            probs = softprob_dict[f]
-            labels_ret = label_to_ret[f]
-            expected_ret = np.dot(probs, labels_ret)
-            variance = np.dot(probs, (np.array(labels_ret) - expected_ret) ** 2)
+            probs  = np.asarray(softprob_dict[f], dtype=float)      # e.g. [p0,p1,p2]
+            labels_ret = np.asarray(label_to_ret[f], dtype=float)       # e.g. [-0.02,0,0.02]，已为（window）日
+            expected_ret = float(np.dot(probs, labels_ret))
+            variance = float(np.dot(probs, (labels_ret - expected_ret) ** 2))
             beta = df_beta.loc[code, f]
             mu += beta * expected_ret
             var += (beta ** 2) * variance

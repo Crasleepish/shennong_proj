@@ -26,7 +26,8 @@ def build_bl_views(
     code_factors_map: dict,
     trade_date: str,
     mu_prior: dict,
-    dataset_builder: DatasetBuilder = None
+    dataset_builder: DatasetBuilder = None,
+    window: int = 20
 ) -> Tuple:
     """
     构造 Black-Litterman 所需的观点：P, q, omega, code_list。
@@ -66,7 +67,8 @@ def build_bl_views(
         softprob_dict=softprob_dict,
         label_to_ret=label_to_ret,
         mu_prior=mu_prior,
-        asset_codes=list(code_type_map.keys())
+        asset_codes=list(code_type_map.keys()),
+        window=window
     )
     return P, q, omega, code_list
 

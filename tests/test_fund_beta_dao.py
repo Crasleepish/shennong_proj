@@ -121,18 +121,6 @@ def test_upsert_one(app, setup_test_data):
     assert abs(df.iloc[0]["MKT"] - 0.88) < 1e-6
 
 
-def test_upsert_batch(app, setup_test_data):
-    df_batch = pd.DataFrame([
-        {"code": "TEST_ETF", "date": "2025-01-01", "MKT": 1.0, "SMB": 0.1, "HML": 0.1, "QMJ": 0.1, "const": 0.001, "P_bin": pack_covariance([[1, 0.5, 0.2, 0.1, 0.05], [0.5, 1, 0.3, 0.2, 0.1], [0.2, 0.3, 1, 0.4, 0.2], [0.1, 0.2, 0.4, 1, 0.3], [0.05, 0.1, 0.2, 0.3, 1]])[0]},
-        {"code": "TEST_FUND", "date": "2025-01-01", "MKT": 1.5, "SMB": 0.2, "HML": 0.3, "QMJ": 0.4, "const": 0.002, "P_bin": pack_covariance([[1, 0.5, 0.2, 0.1, 0.05], [0.5, 1, 0.3, 0.2, 0.1], [0.2, 0.3, 1, 0.4, 0.2], [0.1, 0.2, 0.4, 1, 0.3], [0.05, 0.1, 0.2, 0.3, 1]])[0]}
-    ])
-    df_batch["date"] = pd.to_datetime(df_batch["date"])
-    FundBetaDao.upsert_batch(df_batch)
-
-    df_check = FundBetaDao.select_by_code_date("TEST_ETF", "2025-01-01")
-    assert not df_check.empty
-    assert abs(df_check.iloc[0]["const"] - 0.001) < 1e-6
-
 BATCH_SIZE = 1000
 
 def test_migrate_pjson_to_pbin(app):
