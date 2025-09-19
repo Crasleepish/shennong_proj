@@ -1,0 +1,15 @@
+# 所有文本文件都存储为 LF
+* text=auto eol=lf
+
+# 常见代码文件强制 LF
+*.sh  text eol=lf
+*.py  text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.md  text eol=lf
+
+# 二进制文件要标记成 binary，避免被误改
+*.png binary
+*.jpg binary
+*.pdf binary
+*.exe binary
