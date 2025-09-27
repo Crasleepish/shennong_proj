@@ -168,6 +168,8 @@ def run_backtest(start="2022-12-22", end="2024-12-22", window=20):
         weights_df = weights_df.dropna(how='all').fillna(0)
         price_df = price_df.loc[weights_df.index]
 
+        
+
         # === 处理权重序列 ===
         d = 0.005  # 偏差百分比阈值
         rebalance_dates = [weights_df.index[0]]

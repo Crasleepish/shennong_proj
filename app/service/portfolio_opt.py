@@ -21,7 +21,7 @@ from app.backtest.backtest_engine import BacktestConfig
 from app.dao.betas_dao import FundBetaDao
 from app.service.portfolio_crud import query_latest_portfolio_by_id
 from app.data_fetcher import CalendarFetcher
-from app.ml.black_litterman_opt_util import load_fund_betas, compute_prior_mu_sigma, compute_prior_mu_fixed_window, build_bl_views, compute_bl_posterior, optimize_mean_variance
+from app.ml.black_litterman_opt_util import load_fund_betas, load_fund_const, compute_prior_mu_sigma, compute_prior_mu_fixed_window, build_bl_views, compute_bl_posterior, optimize_mean_variance
 from app.service.portfolio_crud import query_weights_by_date, store_portfolio, query_cov_matrix_by_date
 from app.service.portfolio_assets_service import get_portfolio_assets
 
@@ -121,6 +121,18 @@ def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str, po
         mu_post_full = mu_prior_full
         Sigma_full = Sigma_full
 
+    # === α 调整（一次性水平项，不进入协方差）,这里的α指的是因子归因分析后剩下的常数项 ===
+    fund_const = load_fund_const(factor_codes, trade_date)
+    const_dict = fund_const.rolling(window=window, min_periods=window).sum().dropna(how='all').mean().to_dict()
+    const_dict = _robust_clip_const(const_dict)
+    lambda_alpha = 0.2  # 可调：0.1~0.3 较稳健
+
+    # 非factor类型资产没有const，默认为0
+    alpha_day = np.array([const_dict.get(code, 0.0) for code in fund_codes], dtype=float)
+
+    # 只调整 μ，不调整 Σ，避免“alpha 一言堂”的波动放大
+    mu_post_full = mu_post_full + lambda_alpha * alpha_day
+    
     # 4. Max Sharpe 组合优化
     # weights, expected_return, expected_vol = optimize_max_sharpe(mu_post_full, Sigma_full)
     weights, expected_return, expected_vol = optimize_mean_variance(mu_post_full, Sigma_full, variance)
@@ -405,7 +417,7 @@ def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict
     net_value_df = pd.DataFrame()
 
     if factor_codes:
-        df_beta = load_fund_betas(factor_codes, trade_date)
+        df_beta = load_fund_betas(factor_codes, trade_date, lookback_days=365)
         df_factors = factor_data_reader.read_daily_factors(end=trade_date)[["MKT", "SMB", "HML", "QMJ"]].dropna()
         for code in factor_codes:
             beta = df_beta.loc[code].values
@@ -481,6 +493,18 @@ def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict
     else:
         mu_post_full = mu_prior_full
         Sigma_full = Sigma_full
+
+    # === α 调整（一次性水平项，不进入协方差）,这里的α指的是因子归因分析后剩下的常数项 ===
+    fund_const = load_fund_const(factor_codes, trade_date)
+    const_dict = fund_const.rolling(window=window, min_periods=window).sum().dropna(how='all').mean().to_dict()
+    const_dict = _robust_clip_const(const_dict)
+    lambda_alpha = 0.2  # 可调：0.1~0.3 较稳健
+
+    # 非factor类型资产没有const，默认为0
+    alpha_day = np.array([const_dict.get(code, 0.0) for code in fund_codes], dtype=float)
+
+    # 只调整 μ，不调整 Σ，避免“alpha 一言堂”的波动放大
+    mu_post_full = mu_post_full + lambda_alpha * alpha_day
 
     # 4. Max Sharpe 组合优化
     # weights, expected_return, expected_vol = optimize_max_sharpe(mu_post_full, Sigma_full)
@@ -601,8 +625,10 @@ def optimize_portfolio_history(portfolio_id: int, start_date: str = None, end_da
     else:
         latest_portfolio = query_latest_portfolio_by_id(portfolio_id, start_date)
         if latest_portfolio.empty:
-            raise ValueError("没有历史优化权重")
-        prev_weights = latest_portfolio["weights_ewma"]
+            prev_weights = None
+            logger.warning(f"⚠️ {portfolio_id} 没有历史优化权重")
+        else:
+            prev_weights = latest_portfolio["weights_ewma"]
 
     all_dates = CalendarFetcher().get_trade_date(start=start_date.replace("-", ""), end=end_date.replace("-", ""), format="%Y-%m-%d", ascending=True)
 
@@ -671,3 +697,43 @@ def compute_diverge(portfolio_id: int, trade_date: str, current_w: dict, target_
     tracking_error = np.sqrt(diff.T @ cov @ diff)
 
     return tracking_error
+
+def _robust_clip_const(const_dict: dict) -> dict:
+    """
+    输入 const_dict（{code: const}），将所有 value 按 (均值 ± 3*标准差) 做裁剪，
+    返回裁剪后的新 dict。不改变原 dict。
+
+    说明：
+    - 均值与标准差使用 np.nanmean / np.nanstd 计算（忽略不可转为 float 或 NaN 的值）。
+    - 对于无法转成 float 的值（如 None、字符串非数值），原样保留。
+    """
+    if not const_dict:
+        return {}
+
+    # 收集数值，无法转 float 的记为 NaN（后续在 mean/std 中忽略）
+    vals = []
+    for v in const_dict.values():
+        try:
+            vals.append(float(v))
+        except Exception:
+            vals.append(np.nan)
+
+    # 若全是 NaN，则直接返回原 dict
+    if not np.isfinite(np.nanmean(vals)):
+        return dict(const_dict)
+
+    mu = float(np.nanmean(vals))
+    sigma = float(np.nanstd(vals))
+    lo, hi = mu - 2.0 * sigma, mu + 2.0 * sigma
+
+    # 逐项裁剪；不可转 float 的值原样返回
+    clipped = {}
+    for k, v in const_dict.items():
+        try:
+            x = float(v)
+            # np.clip 对 NaN 会返回 NaN，这里保持一致
+            clipped[k] = float(np.clip(x, lo, hi)) if np.isfinite(x) else x
+        except Exception:
+            clipped[k] = v
+
+    return clipped

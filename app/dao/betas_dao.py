@@ -114,6 +114,56 @@ class FundBetaDao:
             # 查询为 DataFrame
             df = pd.read_sql(stmt, db.bind)
         return df
+    
+    @staticmethod
+    def get_all_betas_by_type_cond(
+        fund_type_list=None,
+        invest_type_list=None,
+        found_date_limit: str = None,
+        as_of_date: str = None,
+        start_date: str = None,
+    ) -> pd.DataFrame:
+        with get_db() as db:
+            fi = aliased(FundInfo)
+            fb = aliased(FundBeta)
+
+            # 基础查询：按基金基本信息筛选，再取其所有（至 as_of_date 之前）的 beta 记录
+            stmt = (
+                select(
+                    fi.fund_code,
+                    fb.code.label("code"),
+                    fb.date.label("date"),
+                    fb.MKT.label("MKT"),
+                    fb.SMB.label("SMB"),
+                    fb.HML.label("HML"),
+                    fb.QMJ.label("QMJ"),
+                    fb.const.label("const"),
+                    fb.P_bin.label("P_bin")
+                )
+                .select_from(fi)
+                .join(fb, fb.code == fi.fund_code, isouter=False)
+            )
+
+            # 基于基金属性的过滤
+            if fund_type_list:
+                stmt = stmt.where(fi.fund_type.in_(fund_type_list))
+            if invest_type_list:
+                stmt = stmt.where(fi.invest_type.in_(invest_type_list))
+            if found_date_limit:
+                stmt = stmt.where(fi.found_date <= pd.to_datetime(found_date_limit))
+
+            # 截止日期过滤（仅取 as_of_date 及之前的 beta 记录）
+            if as_of_date:
+                stmt = stmt.where(fb.date <= pd.to_datetime(as_of_date))
+            
+            if start_date:
+                stmt = stmt.where(fb.date >= pd.to_datetime(start_date))
+
+            # 排序：先按代码，再按日期
+            stmt = stmt.order_by(fb.code.asc(), fb.date.asc())
+
+            df = pd.read_sql(stmt, db.bind)
+        return df
 
     @staticmethod
     def get_latest_etf_betas(
@@ -177,3 +227,34 @@ class FundBetaDao:
             db.merge(obj)
             db.commit()
 
+
+    @staticmethod
+    def select_const_by_code(codes: list, date: str = None) -> pd.DataFrame:
+        """
+        输入: codes - List[str]，资产代码列表
+        输出: DataFrame，index=日期(date)，columns=code，values=FundBeta.const
+        """
+        if not codes:
+            return pd.DataFrame()
+
+        with get_db() as db:
+            query = (
+                db.query(
+                    FundBeta.date.label("date"),
+                    FundBeta.code.label("code"),
+                    FundBeta.const.label("const"),
+                )
+                .filter(FundBeta.code.in_(codes), FundBeta.date <= pd.to_datetime(date))
+            )
+            df = pd.read_sql(query.statement, db.bind)
+
+        if df.empty:
+            return pd.DataFrame()
+
+        df["date"] = pd.to_datetime(df["date"])
+        # 同一(date, code)若有多条记录，取最后一条（按读取顺序的“last”）
+        df_pivot = (
+            df.pivot_table(index="date", columns="code", values="const", aggfunc="last")
+              .sort_index()
+        )
+        return df_pivot

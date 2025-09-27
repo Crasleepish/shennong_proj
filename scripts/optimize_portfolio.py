@@ -10,7 +10,6 @@ from app.data_fetcher.factor_data_reader import FactorDataReader
 from app.data_fetcher.csi_index_data_fetcher import CSIIndexDataFetcher
 from app.dao.fund_info_dao import FundHistDao
 from app import create_app
-from app.ml.black_litterman_opt_util import load_fund_betas, compute_prior_mu_sigma, compute_prior_mu_fixed_window, build_bl_views, compute_bl_posterior, optimize_mean_variance
 from app.service.portfolio_opt import optimize
 from app.service.portfolio_assets_service import get_portfolio_assets
 

@@ -6,9 +6,8 @@ from app.data.helper import get_fund_daily_return_for_beta_regression, get_etf_d
 from app.dao.stock_info_dao import MarketFactorsDao
 from app.dao.betas_dao import FundBetaDao
 from app.ml.kalman_beta.kalman_filter import KalmanFilter
-from app.ml.kalman_beta import QREstimator, ResidualDebiasor
+from app.ml.kalman_beta import QREstimator
 from app.ml.kalman_beta.q_r_estimator import _bootstrap_qr_from_history
-from app.ml.kalman_beta.residual_debiasor import _bootstrap_debiasor_from_history
 import logging
 from datetime import timedelta
 from app.data_fetcher import CalendarFetcher
@@ -151,10 +150,33 @@ def run_realtime_update(
         # 要从某天开始，则看它的前一交易日是否有记录
         pre_date = CalendarFetcher().get_prev_trade_date(start_date.replace("-", ""))
         latest_df = FundBetaDao.select_by_code_date(fund_code, pre_date)
+
         if not latest_df.empty:
             latest = latest_df.iloc[0]
+            # 要检查的列
+            target_columns = ['MKT', 'SMB', 'HML', 'QMJ', 'P_bin', 'log_nav_fit', 'log_nav_true', 'gamma']
+            # 检查这些列中是否存在NaN/None
+            has_nan = latest[target_columns].isna().any()
+            if has_nan:
+                logger.warning(f"{fund_code} 的历史记录中存在NaN/None，继续查询所有历史beta数据。")
+                latest = None
+                all_df = FundBetaDao.select_all_by_code_date(fund_code)
+                # 寻找指定列全为有效值的最新日期数据
+                valid_mask = all_df[target_columns].notna().all(axis=1)
+                valid_records = all_df[valid_mask]
+                # 如果没有有效记录，令latest=None，后续走全量重跑
+                if valid_records.empty:
+                    latest = None
+                else:
+                    latest = valid_records.sort_values("date", ascending=False).iloc[0]
+                    # 如果最新有效记录距离当前交易日的间隔超过5天，则函数返回
+                    if (pd.to_datetime(start_date) - pd.to_datetime(latest["date"])).days > 5:
+                        logger.warning(f"{fund_code} 的最新有效记录距离当前交易日已超过5天，该基金近期都没有有效净值数据，可能已被清盘，函数返回。")
+                        return
         elif not fallback_to_full:
             raise ValueError("未找到start_date之前的历史状态记录，且未启用fallback_to_full。")
+        else:
+            latest = None
     else:
         # 未指定start_date，则取表里的最后一条作为断点
         latest_df = FundBetaDao.select_latest_by_code(fund_code)
@@ -250,8 +272,13 @@ def run_realtime_update(
         log_nav_fit  += np.log1p(y_fit_pred)
 
         # —— 入库：仅前 5 维 + P + 累计log净值 —— 
-        z_plain = z[:5, :].flatten().tolist()
+        z_all = z.flatten().tolist()                 # 长度 = 6 : 4 beta + alpha + gamma
+        z_plain = z_all[:5]                          # 前5维：MKT, SMB, HML, QMJ, const
+        gamma_val = z_all[5]                         # 第6维：gamma（ECM 系数）
+
         beta_dict = dict(zip(FACTOR_NAMES + ["const"], (safe_value(v) for v in z_plain)))
+        beta_dict["gamma"] = safe_value(gamma_val)
+        
         FundBetaDao.upsert_one(
             fund_code,
             idx_date.strftime("%Y-%m-%d"),

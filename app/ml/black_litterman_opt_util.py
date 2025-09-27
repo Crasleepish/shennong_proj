@@ -21,6 +21,11 @@ def load_fund_betas(codes: List[str], trade_date: str, lookback_days: int = 365)
     df = df[df.index.isin(codes)]
     return df[["MKT", "SMB", "HML", "QMJ"]]
 
+def load_fund_const(codes: List[str], trade_date: str) -> pd.DataFrame:
+    some_days_ago = (pd.to_datetime(trade_date)).strftime('%Y-%m-%d')
+    df = FundBetaDao.select_const_by_code(codes, some_days_ago)
+    return df
+
 def build_bl_views(
     code_type_map: dict,
     code_factors_map: dict,
@@ -67,8 +72,7 @@ def build_bl_views(
         softprob_dict=softprob_dict,
         label_to_ret=label_to_ret,
         mu_prior=mu_prior,
-        asset_codes=list(code_type_map.keys()),
-        window=window
+        asset_codes=list(code_type_map.keys())
     )
     return P, q, omega, code_list
 
@@ -78,45 +82,80 @@ def ewma_cov(
     adaptive: bool = True,
     lambda_min: float = 0.95,
     lambda_max: float = 0.99,
-    gamma: float = 0.025
+    gamma: float = 0.025,
+    jitter: float = 1e-10
 ) -> np.ndarray:
     """
-    自适应 EWMA 协方差估计
+    自适应 EWMA 协方差估计（权重归一、加权均值去中心、向量化、PSD 处理）
 
     参数：
-        ret: 收益率 DataFrame（行=时间，列=资产）
-        lambda_: 默认衰减因子
-        adaptive: 是否启用自适应 λ
-        lambda_min/max: λ 的上下限
-        gamma: λ对短期波动的响应强度
+        ret        : pd.DataFrame
+                     收益率矩阵，行=时间（按先后排序），列=资产代码/名称。元素为同一口径的
+                     日/周/月算术收益（与下游优化所用口径一致）。
+
+        lambda_    : float，默认 0.975
+                     EWMA 衰减因子（固定值）。越接近 1，历史越“长”、平滑越强；越小则更敏感于近期。
+
+        adaptive   : bool，默认 True
+                     是否启用“自适应 λ”。开启后，会根据“短期/长期”市场波动比自动调整 λ，
+                     在高波动期降低 λ（更敏感），低波动期提高 λ（更平滑）。
+
+        lambda_min : float，默认 0.95
+                     自适应 λ 的下界（防止 λ 被调得过小导致噪声过大）。
+
+        lambda_max : float，默认 0.99
+                     自适应 λ 的上界（防止 λ 被调得过大导致响应过慢）。
+
+        gamma      : float，默认 0.025
+                     自适应强度系数。自适应公式近似为：lambda_adapted = clip(1 - gamma * ratio, lambda_min, lambda_max)，
+                     其中 ratio 为“10日平均波动 / 250日平均波动”的最新比值。gamma 越大，λ 对短期波动越敏感。
+
+        jitter     : float，默认 1e-10
+                     数值稳健用的对角微扰。返回前对协方差矩阵加 jitter*I，确保数值上对称且（近）正定，
+                     便于后续求逆/分解。
 
     返回：
-        协方差矩阵 ndarray
+        np.ndarray，形状 (n_assets, n_assets)
+        对应 ret 列顺序的 EWMA 协方差矩阵。
     """
+    # 1) 对齐并清洗
+    ret = ret.copy()
     ret = ret.dropna(how="any")
 
+    T, N = ret.shape
+    if T == 0:
+        return np.zeros((N, N))
+
+    # 2) 自适应 λ（可用更稳健的中位数代替 mean）
     if adaptive:
-        # 计算市场整体的短期 / 长期波动比率
         vol_short = ret.rolling(10).std().mean(axis=1).dropna()
-        vol_long = ret.rolling(250).std().mean(axis=1).dropna()
+        vol_long  = ret.rolling(250).std().mean(axis=1).dropna()
         common_idx = vol_short.index.intersection(vol_long.index)
-        ratio_series = (vol_short[common_idx] / vol_long[common_idx]).dropna()
+        if len(common_idx) > 0:
+            ratio = float((vol_short[common_idx] / vol_long[common_idx]).iloc[-1])
+            lambda_ = float(np.clip(1.0 - gamma * ratio, lambda_min, lambda_max))
 
-        if not ratio_series.empty:
-            ratio = ratio_series.iloc[-1]  # 使用最新一日的波动比
-            lambda_adapted = 1 - gamma * ratio
-            lambda_ = float(np.clip(lambda_adapted, lambda_min, lambda_max))
+    # 3) 归一化权重（最近期权重最大）
+    idx = np.arange(T-1, -1, -1)                    # [T-1, ..., 0]
+    w = (lambda_ ** idx).astype(float)
+    w /= w.sum()                                     # sum w_i = 1
 
-    weights = np.array([lambda_**i for i in range(len(ret) - 1, -1, -1)])
-    weights /= weights.sum()
+    X = ret.values.astype(float)
 
-    demeaned = ret - ret.mean()
-    weighted_outer_products = np.zeros((ret.shape[1], ret.shape[1]))
-    for i in range(len(ret)):
-        x = demeaned.iloc[i].values.reshape(-1, 1)
-        weighted_outer_products += weights[i] * (x @ x.T)
+    # 4) 用“同一权重”计算加权均值，并去中心（关键修正点）
+    mu_w = (w[:, None] * X).sum(axis=0)              # shape (N,)
+    Xc = X - mu_w                                    # 去中心
 
-    return weighted_outer_products
+    # 5) 向量化加权协方差：Xc^T diag(w) Xc
+    #   等价于 sum_i w_i * (x_i - mu_w)(x_i - mu_w)^T
+    S = Xc.T @ (w[:, None] * Xc)
+
+    # 6) 数值稳健化：对称化 + jitter，保证 PSD
+    S = 0.5 * (S + S.T)
+    if jitter and jitter > 0:
+        S += jitter * np.eye(N)
+
+    return S
 
 def hybrid_cov(
     ret: pd.DataFrame,
@@ -173,7 +212,7 @@ def compute_prior_mu_fixed_window(
     window: int = 20,
     lookback_days: int = 252,
     method: str = "linear"
-) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+) -> np.ndarray:
     """
     基于最近一整年的滑动收益率样本构造先验期望收益
     支持冷启动：若历史不足一年则用所有可用数据
@@ -181,7 +220,7 @@ def compute_prior_mu_fixed_window(
     参数：
         price_df: 行为日期，列为资产，值为价格（建议为daily close）
         window: 每段收益期的天数（如20）
-        lookback_days: 向前回溯的自然日长度（如252个自然日）
+        lookback_days: 向前回溯的交易日长度（如252个交易日）
         method: 'log' or 'linear'，收益率计算方式
 
     返回：
@@ -264,7 +303,7 @@ def optimize_max_sharpe(mu: np.ndarray, cov: np.ndarray) -> tuple:
 
 def optimize_mean_variance(mu: np.ndarray, cov: np.ndarray, max_variance: float) -> tuple:
     """
-    最大化期望收益，约束组合风险（方差）上限。
+    最大化期望收益，约束组合风险（方差）上限，并限制单一资产权重不超过 0.5。
 
     参数：
         mu: ndarray, shape (n_assets,) - 后验期望收益率
@@ -285,15 +324,23 @@ def optimize_mean_variance(mu: np.ndarray, cov: np.ndarray, max_variance: float)
         return max_variance - np.dot(w, np.dot(cov, w))
 
     constraints = (
-        {'type': 'eq', 'fun': lambda w: np.sum(w) - 1},  # 权重和为1
-        {'type': 'ineq', 'fun': risk_constraint}         # 风险约束
+        {'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0},  # 权重和为 1
+        {'type': 'ineq', 'fun': risk_constraint}           # 风险约束
     )
-    bounds = [(0.0, 1.0)] * n
+    # 单一资产上限由 1.0 改为 0.5
+    bounds = [(0.0, 0.5)] * n
     x0 = np.ones(n) / n
+    # 初值若超界（极端 n<2 时）也会被 bounds 处理，但这里保持等权
+    result = minimize(neg_return, x0=x0, bounds=bounds, constraints=constraints, method='SLSQP')
 
-    result = minimize(neg_return, x0=x0, bounds=bounds, constraints=constraints)
-    weights = result.x
-    expected_return = np.dot(weights, mu)
-    expected_vol = np.sqrt(np.dot(weights, np.dot(cov, weights)))
+    if not result.success:
+        # 兜底：投影到边界后归一
+        w = np.clip(x0, 0.0, 0.5)
+        s = w.sum()
+        w = w / s if s > 0 else np.ones(n) / n
+    else:
+        w = result.x
 
-    return weights, expected_return, expected_vol
+    expected_return = float(np.dot(w, mu))
+    expected_vol = float(np.sqrt(np.dot(w, np.dot(cov, w))))
+    return w, expected_return, expected_vol
