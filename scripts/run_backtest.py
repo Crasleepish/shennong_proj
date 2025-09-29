@@ -100,7 +100,7 @@ def build_price_df(asset_source_map: dict, start: str, end: str) -> pd.DataFrame
             logger.warning(f"未知资产类型 {code}: {src}")
 
     net_value_df = net_value_df.dropna(how='all')
-    net_value_df = net_value_df / net_value_df.iloc[0]
+    net_value_df = net_value_df / net_value_df.bfill().iloc[0]
     return net_value_df.ffill()
 
 
@@ -240,7 +240,180 @@ def run_backtest(start="2022-12-22", end="2024-12-22", window=20):
 
         print(f"✅ 回测完成，结果已保存至：{out_dir}")
 
+from app.service.portfolio_crud import query_all_weights_by_date
+
+def run_backtest_using_db_weights(
+    *,
+    portfolio_id: int,
+    start: str,
+    end: str,
+    d_threshold: float = 0.005,     # 偏差阈值，超过则触发调仓
+    ensure_trade_calendar_union: bool = True  # 价格按权重日期并齐，缺失用前值（0收益）
+):
+    """
+    使用数据库中已存的平滑权重（weights_ewma）+ 真实资产净值进行回测。
+    - 仅使用 PortfolioWeights.weights_ewma
+    - 回测时间区间由 start/end 指定（含端点）
+    - 若某天某资产缺 NAV：按“0收益”处理 → 前值填充（ffill）
+    - 调仓频率：当偏差超过阈值时调仓；当资产代码集合发生变化时必调仓
+    - 价格来源：对涉及到的全部资产构建 asset_source_map：
+        "H11004.CSI" 与 "Au99.99.SGE" → "index"
+        "270004.OF" → "cash"
+        其他代码 → "hist"
+      build_price_df 会为 "hist" 返回复权累计净值（无需额外处理）
+
+    导出：
+    - portfolio_weights.csv  （实际参与回测的调仓日权重）
+    - portfolio_value.csv    （组合净值）
+    - daily_returns.csv      （日收益率）
+    - daily_turnover.csv     （日换手率）
+    - value_plot.html        （净值曲线）
+    - weights_from_db.csv    （DB读出的完整日度权重明细，便于核对）
+    """
+    # === 0) 输出目录 ===
+    out_dir = f"./fund_portfolio_bt_result/{datetime.today().strftime('%Y%m%d_%H%M%S')}"
+    os.makedirs(out_dir, exist_ok=True)
+
+    # === 1) 从 DB 读取权重（仅 weights_ewma）===
+    print("🗃️ 从数据库读取权重（weights_ewma）...")
+    df_w_all = query_all_weights_by_date(
+        portfolio_id=portfolio_id,
+        start_date=start,
+        end_date=end,
+        fill_missing_zero=True  # 缺失资产权重=0，便于对齐
+    )
+    if df_w_all.empty:
+        raise ValueError(f"在区间 {start}~{end} 内未读取到任何权重记录（portfolio_id={portfolio_id}）。")
+
+    # 保存原始（从DB读出）的日度权重表，便于核对
+    df_w_all.sort_index().to_csv(os.path.join(out_dir, "weights_from_db.csv"))
+    print(f"✅ 已导出 weights_from_db.csv，共 {len(df_w_all)} 行。")
+
+    # === 2) 构造 asset_source_map（只覆盖回测区间出现过的资产代码）===
+    all_codes = set(df_w_all.columns)
+    def _code_to_type(code: str) -> str:
+        if code in {"H11004.CSI", "Au99.99.SGE"}:
+            return "index"
+        if code == "270004.OF":
+            return "cash"
+        return "hist"
+
+    asset_source_map = {code: _code_to_type(code) for code in all_codes}
+
+    # === 3) 构建真实净值 price_df，并按“0收益”规则对齐 ===
+    print("💰 构建资产净值曲线（build_price_df）...")
+    price_df = build_price_df(asset_source_map, start, end)
+    if price_df is None or price_df.empty:
+        raise ValueError("price_df 为空，无法回测。")
+
+    # 仅保留权重涉及到的资产列
+    missing_cols = all_codes - set(price_df.columns)
+    if missing_cols:
+        # 对于缺失价格的资产，新建列并用 NaN，后续 ffill
+        for c in missing_cols:
+            price_df[c] = np.nan
+        price_df = price_df[df_w_all.columns]  # 列顺序与权重对齐
+    else:
+        price_df = price_df[df_w_all.columns]
+
+    # 将价格索引限制在 DB 权重的日期范围内的交集
+    # 注意：根据你的规则，若某日某资产无 NAV，0 收益 → ffill
+    if ensure_trade_calendar_union:
+        # 以“权重日期”为主，强制把价格 reindex 到权重日期上，再 ffill
+        price_df = price_df.reindex(df_w_all.index).sort_index()
+
+    # 前向填充：缺失价格用最近一次价格（即 0 收益）
+    price_df = price_df.ffill()
+
+    # 若起始日仍有 NaN（前一日完全没有历史价格），可用首个非 NaN 值向后填（避免回测引擎报错）
+    price_df = price_df.fillna(method="bfill", axis=0)
+
+    # 再次校验
+    if price_df.isna().any().any():
+        # 仍存在 NaN，说明某些资产在整个区间都没有价格；把其对应权重强制置 0
+        cols_all_nan = [c for c in price_df.columns if price_df[c].isna().all()]
+        if cols_all_nan:
+            logger.warning(f"这些资产在区间内没有任何价格数据，将在权重中置零并从价格中剔除: {cols_all_nan}")
+            df_w_all[cols_all_nan] = 0.0
+            price_df = price_df.drop(columns=cols_all_nan)
+
+    # 再次对齐列
+    shared_cols = [c for c in df_w_all.columns if c in price_df.columns]
+    df_w_all = df_w_all[shared_cols]
+    price_df = price_df[shared_cols]
+
+    # === 4) 处理权重序列 → 选择调仓日 ===
+    print("🧭 选择调仓日（偏差阈值 & 代码集合变化必调仓）...")
+    rebalance_dates = []
+    prev_weight = None
+    prev_cols_set = None
+
+    for date, w_row in df_w_all.iterrows():
+        w_row = w_row.fillna(0.0)
+
+        # 第一天必调仓
+        if prev_weight is None:
+            rebalance_dates.append(date)
+            prev_weight = w_row
+            prev_cols_set = set(w_row.index[w_row.values != 0.0])
+            continue
+
+        # 1) 若代码集合变化：必调仓
+        curr_cols_set = set(w_row.index[w_row.values != 0.0])
+        if curr_cols_set != prev_cols_set:
+            rebalance_dates.append(date)
+            prev_weight = w_row
+            prev_cols_set = curr_cols_set
+            continue
+
+        # 2) 偏差阈值：使用你已有的 compute_diverge（保持逻辑一致）
+        avg_ratio = compute_diverge(
+            portfolio_id=portfolio_id,
+            trade_date=date,
+            current_w=prev_weight,
+            target_w=w_row
+        )
+        if avg_ratio > d_threshold:
+            rebalance_dates.append(date)
+            prev_weight = w_row
+            prev_cols_set = curr_cols_set
+
+    rebalance_dates = pd.DatetimeIndex(rebalance_dates)
+    weights_df = df_w_all.loc[rebalance_dates].copy()
+
+    # 导出用于回测的调仓权重
+    weights_df.to_csv(os.path.join(out_dir, "portfolio_weights.csv"))
+    print(f"✅ 调仓日共 {len(weights_df)} 个，已导出 portfolio_weights.csv。")
+
+    # 对齐 price_df 的时间索引（引擎通常需要完整的日度价格序列）
+    # price_df 已经 reindex 到 df_w_all.index 并 ffill，这里确保区间完整：
+    price_df = price_df.loc[df_w_all.index.min(): df_w_all.index.max()]
+
+    # === 5) 运行回测引擎 ===
+    print("🚀 运行回测引擎...")
+    cfg = BacktestConfig(
+        init_cash=100_000_000,
+        buy_fee=0.0,
+        sell_fee=sell_fee_rate,
+        slippage=slippage_rate,
+        cash_sharing=True
+    )
+    result = run_backtest_engine(weights_df, price_df, cfg)
+
+    # === 7) 导出结果 ===
+    result["nav"].to_csv(os.path.join(out_dir, "portfolio_value.csv"))
+    result["returns"].to_csv(os.path.join(out_dir, "daily_returns.csv"))
+    result["nav"].vbt.plot(title="组合净值曲线").write_html(os.path.join(out_dir, "value_plot.html"))
+
+    print(f"✅ 回测完成，结果已保存至：{out_dir}")
+
+    return {
+        "out_dir": out_dir,
+        "rebalance_dates": rebalance_dates,
+        "nav": result["nav"],
+        "returns": result["returns"],
+    }
 
 
 if __name__ == '__main__':
-    run_backtest()
+    run_backtest_using_db_weights(portfolio_id=1, start='2022-09-02', end='2025-09-25')

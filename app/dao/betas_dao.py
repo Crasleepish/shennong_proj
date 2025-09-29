@@ -204,7 +204,7 @@ class FundBetaDao:
         return df
 
     @staticmethod
-    def upsert_one(code: str, date: str, betas: dict, P: np.ndarray = None, log_nav_true: float = None, log_nav_fit: float = None, output_p_json: bool = True):
+    def upsert_one(code: str, date: str, betas: dict, P: np.ndarray = None, log_nav_true: float = None, log_nav_fit: float = None, output_p_json: bool = False):
         data = {
             "code": code,
             "date": pd.to_datetime(date),

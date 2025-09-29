@@ -374,3 +374,84 @@ def store_portfolio(
         f"✅ store_portfolio done | pid={portfolio_id} date={trade_date} "
         f"kept={len(codes_kept)}/{len(codes)} eps={eps}"
     )
+
+from typing import Optional, Dict, List
+import pandas as pd
+import json
+from sqlalchemy import asc
+
+def query_all_weights_by_date(
+    portfolio_id: int,
+    start_date: str,
+    end_date: str,
+    *,
+    fill_missing_zero: bool = True
+) -> pd.DataFrame:
+    """
+    批量查询某个组合在给定时间段内的“平滑后权重”（weights_ewma）。
+
+    参数
+    ----
+    portfolio_id : int
+        组合 ID
+    start_date : str
+        起始日期（含），格式 'YYYY-MM-DD'
+    end_date : str
+        截止日期（含），格式 'YYYY-MM-DD'
+    fill_missing_zero : bool, default True
+        是否用 0.0 填充缺失资产权重（列并齐后产生的 NaN）
+
+    返回
+    ----
+    pd.DataFrame
+        行索引为 date（升序），列为资产代码，单元为对应日期的平滑后权重。
+        若时间段内无数据，返回空 DataFrame。
+    """
+    if not start_date or not end_date:
+        raise ValueError("start_date 与 end_date 不能为空")
+
+    start_dt = pd.to_datetime(start_date).date()
+    end_dt = pd.to_datetime(end_date).date()
+
+    with get_db() as db:
+        rows: List[PortfolioWeights] = (
+            db.query(PortfolioWeights)
+              .filter(
+                  PortfolioWeights.portfolio_id == portfolio_id,
+                  PortfolioWeights.date >= start_dt,
+                  PortfolioWeights.date <= end_dt,
+              )
+              .order_by(asc(PortfolioWeights.date))
+              .all()
+        )
+
+    if not rows:
+        return pd.DataFrame()
+
+    # 将每一行记录转换为 date -> {code: weight} 的映射
+    by_date: Dict[pd.Timestamp, Dict[str, float]] = {}
+    for row in rows:
+        if not row.codes or not row.weights_ewma:
+            continue
+        try:
+            codes = json.loads(row.codes)
+            weights = json.loads(row.weights_ewma)
+            # 长度不一致时做安全处理：截断到最短长度
+            n = min(len(codes), len(weights))
+            d = dict(zip(codes[:n], (float(w) for w in weights[:n])))
+            by_date[pd.to_datetime(row.date)] = d
+        except Exception:
+            # 若 JSON 非法或解析异常，跳过该日
+            continue
+
+    if not by_date:
+        return pd.DataFrame()
+
+    # 组装为 DataFrame：index=日期，columns=资产代码
+    df = pd.DataFrame.from_dict(by_date, orient="index").sort_index()
+    df.index.name = "date"
+
+    if fill_missing_zero:
+        df = df.fillna(0.0)
+
+    return df
