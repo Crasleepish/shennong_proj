@@ -189,10 +189,10 @@ class DatasetBuilder:
         
         return df_X, df_Y
 
-    def build_mkt_tri_class(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def build_mkt_tri_class(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, tuple[float,float,float]]:
         df = self.factor_data_reader.read_factor_nav(start, end)
-        ma5 = df['MKT_NAV'].rolling(10).mean()
-        future_ret = ma5.shift(-20) / ma5 - 1
+        ma10 = df['MKT_NAV'].rolling(10).mean()
+        future_ret = ma10.shift(-20) / ma10 - 1
         future_ret = future_ret.dropna()
         lower = future_ret.mean() - 0.67 * future_ret.std()
         upper = future_ret.mean() + 0.67 * future_ret.std()
@@ -201,7 +201,7 @@ class DatasetBuilder:
         X, Y = self._build_dataset(df, self.mkt_plan, target, start, end, vif, inference)
         return X, Y, label_to_ret
 
-    def build_smb_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def build_smb_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, tuple[float,float,float]]:
         df = self.factor_data_reader.read_factor_nav(start, end)
         ma10 = df['SMB_NAV'].rolling(10).mean()
         future_ret = ma10.shift(-20) / ma10 - 1
@@ -213,7 +213,7 @@ class DatasetBuilder:
         X, Y = self._build_dataset(df, self.smb_plan, target, start, end, vif, inference)
         return X, Y, label_to_ret
 
-    def build_hml_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def build_hml_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, tuple[float,float,float]]:
         df = self.factor_data_reader.read_factor_nav(start, end)
         ma10 = df['HML_NAV'].rolling(10).mean()
         future_ret = ma10.shift(-20) / ma10 - 1
@@ -222,10 +222,10 @@ class DatasetBuilder:
         upper = future_ret.mean() + 0.67 * future_ret.std()
         target = self.label_three_class(future_ret, lower=lower, upper=upper)
         label_to_ret = self.compute_label_to_ret(future_ret, alpha=0.67)
-        X, Y = self._build_dataset(df, self.smb_plan, target, start, end, vif, inference)
+        X, Y = self._build_dataset(df, self.hml_plan, target, start, end, vif, inference)
         return X, Y, label_to_ret
 
-    def build_qmj_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def build_qmj_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, tuple[float,float,float]]:
         df = self.factor_data_reader.read_factor_nav(start, end)
         ma10 = df['QMJ_NAV'].rolling(10).mean()
         future_ret = ma10.shift(-20) / ma10 - 1
@@ -237,7 +237,7 @@ class DatasetBuilder:
         X, Y = self._build_dataset(df, self.qmj_plan, target, start, end, vif, inference)
         return X, Y, label_to_ret
     
-    def build_10Ybond_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def build_10Ybond_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, tuple[float,float,float]]:
         df = self.csi_index_data_fetcher.get_data_by_code_and_date("H11004.CSI", start, end)
         df = df.set_index("date").sort_index()
         ma10 = df['close'].rolling(10).mean()
@@ -250,7 +250,7 @@ class DatasetBuilder:
         X, Y = self._build_dataset(df, self.bond_plan, target, start, end, vif, inference)
         return X, Y, label_to_ret
     
-    def build_gold_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def build_gold_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, tuple[float,float,float]]:
         df = self.gold_data_fetcher.get_data_by_code_and_date("Au99.99.SGE", start, end)
         df = df.set_index("date").sort_index()
         ma10 = df['close'].rolling(10).mean()

@@ -4,6 +4,7 @@
     <nav class="navbar">
       <router-link to="/">首页</router-link>
       <router-link to="/asset_conf">目标资产管理</router-link>
+      <router-link to="/factor_trend">因子趋势</router-link>
     </nav>
     <router-view />
   </div>

@@ -21,6 +21,95 @@ logger = logging.getLogger(__name__)
 RESULT_DIR = "./ml_results"
 os.makedirs(RESULT_DIR, exist_ok=True)
 
+# === 超参数：默认 + 任务级覆盖 ===
+DEFAULT_XGB_PARAMS = dict(
+    objective="multi:softprob",
+    num_class=3,
+    eval_metric="mlogloss",
+    n_estimators=500,
+    learning_rate=0.02,
+    max_depth=5,
+    subsample=0.9,
+    colsample_bytree=0.9,
+    reg_lambda=2.0,
+    reg_alpha=2.0,
+    random_state=42,
+    n_jobs=-1,
+    early_stopping_rounds=50
+)
+
+# 针对每个任务单独覆盖（未列出的任务走 DEFAULT_XGB_PARAMS）
+TASK_HPARAMS = {
+    # 四因子（示例：与默认一致或轻微调整）
+    "mkt_tri": dict(
+        n_estimators=2000,
+        learning_rate=0.0045,
+        max_depth=9,
+        min_child_weight=1.0,
+        gamma=0.1,
+        reg_lambda=0.0,
+        reg_alpha=0.0,
+        early_stopping_rounds=50,
+    ),
+    "smb_tri": dict(
+        n_estimators=2000,
+        learning_rate=0.006,
+        max_depth=3,
+        min_child_weight=1.0,
+        gamma=0.1,
+        reg_lambda=4.0,
+        reg_alpha=2.0,
+        early_stopping_rounds=50
+    ),
+    "hml_tri": dict(
+        n_estimators=2400,
+        learning_rate=0.0025,
+        max_depth=3,
+        min_child_weight=0.5,
+        gamma=0.1,
+        reg_lambda=0.0,
+        reg_alpha=0.0,
+        early_stopping_rounds=50
+    ),
+    "qmj_tri": dict(
+        n_estimators=6000,
+        learning_rate=0.002,
+        max_depth=10,
+        min_child_weight=0.5,
+        gamma=0.1,
+        reg_lambda=0.0,
+        reg_alpha=0.0,
+        early_stopping_rounds=50
+    ),
+
+    "10Ybond_tri": dict(
+        n_estimators=2000,
+        learning_rate=0.003,
+        max_depth=11,
+        min_child_weight=0.5,
+        gamma=0.1,
+        reg_lambda=0.0,
+        reg_alpha=0.0,
+        early_stopping_rounds=50
+    ),
+
+    "gold_tri": dict(
+        n_estimators=2000,
+        learning_rate=0.003,
+        max_depth=12,
+        min_child_weight=0.5,
+        gamma=0.1,
+        reg_lambda=0.0,
+        reg_alpha=0.0,
+        early_stopping_rounds=50
+    ),
+}
+
+def get_params_for_task(task: str) -> dict:
+    p = DEFAULT_XGB_PARAMS.copy()
+    p.update(TASK_HPARAMS.get(task, {}))
+    return p
+
 
 def train_one_task(
     task: Literal["mkt_tri", "smb_tri", "hml_tri", "qmj_tri", "10Ybond_tri", "gold_tri"],
@@ -53,50 +142,27 @@ def train_one_task(
     X_train, X_val, Y_train, Y_val = builder.train_test_split_ratio(X, Y, test_size=0.1)
 
     target_col = Y.columns[0]
-    task_type = "classification"
 
-    if task_type == "regression":
-        model = XGBRegressor(
-            n_estimators=100, max_depth=4, learning_rate=0.1, random_state=42, n_jobs=-1
-        )
-        model.fit(X_train, Y_train[target_col])
-        if need_test:
-            y_pred = model.predict(X_test)
-            y_train_pred = model.predict(X_train)
+    params = get_params_for_task(task)
+    model = XGBClassifier(**params)
+    sample_weight = compute_sample_weight("balanced", Y_train[target_col])
+    model.fit(X_train, Y_train[target_col], sample_weight=sample_weight, 
+                eval_set=[(X_val, Y_val[target_col])], 
+                verbose=True)
+    if need_test:
+        y_pred = model.predict(X_test)
+        y_train_pred = model.predict(X_train)
 
-            result = {
-                "target": target_col,
-                "type": "regression",
-                "train_r2": r2_score(Y_train[target_col], y_train_pred),
-                "train_rmse": root_mean_squared_error(Y_train[target_col], y_train_pred),
-                "test_r2": r2_score(Y_test[target_col], y_pred),
-                "test_rmse": root_mean_squared_error(Y_test[target_col], y_pred),
-            }
+        result = {
+            "target": task,
+            "type": "classification",
+            "train_acc": accuracy_score(Y_train[target_col], y_train_pred),
+            "train_f1": f1_score(Y_train[target_col], y_train_pred, average="macro"),
+            "test_acc": accuracy_score(Y_test[target_col], y_pred),
+            "test_f1": f1_score(Y_test[target_col], y_pred, average="macro"),
+        }
 
-    else:
-        model = XGBClassifier(
-            n_estimators=500, max_depth=5, learning_rate=0.02, subsample=0.9, colsample_bytree=0.9, 
-            random_state=42, reg_alpha=2.0, reg_lambda=2.0, n_jobs=-1,
-            objective="multi:softprob", num_class=3, eval_metric="mlogloss", early_stopping_rounds=50
-        )
-        sample_weight = compute_sample_weight("balanced", Y_train[target_col])
-        model.fit(X_train, Y_train[target_col], sample_weight=sample_weight, 
-                  eval_set=[(X_val, Y_val[target_col])], 
-                  verbose=True)
-        if need_test:
-            y_pred = model.predict(X_test)
-            y_train_pred = model.predict(X_train)
-
-            result = {
-                "target": task,
-                "type": "classification",
-                "train_acc": accuracy_score(Y_train[target_col], y_train_pred),
-                "train_f1": f1_score(Y_train[target_col], y_train_pred, average="macro"),
-                "test_acc": accuracy_score(Y_test[target_col], y_pred),
-                "test_f1": f1_score(Y_test[target_col], y_pred, average="macro"),
-            }
-
-            logger.info("\n分类报告 [%s]:\n%s", task, classification_report(Y_test[target_col], y_pred))
+        logger.info("\n分类报告 [%s]:\n%s", task, classification_report(Y_test[target_col], y_pred))
 
     out_dir = f"./models/{task}"
     os.makedirs(out_dir, exist_ok=True)

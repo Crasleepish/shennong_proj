@@ -7,6 +7,7 @@ from .routes.routes import bp as users_bp
 from .routes.fin_data_routes import fin_data_bp
 from .routes.service_routes import service_bp
 from .routes.task_routes import task_bp
+from .routes.showdata_routes import showdata_bp
 import logging
 import logging.config
 import gzip
@@ -64,5 +65,6 @@ def create_app(config_class=Config):
     app.register_blueprint(fin_data_bp)
     app.register_blueprint(task_bp)
     app.register_blueprint(service_bp)
+    app.register_blueprint(showdata_bp)
     
     return app
