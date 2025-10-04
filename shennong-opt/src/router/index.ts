@@ -1,6 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
-import App from '../App.vue'
 import AssetConf from '../views/AssetConf.vue'
 import Home from '../views/Home.vue'
 import FactorTrend from '../views/FactorTrend.vue'

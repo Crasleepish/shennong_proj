@@ -10,3 +10,4 @@ tests/__pycache__/
 *.pkl
 .idea/
 .vscode/
+fund_portfolio_bt_result/

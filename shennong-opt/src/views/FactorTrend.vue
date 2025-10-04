@@ -179,7 +179,7 @@ function renderNavChart() {
   const legend: string[] = []
 
   const order = ['MKT', 'SMB', 'HML', 'QMJ', 'BOND10Y', 'GOLD']
-  order.forEach((key, idx) => {
+  order.forEach((key, _idx) => {
     const arr = navSeries[key]
     if (!arr || !arr.length) return
     legend.push(key)
