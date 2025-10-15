@@ -288,7 +288,7 @@ def calculate_intraday_factors(portfolio_returns, index_rt):
     today = datetime.now().date()
     latest_trade_date = TradeCalendarReader.get_trade_dates(end=today.strftime("%Y-%m-%d"))[-2]  #T-1日期
     index_reader = IndexDataReader()
-    index_close_df = index_reader.fetch_latest_close_prices_from_cache("000985.CSI", latest_trade_date=latest_trade_date)
+    index_close_df = index_reader.fetch_latest_close_prices("000985.CSI", latest_trade_date=latest_trade_date)
     pre_close = index_close_df.loc[0, "close"]
     today_close = index_rt.loc[0, "close"]
 
@@ -321,14 +321,14 @@ def estimate_intraday_index_value(index_to_etf: dict[str, str]) -> dict[str, flo
 
     for index_code, etf_code in index_to_etf.items():
         # 读取指数昨日收盘点数
-        idx_df = index_reader.fetch_latest_close_prices_from_cache(index_code, latest_trade_date=latest_trade_date)
+        idx_df = index_reader.fetch_latest_close_prices(index_code, latest_trade_date=latest_trade_date)
         if idx_df.empty:
             continue
         idx_close = idx_df.loc[0, "close"]
         idx_date = pd.to_datetime(idx_df.loc[0, "date"])
 
         # 读取ETF昨日收盘价
-        etf_df = etf_reader.fetch_latest_close_prices_from_cache(etf_code, latest_trade_date=latest_trade_date)
+        etf_df = etf_reader.fetch_latest_close_prices(etf_code, latest_trade_date=latest_trade_date)
         if etf_df.empty:
             continue
         etf_close = etf_df.loc[0, "close"]
