@@ -268,7 +268,17 @@ def route_find_support_assets():
     else:
         asof_date_str = pd.to_datetime("today").date().strftime("%Y%m%d")
     asof_trade_date_str = CalendarFetcher().get_trade_date(start="19900101", end=asof_date_str, format="%Y-%m-%d", limit=1, ascending=False)[0]
-    asset_list = find_support_assets(asof_trade_date_str, epsilon=0.03, M=4096, topk_per_iter=32, debug=True)
+    # 解析黑/白名单参数，支持传单个字符串或列表
+    def _to_list(x):
+        if x is None:
+            return []
+        if isinstance(x, list):
+            return [str(i) for i in x]
+        return [str(x)]
+
+    blacklist = _to_list(data.get("blacklist"))
+    whitelist = _to_list(data.get("whitelist"))
+    asset_list = find_support_assets(asof_trade_date_str, epsilon=0.03, M=4096, topk_per_iter=32, debug=True, blacklist=blacklist, whitelist=whitelist)
     if not asset_list:
         return jsonify({"message": "发现支撑资产失败"}), 200
     logger.info(f"发现支持资产: {asset_list}")

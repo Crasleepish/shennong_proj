@@ -11,7 +11,8 @@ Input:
     epsilon: float, relative gain threshold to stop.
 
 Output:
-    S: np.ndarray of shape (k, d), rows are chosen vectors IN THE ORDER selected.
+    selected_idx: np.ndarray of shape (k,), dtype=int
+    在原始 X（未去零）的行索引（按加入顺序）
 
 Notes:
     - Uses sphere sampling (M directions) to estimate volume and marginal gains.
@@ -185,7 +186,9 @@ def select_representatives(
     debug: bool = False,
     logger: Optional[logging.Logger] = None,
     log_topk: int = 5,
-    diversity_beta: float = 1.5
+    diversity_beta: float = 1.5,
+    whitelist_idx: Optional[List[int]] = None,
+    nms_cos_thresh: Optional[float] = 0.98,
 ) -> np.ndarray:
     """
     Greedy selection under Scenario A (conv({0} ∪ S)) with radial accumulator.
@@ -195,20 +198,25 @@ def select_representatives(
     -------
     idx : np.ndarray, shape (k,), dtype=int
         被选中的向量在**输入 X（原始，未去零）**中的行索引（按加入顺序）。
+
+    Notes
+    -----
+    - 初始化后、进入迭代前，会把 whitelist_idx（原始索引）对应的向量强制加入 S。
+      若索引无效/是零向量/已在 S 中，会自动跳过；顺序按传入的 whitelist_idx 保持。
     """
     log = _get_logger(logger, debug)
 
     assert X.ndim == 2 and X.shape[0] >= 1
-    N, d = X.shape
+    N0, d = X.shape
     rng = np.random.default_rng(rng_seed)
 
     # --- 去零向量，并建立 “过滤后索引 -> 原始索引” 的映射 ---
     norms = np.linalg.norm(X, axis=1)
     keep = norms > 0.0
-    orig_idx_map = np.arange(N)[keep]         # 过滤后第 i 行对应的原始行号
+    orig_idx_map = np.arange(N0)[keep]         # 过滤后第 i 行对应的原始行号
     X = X[keep]
     if X.shape[0] == 0:
-        return np.zeros((0, d), dtype=float)
+        return np.zeros((0,), dtype=int)
 
     # 球面方向
     thetas = sample_sphere_uniform(d, M, rng)  # (M, d)
@@ -220,8 +228,37 @@ def select_representatives(
     A = S.copy()
     used_mask = np.zeros(X.shape[0], dtype=bool)
     used_mask[S_idx] = True
+    disabled_mask = np.zeros(X.shape[0], dtype=bool)
 
-    # 初始 rho 与 Y(θ)，并记录哪些方向当前有界
+    # ========== 处理白名单（按原始索引 -> 过滤后索引），强制加入 ==========
+    if whitelist_idx is not None and len(whitelist_idx) > 0:
+        # 1) 过滤非法原始索引，并保持用户顺序
+        wl_orig = [int(i) for i in whitelist_idx if 0 <= int(i) < N0]
+        # 2) 原始 -> 过滤后：若该原始行被去掉（零向量），则跳过
+        #    orig_idx_map 是严格递增的一一映射；用字典加速查找
+        inv_map = {int(oi): int(fi) for fi, oi in enumerate(orig_idx_map.tolist())}
+        wl_filtered: List[int] = []
+        seen = set()
+        for oi in wl_orig:
+            if oi in inv_map:
+                fi = inv_map[oi]
+                if fi not in seen and not used_mask[fi]:
+                    wl_filtered.append(fi)
+                    seen.add(fi)
+
+        if debug and len(wl_filtered) != len(wl_orig):
+            log.debug(f"Whitelist: requested={len(wl_orig)}, accepted={len(wl_filtered)} "
+                      f"(invalid/zero/dup skipped)")
+
+        # 3) 把白名单（过滤后索引）按顺序强制加入 S / used_mask
+        if wl_filtered:
+            for fi in wl_filtered:
+                S_idx.append(int(fi))
+                used_mask[fi] = True
+            S = X[S_idx]
+            A = S.copy()
+
+    # 初始 rho 与 Y(θ)，并记录哪些方向当前有界, 全量重建 rho / Y / bounded 与累加器
     rho = np.zeros(M, dtype=float)
     Y = np.zeros((M, d), dtype=float)
     bounded = np.zeros(M, dtype=bool)  # True: h<∞（ok）；False: 无界（rho=0）
@@ -242,9 +279,25 @@ def select_representatives(
 
     acc = RadialVolumeAccumulator(d, rho)
     vol = acc.volume()
-
+    if debug and (whitelist_idx is not None and len(wl_filtered) > 0):
+        log.debug(f"After whitelist: |S|={len(S_idx)} bounded={bounded.sum()} "
+                f"unbounded={(~bounded).sum()} vol≈{vol:.6g}")
     log.debug(f"Init: N={X.shape[0]} d={d} M={M} rank_init=|S|={len(S_idx)} "
               f"bounded={bounded.sum()} unbounded={(~bounded).sum()} vol≈{vol:.6g}")
+
+    # 如果开启 NMS，白名单加入后先做一次全量 NMS
+    if nms_cos_thresh is not None:
+        remain = np.where(~used_mask & ~disabled_mask)[0]
+        if remain.size and len(S_idx) > 0:
+            S_unit = S / (np.linalg.norm(S, axis=1, keepdims=True) + H_MIN)
+            U = X[remain]
+            U_unit = U / (np.linalg.norm(U, axis=1, keepdims=True) + H_MIN)
+            maxcos = (U_unit @ S_unit.T).max(axis=1)
+            kill = remain[maxcos > nms_cos_thresh]
+            if kill.size:
+                disabled_mask[kill] = True
+                if debug:
+                    log.debug(f"NMS after whitelist: suppressed={kill.size} @cos>{nms_cos_thresh}")
 
     iter_count = 0
     while True:
@@ -253,7 +306,7 @@ def select_representatives(
             log.debug("Stop: reached max_iters")
             break
 
-        cand_idx = np.where(~used_mask)[0]
+        cand_idx = np.where(~used_mask & ~disabled_mask)[0]
         if cand_idx.size == 0:
             log.debug("Stop: no remaining candidates")
             break
@@ -279,6 +332,10 @@ def select_representatives(
             score_unbd_raw = cos_align.sum(axis=1)                          # (C,)
             lam = float(np.median(acc.rho_pow[acc.rho_pow > 0])) if np.any(acc.rho_pow > 0) else 1.0
             score = score_bounded + lam * score_unbd_raw
+        else:
+            score_unbd_raw = np.zeros(U.shape[0], dtype=float)
+            score = score_bounded
+        
             # ----- 多样性权重：惩罚与 S 同向的重合 -----
             U_unit = U / U_norm
             S_unit = S / (np.linalg.norm(S, axis=1, keepdims=True) + H_MIN)
@@ -287,9 +344,6 @@ def select_representatives(
             maxcos = cos_US_pos.max(axis=1) if cos_US_pos.size else 0.0
             w_div = (1.0 - maxcos)**diversity_beta + H_MIN
             score *= w_div
-        else:
-            score_unbd_raw = np.zeros(U.shape[0], dtype=float)
-            score = score_bounded
 
         score = np.nan_to_num(score, nan=0.0,
                               posinf=np.finfo(float).max/4, neginf=0.0)
@@ -442,6 +496,20 @@ def select_representatives(
                 _msg = f"    refreshed unbounded={ub_rest.size}, now fixed={n_fixed}, bounded={bounded.sum()}"
                 log.debug(_msg)
         log.debug(f"    |S|={len(S_idx)}  new_vol≈{vol:.6g}")
+
+        # —— 接受最佳候选后：NMS 屏蔽与 S 过近的剩余候选 —— 
+        if nms_cos_thresh is not None:
+            remain = np.where(~used_mask & ~disabled_mask)[0]
+            if remain.size:
+                S_unit = S / (np.linalg.norm(S, axis=1, keepdims=True) + H_MIN)
+                U = X[remain]
+                U_unit = U / (np.linalg.norm(U, axis=1, keepdims=True) + H_MIN)
+                maxcos = (U_unit @ S_unit.T).max(axis=1)
+                kill = remain[maxcos > nms_cos_thresh]
+                if kill.size:
+                    disabled_mask[kill] = True
+                    if debug:
+                        log.debug(f"    NMS: suppressed={kill.size} @cos>{nms_cos_thresh}")
 
     log.debug(f"Done. selected |S|={len(S_idx)}")
 

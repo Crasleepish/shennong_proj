@@ -98,72 +98,104 @@ def _load_latest_betas_asof(trade_date: str, period: int = 60) -> pd.DataFrame:
     return res
 
 
-def _stable_mask_and_matrix(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+def _stable_mask_and_matrix(
+    df: pd.DataFrame,
+    *,
+    blacklist: Optional[List[str]] = None,
+    whitelist: Optional[List[str]] = None,
+) -> Tuple[np.ndarray, np.ndarray, List[str]]:
     """
-    根据已解包的 P (6x6) 的稳定性条件筛选样本：
+    根据已解包的 P (6x6) 的稳定性条件筛选样本，支持黑/白名单：
       - 取 P[:4,:4] 的对角线和 < P_VAR_SUM_THRESH
       - P[4,4] < CONST_VAR_THRESH
       - const > CONST_THRESH
       - 同时保证前四个因子暴露为有限数
+      - 黑名单中的 fund_code 强制去除
+      - 白名单中的 fund_code 强制保留（若暴露为有限数且 P 形状足够）
+
     返回：
       mask:  bool 数组（保留为 True）
       X:     shape (n_keep, 4) 的因子暴露矩阵（MKT, SMB, HML, QMJ）
-      codes: 保留样本的 fund_code 列表（与 X 行对齐）
+      codes: 保留样本的 fund_code/code 列表（与 X 行对齐）
     """
     if df is None or df.empty:
         return np.array([], dtype=bool), np.empty((0, 4)), []
 
-    # 提前准备暴露矩阵和代码
+    blacklist = set(blacklist or [])
+    whitelist = set(whitelist or [])
+
+    # 标识列与必要列检查
     id_col = "code" if "code" in df.columns else ("fund_code" if "fund_code" in df.columns else None)
     if id_col is None:
         raise RuntimeError("FundBeta 数据缺少标识列：需要 'code' 或 'fund_code'")
     missing_cols = [c for c in (FACTOR_COLS + [id_col, "P", "const"]) if c not in df.columns]
     if missing_cols:
         raise RuntimeError(f"FundBeta 数据缺少必要列: {missing_cols}")
-    
+
+    # 仅对必要列做缺失剔除
     df = df.dropna(subset=FACTOR_COLS + ["P"]).copy()
 
     X_full = df[FACTOR_COLS].to_numpy(dtype=float)
     codes = df[id_col].astype(str).tolist()
 
-    keep_mask = []
+    keep_mask: List[bool] = []
     for i, (_, row) in enumerate(df.iterrows()):
+        code_i = str(row[id_col])
+
+        # 黑名单：强制剔除
+        if code_i in blacklist:
+            keep_mask.append(False)
+            continue
+
         try:
             P = row["P"]
             if isinstance(P, str):
                 P = json.loads(P)
             P = np.array(P, dtype=float)
 
+            # 至少 5x5 才能取到 P[4,4]
             if P.ndim != 2 or P.shape[0] < 5 or P.shape[1] < 5:
-                keep_mask.append(False)
+                # 若在白名单且暴露有限，则仍可保留（但缺失 P 统计指标）
+                if code_i in whitelist and np.all(np.isfinite(X_full[i])):
+                    keep_mask.append(True)
+                else:
+                    keep_mask.append(False)
                 continue
 
-            # 稳定性过滤：diag(P[:4,:4]) 之和 < 阈值
             diag_sum = float(np.trace(P[:4, :4]))
-            if not np.isfinite(diag_sum):
-                keep_mask.append(False)
-                continue
             const_var = float(P[4, 4])
 
             # 暴露有限性检查
             x = X_full[i]
-            if not np.all(np.isfinite(x)):
-                keep_mask.append(False)
-                continue
+            finite_expo = np.all(np.isfinite(x))
 
-            # const 阈值（需要列存在）
+            # const 阈值
             const_val = float(row["const"]) if pd.notna(row["const"]) else -np.inf
 
-            keep_mask.append(
+            pass_base_rules = (
+                np.isfinite(diag_sum) and np.isfinite(const_var) and finite_expo and
                 (diag_sum < P_VAR_SUM_THRESH) and
                 (const_var < CONST_VAR_THRESH) and
                 (const_val > CONST_THRESH)
             )
 
-        except Exception:
-            keep_mask.append(False)
+            if pass_base_rules:
+                keep_mask.append(True)
+            else:
+                # 白名单：只要暴露向量有限且 P 形状足够，就强制保留
+                if code_i in whitelist and finite_expo:
+                    keep_mask.append(True)
+                else:
+                    keep_mask.append(False)
 
-    keep_mask = np.array(keep_mask, dtype=bool)
+        except Exception:
+            # 解析/计算异常：仅当白名单且暴露有限才保留
+            if code_i in whitelist and np.all(np.isfinite(X_full[i])):
+                keep_mask.append(True)
+            else:
+                keep_mask.append(False)
+
+    keep_mask = np.asarray(keep_mask, dtype=bool)
     X = X_full[keep_mask]
     kept_codes = [c for c, m in zip(codes, keep_mask) if m]
 
@@ -177,14 +209,17 @@ def find_support_assets(
     M: int = 4096,
     topk_per_iter: int = 32,
     debug: bool = False,
+    blacklist: Optional[List[str]] = None,
+    whitelist: Optional[List[str]] = None,
 ) -> List[str]:
     """
     主入口：从全市场基金中筛选“支撑资产”，返回 fund_code 列表（按加入顺序）。
 
     步骤：
       1) 截至 trade_date 获取每只基金最近 period 个交易日的“平均因子暴露”（_load_latest_betas_asof）
-      2) 用解包后的 P 做稳定性过滤（如：P[:4,:4] 对角线和、P[4,4]、const 阈值）
-      3) 用筛后的 4 维暴露矩阵 X (MKT, SMB, HML, QMJ) 调用 select_representatives
+      2) 用解包后的 P 做稳定性过滤（如：P[:4,:4] 对角线和、P[4,4]、const 阈值，含黑名单强制剔除、白名单强制保留）
+      3) 用筛后的 4 维暴露矩阵 X (MKT, SMB, HML, QMJ) 调用 select_representatives，
+         并将白名单样本在 X 中的行索引作为 whitelist_idx 传入，强制包含
 
     参数
     ----
@@ -194,22 +229,35 @@ def find_support_assets(
     topk_per_iter   : 每轮最多加入的元素数（建议 64）
     debug           : 打印迭代日志
 
-    返回
+    返回：
     ----
     选中资产的 fund_code 列表（按加入顺序）。若无可选，返回空列表。
     """
     logger.info("开始筛选支撑资产: trade_date=%s, epsilon=%s, M=%s, topk_per_iter=%s", trade_date, epsilon, M, topk_per_iter)
     df = _load_latest_betas_asof(trade_date)
     if df is None or df.empty:
-        logger and logger.warning("截至 %s 未获取到任何基金的因子暴露记录。", trade_date)
+        logger.warning("截至 %s 未获取到任何基金的因子暴露记录。", trade_date)
         return []
 
-    mask, X, codes = _stable_mask_and_matrix(df)
+    # 稳定性筛选 + 黑/白名单处理
+    _, X, codes = _stable_mask_and_matrix(
+        df,
+        blacklist=blacklist,
+        whitelist=whitelist,
+    )
     if X.shape[0] == 0:
-        logger.warning("满足稳定性条件的基金为空（P[:4,:4] 对角线和 < %.4f）。", P_VAR_SUM_THRESH)
+        logger.warning("满足稳定性条件的基金为空（或黑名单过滤后为空）。")
         return []
 
-    # 直接调用贪心凸包体积代表点选择
+    # 计算白名单在“已保留样本（codes）”中的行索引
+    whitelist_idx = None
+    if whitelist:
+        wl_set = set(whitelist)
+        whitelist_idx = [i for i, c in enumerate(codes) if c in wl_set]
+        if len(whitelist_idx) == 0:
+            whitelist_idx = None  # 没有白名单样本被保留，传 None
+
+    # 代表点选择（贪心凸包体积近似），传入 whitelist_idx 强制包含
     try:
         idx = select_representatives(
             X=X,
@@ -217,9 +265,10 @@ def find_support_assets(
             M=M,
             topk_per_iter=topk_per_iter,
             debug=debug,
+            whitelist_idx=whitelist_idx,
         )
     except Exception as e:
-        logger and logger.exception("select_representatives 调用失败：%s", e)
+        logger.exception("select_representatives 调用失败：%s", e)
         return []
 
     if idx is None or len(idx) == 0:

@@ -36,7 +36,7 @@ def upsert_portfolio_assets(
     view_codes = [str(x) for x in view_codes]
     # params 不强制转换 value，保留原 JSON 结构，仅规范 key
     if params is not None:
-        params = {str(k): str(v) for k, v in params.items()}
+        params = {str(k): v for k, v in params.items()}
 
     with get_db() as db:
         obj = db.query(PortfolioAssets).get(portfolio_id)

@@ -66,7 +66,14 @@
     <h3 class="font-semibold mb-2">查找全市场支撑资产</h3>
 
     <div class="flex items-center gap-3">
-      <span>该功能将基于全市场进行代表性资产选择：</span>
+      <span>截面日期（可留空）：</span>
+      <el-date-picker
+        v-model="supportAsofDate"
+        type="date"
+        placeholder="选择日期或留空"
+      />
+
+      <span></span>
       <el-button
         type="primary"
         :loading="findingSupport"
@@ -130,7 +137,7 @@ function prettyJSON(v: unknown): string {
 function isRecordStringString(v: unknown): v is Record<string, string> {
   if (v === null || typeof v !== 'object' || Array.isArray(v)) return false
   return Object.entries(v as Record<string, unknown>).every(
-    ([k, val]) => typeof k === 'string' && typeof val === 'string'
+    ([k, val]) => typeof k === 'string' && (typeof val === 'string' || (Array.isArray(val) && (val as unknown[]).every(i => typeof i === 'string')))
   )
 }
 
@@ -156,15 +163,15 @@ function formatAll() {
   if (d) paramsText.value = prettyJSON(d)
 }
 
-// --- 查询 ---
-async function onQuery() {
-  if (!portfolioId.value || portfolioId.value <= 0) {
+async function queryAndGetRaw(pid?: number): Promise<any | null> {
+  const id = pid ?? portfolioId.value
+  if (!id || id <= 0) {
     ElMessage.warning('请先输入有效的组合ID')
-    return
+    return null
   }
-  loading.value = true
+
   try {
-    const res = await fetch(`${baseUrl}/service/portfolio_assets_query/${portfolioId.value}`, {
+    const res = await fetch(`${baseUrl}/service/portfolio_assets_query/${id}`, {
       method: 'GET',
       headers: {
         'Authorization': authHeader,
@@ -175,7 +182,25 @@ async function onQuery() {
       const msg = await res.text().catch(() => '')
       throw new Error(`HTTP ${res.status} ${msg}`)
     }
-    const data = await res.json()
+
+    return await res.json()   // 👈 返回原始数据体
+  } catch (err) {
+    console.error('queryAndGetRaw 失败：', err)
+    ElMessage.error('查询失败，请查看控制台日志')
+    return null
+  }
+}
+
+// --- 查询 ---
+async function onQuery() {
+  if (!portfolioId.value || portfolioId.value <= 0) {
+    ElMessage.warning('请先输入有效的组合ID')
+    return
+  }
+  loading.value = true
+  try {
+    const data = await queryAndGetRaw(portfolioId.value)
+    if (!data) return
 
     // 赋值 & 美化显示
     respPortfolioId.value = data?.portfolio_id
@@ -185,9 +210,6 @@ async function onQuery() {
     paramsText.value = prettyJSON(data?.params ?? {})
 
     ElMessage.success('查询成功')
-  } catch (e) {
-    console.error(e)
-    ElMessage.error('查询失败，请查看控制台日志')
   } finally {
     loading.value = false
   }
@@ -217,7 +239,7 @@ async function onSubmit() {
     return
   }
   if (!isRecordStringString(params)) {
-    ElMessage.error('params 必须是 { [code: string]: string }')
+    ElMessage.error('params 必须是 { [code: string]: string or string[] }')
     return
   }
 
@@ -258,19 +280,45 @@ async function onSubmit() {
 // === 支撑资产查找 ===
 const findingSupport = ref(false)
 const supportAssets = ref<string[]>([])
+const supportAsofDate = ref<Date | null>(null)
+
+// 简单日期格式化：Date -> 'YYYY-MM-DD'
+function formatDateYMD(d: Date | null | undefined): string | undefined {
+  if (!d) return undefined
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 
 async function onFindSupportAssets() {
   findingSupport.value = true
   supportAssets.value = []
 
   try {
+    // 1) 读取 params（从“目标资产管理”的查询接口）
+    const raw = await queryAndGetRaw()
+    // 有的后端返回里才有 params；没有就视为可空
+    const params = raw?.params ?? {}
+    const blacklist: string[] | undefined = Array.isArray(params?.blacklist) ? params.blacklist : undefined
+    const whitelist: string[] | undefined = Array.isArray(params?.whitelist) ? params.whitelist : undefined
+
+    // 2) 组装 body
+    const body: Record<string, unknown> = {}
+    const asof = formatDateYMD(supportAsofDate.value)
+    if (asof) body.asof_date = asof
+    if (blacklist && blacklist.length) body.blacklist = blacklist
+    if (whitelist && whitelist.length) body.whitelist = whitelist
+
+    // 3) 请求后端
     const res = await fetch(`${baseUrl}/service/portfolio_assets/find_support_assets`, {
       method: 'POST',
       headers: {
-        'Authorization': authHeader,       // 示例为 "Basic ...="，保持与项目约定一致
+        'Authorization': authHeader,       // 确保是后端期望的 Authorization 形式
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({})
+      body: JSON.stringify(body)
     })
 
     if (!res.ok) {
@@ -279,7 +327,6 @@ async function onFindSupportAssets() {
     }
 
     const data = await res.json()
-    // 期望形如：{ data: string[], message: 'success' }
     const arr = Array.isArray(data?.data) ? data.data : []
     supportAssets.value = arr
 
