@@ -109,6 +109,12 @@ class DatasetBuilder:
 
                 # 布林突破信号
                 {"func": FactorFeatureBuilder.bb_break_signal, "suffix": "bb_break_signal", "kwargs": {"window": 20, "num_std": 2.0}},
+
+                # 日历/季节性特征
+                {"func": FactorFeatureBuilder.cal_gap_days, "suffix": "cal_gap"},
+                {"func": FactorFeatureBuilder.cal_is_month_start_7d, "suffix": "cal_mstart7"},
+                {"func": FactorFeatureBuilder.cal_is_month_end_7d, "suffix": "cal_mend7"},
+                {"func": FactorFeatureBuilder.cal_is_pre_holiday, "suffix": "cal_preholiday", "kwargs": {"min_gap": 4}},
             ]
 
     @staticmethod
