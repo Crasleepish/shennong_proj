@@ -211,6 +211,45 @@ class StockDataReader:
         df = df.dropna(subset=["stock_code", "close"])
         df = df[df["stock_code"].isin(valid_codes_set)]
         return df[["stock_code", "close", "vol", "amount"]]
+    
+    @staticmethod
+    def _normalize_from_ak_spot(df_raw: pd.DataFrame, valid_codes_set: set) -> pd.DataFrame:
+        """
+        规范化 ak.stock_zh_a_spot() 的输出为标准列：
+        ["stock_code", "close", "vol", "amount"]
+        代码形如 sh600000/sz000001/bj920000 → 600000.SH/000001.SZ/920000.BJ
+        """
+        if df_raw is None or df_raw.empty:
+            return pd.DataFrame(columns=["stock_code", "close", "vol", "amount"])
+
+        df = df_raw.rename(columns={
+            "代码": "raw_code",
+            "最新价": "close",
+            "成交量": "vol",
+            "成交额": "amount",
+        })
+
+        def to_std_code(raw: str):
+            if not isinstance(raw, str) or len(raw) < 3:
+                return None
+            pfx = raw[:2].lower()
+            digits = "".join(ch for ch in raw if ch.isdigit())
+            if not digits:
+                return None
+            if pfx == "sh":
+                suf = "SH"
+            elif pfx == "sz":
+                suf = "SZ"
+            elif pfx == "bj":
+                suf = "BJ"
+            else:
+                return None
+            return f"{digits}.{suf}"
+
+        df["stock_code"] = df["raw_code"].map(to_std_code)
+        df = df.dropna(subset=["stock_code", "close"])
+        df = df[df["stock_code"].isin(valid_codes_set)]
+        return df[["stock_code", "close", "vol", "amount"]]
 
     # ===== 主函数：实时价 + 多级兜底 + TTL缓存 =====
     def fetch_realtime_prices(self, *, use_cache: bool = True, force_refresh: bool = False) -> pd.DataFrame:
@@ -258,27 +297,18 @@ class StockDataReader:
                 logger.warning("Tushare rt_k 兜底失败：%s", e)
                 raise_success = False
 
-        # ==== 尝试 3：Tushare realtime_quote（分批<=50） ====
+        # ==== 尝试 AkShare stock_zh_a_spot() ====
         if not raise_success:
             try:
-                # 串行分批，避免限流
-                dfs: List[pd.DataFrame] = []
-                codes = list(valid_codes)  # 保持与本地一致的代码集
-                for i in range(0, len(codes), TS_REALTIME_BATCH):
-                    batch_codes = codes[i:i + TS_REALTIME_BATCH]
-                    q = ",".join(batch_codes)
-                    df_part = ts.realtime_quote(ts_code=q)
-                    # 注：realtime_quote在不同源下字段大小写可能不同，上面normalize里已兼容
-                    if isinstance(df_part, pd.DataFrame) and not df_part.empty:
-                        dfs.append(df_part)
-                df = self._normalize_from_realtime_quote(dfs, valid_codes_set)
+                spot_df = ak.stock_zh_a_spot()
+                df = self._normalize_from_ak_spot(spot_df, valid_codes_set)
                 if not df.empty:
-                    source = "tushare_realtime_quote"
+                    source = "akshare_spot"
                     raise_success = True
                 else:
                     raise_success = False
             except Exception as e:
-                logger.warning("Tushare realtime_quote 兜底失败：%s", e)
+                logger.warning("AkShare stock_zh_a_spot 兜底失败：%s", e)
                 raise_success = False
 
         # 如果三层都失败，给空表（并不写缓存）

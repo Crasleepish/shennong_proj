@@ -6,7 +6,6 @@ from app.database import Base, engine
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from app.data.fetcher import StockInfoSynchronizer, StockHistSynchronizer, AdjFactorSynchronizer, CompanyActionSynchronizer, FundamentalDataSynchronizer, SuspendDataSynchronizer
-from app.data.fetcher import stock_adj_hist_synchronizer
 from app.data.cninfo_fetcher import cninfo_stock_share_change_fetcher
 from types import SimpleNamespace
 from app.database import get_db
@@ -122,7 +121,6 @@ def test_AdjSynchronizer(app, init_update_flag_data, monkeypatch, dummy_stock_li
         stock_hist_synchronizer.sync()
         synchronizer = CompanyActionSynchronizer()
         synchronizer.sync()
-        stock_adj_hist_synchronizer.sync()
 
         df0 = StockHistUnadjDao.select_dataframe_by_code("600655")
         print(df0)
@@ -133,7 +131,6 @@ def test_AdjSynchronizer(app, init_update_flag_data, monkeypatch, dummy_stock_li
 
         stock_hist_synchronizer.sync()
         synchronizer.sync()
-        stock_adj_hist_synchronizer.sync()
 
         df2 = stock_hist_adj_dao.select_dataframe_by_code("600655")
         print(df2)
