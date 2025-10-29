@@ -89,6 +89,7 @@ patsy==1.0.1
 pexpect==4.9.0
 pillow==11.0.0
 platformdirs==4.3.6
+playwright==1.55.0
 plotly==5.24.1
 pluggy==1.5.0
 prettytable==3.12.0

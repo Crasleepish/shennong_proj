@@ -434,7 +434,7 @@ def get_fund_prices_by_code_list(code_list: list, start_date: str, end_date: str
     pivot_df = pivot_df.dropna()
     return pivot_df
 
-def get_fund_current_prices_by_code_list(code_list: list, start_date: str, end_date: str) -> pd.DataFrame:
+def get_fund_current_prices_by_code_list(code_list: list) -> pd.DataFrame:
     """
     返回基金的当前价格数据。
     
@@ -447,17 +447,16 @@ def get_fund_current_prices_by_code_list(code_list: list, start_date: str, end_d
                 600012   600016   600018
     Date                                
     2021-01-04   10.20    15.30    8.45
-    2021-01-05   10.40    15.50    8.50
-    2021-01-06   10.35    15.40    8.55
     ...
     """
     fund_hist_dao = FundHistDao._instance
     df_list = []
     for fund_code in code_list:
+        latest_date = pd.to_datetime(fund_hist_dao.get_latest_date(fund_code))
         df = fund_hist_dao.select_dataframe_by_code(fund_code)
         df['date'] = pd.to_datetime(df['date'], errors="coerce")
         df = df.sort_values('date')
-        df = df[(df['date'] >= start_date) & (df['date'] <= end_date) ]
+        df = df[(df['date'] == latest_date)]
         df = df.reset_index(drop=True)
         df_list.append(df)
     

@@ -21,6 +21,7 @@ COPY appendix ./appendix
 
 # ========== 4. 安装 Python 依赖（最慢但尽量复用缓存） ==========
 RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m playwright install --with-deps chromium
 
 # 挂载目录预创建（会被 bind mount 覆盖）
 RUN mkdir -p bt_result ml_results models

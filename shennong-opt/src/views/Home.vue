@@ -207,16 +207,28 @@
 
       <!-- 调仓结果 -->
       <div v-if="rebalanceResult.length" class="mt-6">
-        <h3 class="font-semibold">调仓建议</h3>
-        <el-table :data="rebalanceResult" border style="width: 100%">
-          <el-table-column prop="from" label="卖出资产" />
-          <el-table-column prop="to" label="买入资产" />
-          <el-table-column prop="amount" label="卖出数量" />
-        </el-table>
-        <div class="mt-4">
-          <el-button type="primary" @click="onConfirmRebalance">确认调仓</el-button>
-        </div>
+      <h3 class="font-semibold">调仓建议</h3>
+
+      <el-table
+        ref="rebalanceTableRef"
+        :data="rebalanceResult"
+        border
+        style="width: 100%"
+        @selection-change="onRebalanceSelectionChange"
+      >
+        <!-- 选择框列 -->
+        <el-table-column type="selection" width="50" />
+
+        <el-table-column prop="from" label="卖出资产" />
+        <el-table-column prop="to" label="买入资产" />
+        <el-table-column prop="amount" label="卖出数量" />
+      </el-table>
+
+      <div class="mt-4 flex items-center gap-3">
+        <el-button type="primary" @click="onConfirmRebalance">确认调仓</el-button>
+        <el-button @click="onSelectAllRebalance">全选</el-button>
       </div>
+    </div>
 
     </section>
   </div>
@@ -270,6 +282,21 @@ const optHistStartDate = ref(null)
 const optHistEndDate = ref(null)
 const optHistRunning = ref(false)
 
+// 选择状态 & 表格引用
+const selectedRebalance = ref([])           // 存放勾选的行
+const rebalanceTableRef = ref(null)         // 表格 ref
+
+// 选择变化回调
+function onRebalanceSelectionChange(rows) {
+  selectedRebalance.value = rows || []
+}
+
+function onSelectAllRebalance() {
+  if (rebalanceTableRef.value) {
+    rebalanceTableRef.value.toggleAllSelection()
+  }
+}
+
 // 将 (year, quarter) → 'YYYYMMDD'（季末日）
 function quarterEndDateStr(year, quarter) {
   if (!year || !quarter) return null
@@ -300,6 +327,12 @@ function formatDate(dateObj) {
 function extractCodeFromLabel(label) {
   const match = label.match(/\(([^)]+)\)$/)
   return match ? match[1] : label
+}
+
+// 从 "名称(代码)" 提取名称（若传入的就是代码，会返回空字符串）
+function extractNameFromLabel(label) {
+  const m = String(label || '').match(/^(.+)\([^)]+\)$/)
+  return m ? m[1] : ''
 }
 
 const columns = [
@@ -767,17 +800,125 @@ async function onCalculateRebalance() {
   }
 }
 
+/**
+ * 应用选中的调仓动作到当前持仓，返回新的持仓快照
+ * @param {Array<object>} holdings mergedHoldings.value
+ * @param {Array<object>} selectedActions selectedRebalance.value（每项形如 {from, to, amount}）
+ * @returns {Array<object>} newHoldings：[{asset, code, name, amount}, ...]
+ */
+function applySelectedRebalanceToHoldings(holdings, selectedActions) {
+  // 1) 用 map 保存 {code -> 行对象的浅拷贝}，只保留必要字段
+  const map = new Map()
+  for (const r of holdings || []) {
+    const code = (r.code || '').trim()
+    if (!code) continue
+    map.set(code, {
+      asset: r.asset || '',
+      code,
+      name: r.name || '',
+      price: parseFloat(r.price || 0),
+      amount: parseFloat(r.amount || 0)
+    })
+  }
+
+  // 2) 逐条应用选中的调仓动作
+  for (const act of selectedActions || []) {
+    const fromCode = extractCodeFromLabel(act.from)
+    const toCode   = extractCodeFromLabel(act.to)
+    const sellShares = parseFloat(act.amount || 0)
+
+    if (!fromCode || !toCode || !(sellShares > 0)) continue
+
+    // 确保 from 行存在（不存在则视为 0 持仓，仍允许卖出将导致0-，但做非负保护）
+    if (!map.has(fromCode)) {
+      map.set(fromCode, {
+        asset: '', code: fromCode, name: extractNameFromLabel(act.from) || '', price: 0, amount: 0
+      })
+    }
+    // 若 to 行不存在，则创建（name/asset 尽量从标签或留空；price 稍后校验）
+    if (!map.has(toCode)) {
+      map.set(toCode, {
+        asset: '', code: toCode, name: extractNameFromLabel(act.to) || '', price: 0, amount: 0
+      })
+    }
+
+    const fromRow = map.get(fromCode)
+    const toRow   = map.get(toCode)
+
+    const pFrom = parseFloat(fromRow.price || 0)
+    const pTo   = parseFloat(toRow.price || 0)
+
+    if (!(pFrom > 0) || !(pTo > 0)) {
+      // 价格缺失无法按“等价值”换算，给出错误并跳过本条动作
+      ElMessage.error(`价格缺失，无法应用调仓：from=${fromCode}(${pFrom}), to=${toCode}(${pTo})`)
+      return
+    }
+
+    // 等价值换算：买入份额 = 卖出份额 * pFrom / pTo
+    const buyShares = sellShares * pFrom / pTo
+
+    // 扣减卖出份额（非负保护）
+    fromRow.amount = Math.max(0, parseFloat((fromRow.amount - sellShares).toFixed(2)))
+    // 增加买入份额
+    toRow.amount   = parseFloat((toRow.amount + buyShares).toFixed(2))
+
+    map.set(fromCode, fromRow)
+    map.set(toCode, toRow)
+  }
+
+  // 3) 按原 holdings 的顺序输出，保持“完整快照”（包含未变动的资产）
+  const order = (holdings || []).map(r => (r.code || '').trim()).filter(Boolean)
+  const seen = new Set()
+  const result = []
+
+  for (const code of order) {
+    if (seen.has(code)) continue
+    const row = map.get(code)
+    if (row) {
+      result.push({
+        asset: row.asset,
+        code: row.code,
+        name: row.name,
+        amount: parseFloat((row.amount || 0).toFixed(2))
+      })
+      seen.add(code)
+    }
+  }
+
+  // 4) 若选中的调仓引入了“原来没有的 code”（例如 toCode 新增），也要附加在末尾
+  for (const [code, row] of map.entries()) {
+    if (!seen.has(code)) {
+      result.push({
+        asset: row.asset,
+        code: row.code,
+        name: row.name,
+        amount: parseFloat((row.amount || 0).toFixed(2))
+      })
+    }
+  }
+
+  return result
+}
+
 function onConfirmRebalance() {
   if (!portfolioId.value) {
     ElMessage.error('请先填写组合ID')
     return
   }
-  const validRows = mergedHoldings.value.filter(r => {
-    return r.asset && r.code && r.name && parseFloat(r.target_amount) > 0
-  })
 
-  if (validRows.length === 0) {
-    ElMessage.warning('无有效持仓数据，无法提交')
+  // 只提交已勾选的调仓记录
+  if (!selectedRebalance.value.length) {
+    ElMessage.warning('请先勾选需要提交的调仓记录')
+    return
+  }
+  const toSubmitRebalance = selectedRebalance.value.map(item => ({ ...item }))
+
+  // 基于“当前整体持仓（mergedHoldings）”，只应用被选中的调仓动作，得到“调仓后的整体持仓快照”
+  const newHoldings = applySelectedRebalanceToHoldings(mergedHoldings.value, selectedRebalance.value)
+
+  // 基础校验：至少有一条（通常都会有，因为是整体快照）
+  if (!newHoldings.length) {
+    ElMessage.warning('未能生成新的持仓快照，请检查价格或调仓记录')
     return
   }
 
@@ -789,13 +930,8 @@ function onConfirmRebalance() {
     },
     body: JSON.stringify({
       portfolio_id: portfolioId.value,
-      rebalance: rebalanceResult.value,
-      new_holdings: validRows.map(r => ({
-        asset: r.asset,
-        code: r.code,
-        name: r.name,
-        amount: parseFloat(r.target_amount || 0)
-      }))
+      rebalance: toSubmitRebalance,  // ★ 仅被选中的调仓动作
+      new_holdings: newHoldings      // ★ 应用这些动作后的整体持仓快照
     })
   })
     .then(async res => {
@@ -805,8 +941,8 @@ function onConfirmRebalance() {
       }
       return res.json()
     })
-    .then(data => {
-      ElMessage.success('调仓记录已保存')
+    .then(() => {
+      ElMessage.success('调仓记录已保存（部分提交）')
     })
     .catch(err => {
       console.error('调仓记录提交失败', err)

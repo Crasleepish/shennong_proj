@@ -110,17 +110,7 @@ from app.data_fetcher.trade_calender_reader import TradeCalendarReader
 import pandas as pd
 
 def query_price_by_codes(codes: list[str]) -> dict[str, float]:
-    today = pd.Timestamp.today()
-    trade_dates = TradeCalendarReader.get_trade_dates(end=today.strftime("%Y-%m-%d"))
-    if len(trade_dates) < 2:
-        raise ValueError("交易日不足")
-
-    t1_date = trade_dates[-2]
-    t1_str = t1_date.strftime("%Y-%m-%d")
-    t_date = trade_dates[-1]
-    t_str = t_date.strftime("%Y-%m-%d")
-
-    price_df = get_fund_current_prices_by_code_list(codes, start_date=t1_str, end_date=t_str)
+    price_df = get_fund_current_prices_by_code_list(codes)
     if price_df.empty:
         return {}
 
