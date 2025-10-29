@@ -14,7 +14,7 @@ from app.database import get_db
 from app.config import TestConfig, Config
 from app.dao.stock_info_dao import StockInfoDao, StockHistUnadjDao, StockHistAdjDao, AdjFactorDao, FundamentalDataDao, SuspendDataDao, StockShareChangeCNInfoDao, CompanyActionDao, FutureTaskDao
 from app.data.helper import get_prices_df, get_fund_prices_by_code_list, get_fund_fees_by_code_list
-from app.data_fetcher import StockDataReader, IndexDataReader
+from app.data_fetcher import StockDataReader, IndexDataReader, EtfDataReader
 
 # Create the Flask app using TestConfig
 @pytest.fixture
@@ -224,6 +224,17 @@ def test_fetch_realtime_prices(app):
     df_rt = fetcher.fetch_realtime_prices()
     print(df_rt)
 
+
+from app.data_fetcher.xueqiu_quote import stock_individual_spot_xq_safe, stock_zh_a_xq_list
+def test_stock_individual_spot_xq_safe(app):
+    df = stock_individual_spot_xq_safe("CSI000985")
+    print(df)
+
+def test_stock_zh_a_xq_list(app):
+    df = stock_zh_a_xq_list()
+    print(df)
+
+
 def test_index_data_fetcher_fetch_latest_close_prices(app):
     fetcher = IndexDataReader()
     df1 = fetcher.fetch_latest_close_prices_from_cache('000985.CSI')
@@ -244,4 +255,9 @@ def test_index_data_fetcher_fetch_latest_close_prices(app):
 def test_index_fetch_realtime_prices(app):
     fetcher = IndexDataReader()
     df_rt = fetcher.fetch_realtime_prices("000985.CSI")
+    print(df_rt)
+
+def test_etf_fetch_realtime_prices(app):
+    fetcher = EtfDataReader()
+    df_rt = fetcher.fetch_realtime_prices("511010.SH")
     print(df_rt)

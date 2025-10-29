@@ -19,5 +19,5 @@ __all__ = [
     "StockDataReader",
     "IndexDataReader",
     "EtfDataFetcher",
-    "EtfDataReader"
+    "EtfDataReader",
 ]

@@ -7,6 +7,7 @@ from app.models.index_models import IndexHist
 from app.data_fetcher.trade_calender_reader import TradeCalendarReader
 import logging
 from typing import Optional, Dict, Tuple
+from app.data_fetcher.xueqiu_quote import stock_individual_spot_xq_safe
 import tushare as ts
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ class IndexDataReader:
     @staticmethod
     def _now_ts() -> pd.Timestamp:
         return pd.Timestamp.now(tz=None)
-
+    
     def _rt_cache_valid(self, index_code: str) -> bool:
         item = self._rt_cache.get(index_code)
         if not item:
@@ -131,6 +132,63 @@ class IndexDataReader:
             return f"{index_code}.SZ"
         return f"{index_code}.SH"
 
+    @staticmethod
+    def _to_xq_symbol(index_code: str) -> str:
+        """
+        将输入 index_code 规范为雪球接口需要的 symbol：
+        - *.CSI 或 *.INDEX → 'CSI' + 代码，例如 '000985.CSI' → 'CSI000985'
+        - *.SH / *.SZ     → 'SH'/'SZ' + 代码，例如 '000001.SH' → 'SH000001'
+        - 无后缀           ：'399' 开头 → 'SZ' + 代码；否则 → 'SH' + 代码
+        """
+        if "." in index_code:
+            root, suf = index_code.split(".", 1)
+            suf = suf.upper()
+            if suf in ("CSI", "INDEX", "CI", "CS"):
+                return f"CSI{root}"
+            if suf in ("SH", "SZ"):
+                return f"{suf}{root}"
+            # 未知后缀，尽量推断
+            return f"{'SZ' if root.startswith('399') else 'SH'}{root}"
+        # 无后缀
+        return f"{'SZ' if index_code.startswith('399') else 'SH'}{index_code}"
+    
+    @staticmethod
+    def _normalize_from_xq_spot(df_raw: pd.DataFrame, index_code: str) -> pd.DataFrame:
+        """
+        雪球 stock_individual_spot_xq_safe 返回两列：item / value
+        取出 '现价'、'成交量'、'成交额'，统一为 ['index_code','close','vol','amount']
+        """
+        if df_raw is None or df_raw.empty:
+            return pd.DataFrame(columns=["index_code", "close", "vol", "amount"])
+
+        # 建成键值映射
+        kv = {str(row["item"]).strip(): row["value"] for _, row in df_raw.iterrows() if "item" in df_raw and "value" in df_raw}
+        close = kv.get("现价")
+        vol   = kv.get("成交量")
+        amt   = kv.get("成交额")
+
+        # 价格必须要有且 > 0
+        try:
+            close_f = float(close)
+            if not (close_f > 0):
+                return pd.DataFrame(columns=["index_code", "close", "vol", "amount"])
+        except Exception:
+            return pd.DataFrame(columns=["index_code", "close", "vol", "amount"])
+
+        def to_float(x):
+            try:
+                return float(x)
+            except Exception:
+                return None
+
+        return pd.DataFrame([{
+            "index_code": index_code,
+            "close": close_f,
+            "vol": to_float(vol),
+            "amount": to_float(amt),
+        }]).dropna(subset=["index_code", "close"])
+
+
     # ---------- 实时行情（AkShare -> Tushare Fallback，带 TTL 缓存） ----------
     def fetch_realtime_prices(
         self,
@@ -177,38 +235,18 @@ class IndexDataReader:
         except Exception as e:
             logger.warning("AkShare 指数实时失败(%s)：%s", index_code, e)
 
-        # ===== 尝试 2：Tushare realtime_quote 兜底 =====
+        # ===== 尝试 2：Xueqiu stock_individual_spot_xq_safe 兜底 =====
         if not got:
             try:
-                ts_code = self._to_ts_index_code(index_code)
-                df_ts = ts.realtime_quote(ts_code=ts_code, src='sina')
-                if isinstance(df_ts, pd.DataFrame) and not df_ts.empty:
-                    # 大小写兼容
-                    cols = {
-                        "TS_CODE": "stock_code", "ts_code": "stock_code",
-                        "PRICE": "close", "price": "close",
-                        "VOLUME": "vol", "volume": "vol",
-                        "AMOUNT": "amount", "amount": "amount",
-                    }
-                    df_ts = df_ts.rename(columns=cols)
-                    row = df_ts.iloc[0]
-                    price = row.get("close", 0) or 0
-                    if float(price) > 0:  # 09:00:00 前常出现 0，视为无效
-                        df_out = pd.DataFrame(
-                            [
-                                {
-                                    "index_code": index_code,
-                                    "close": float(row.get("close")),
-                                    "vol": row.get("vol"),
-                                    "amount": row.get("amount"),
-                                }
-                            ]
-                        ).dropna(subset=["index_code", "close"])
-                        if not df_out.empty:
-                            got = True
+                xq_symbol = self._to_xq_symbol(index_code)
+                df_xq = stock_individual_spot_xq_safe(xq_symbol)  # 可按需传 timeout
+                df_out = self._normalize_from_xq_spot(df_xq, index_code)
+                if df_out is not None and not df_out.empty:
+                    got = True
+                    source = "xueqiu_individual_spot"
             except Exception as e:
-                logger.warning("Tushare realtime_quote 兜底失败(%s)：%s", index_code, e)
-
+                logger.warning("Xueqiu individual_spot 兜底失败(%s)：%s", index_code, e)
+                
         if not got:
             logger.error("指数实时获取失败：AkShare -> Tushare 均未取到有效数据（%s）。返回空表。", index_code)
             return pd.DataFrame(columns=["index_code", "close", "vol", "amount"])

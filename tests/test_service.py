@@ -6,7 +6,6 @@ from app.database import Base, engine
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from app.data.fetcher import StockInfoSynchronizer, StockHistSynchronizer, AdjFactorSynchronizer, CompanyActionSynchronizer, FundamentalDataSynchronizer, SuspendDataSynchronizer
-from app.data.fetcher import stock_adj_hist_synchronizer
 from app.data.cninfo_fetcher import cninfo_stock_share_change_fetcher
 from types import SimpleNamespace
 from app.database import get_db

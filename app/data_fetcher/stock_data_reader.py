@@ -12,6 +12,7 @@ import logging
 from sqlalchemy import select, desc, literal_column
 from sqlalchemy.dialects.postgresql import dialect
 from typing import Optional, List
+from app.data_fetcher.xueqiu_quote import stock_zh_a_xq_list
 
 logger = logging.getLogger(__name__)
 logging.basicConfig()
@@ -250,6 +251,46 @@ class StockDataReader:
         df = df.dropna(subset=["stock_code", "close"])
         df = df[df["stock_code"].isin(valid_codes_set)]
         return df[["stock_code", "close", "vol", "amount"]]
+    
+    @staticmethod
+    def _normalize_from_xq_list(df_raw: pd.DataFrame, valid_codes_set: set) -> pd.DataFrame:
+        """
+        规范化雪球 stock_zh_a_xq_list() 输出为标准列：
+        输入列：symbol(如 'SH600519'/'SZ000001'/'BJ920000'), price, volume, amount
+        输出列：['stock_code','close','vol','amount']，并仅保留本地有效代码集合
+        """
+        if df_raw is None or df_raw.empty:
+            return pd.DataFrame(columns=["stock_code", "close", "vol", "amount"])
+
+        def to_std_code(sym: str):
+            # 'SH600519' -> '600519.SH'；'SZ000001' -> '000001.SZ'；'BJ920000' -> '920000.BJ'
+            if not isinstance(sym, str) or len(sym) < 3:
+                return None
+            pfx = sym[:2].upper()
+            digits = sym[2:]
+            if not digits.isdigit():
+                return None
+            if pfx == "SH":
+                suf = "SH"
+            elif pfx == "SZ":
+                suf = "SZ"
+            elif pfx == "BJ":
+                suf = "BJ"
+            else:
+                return None
+            return f"{digits}.{suf}"
+
+        df = df_raw.rename(columns={
+            "symbol": "sym",
+            "price": "close",
+            "volume": "vol",
+            "amount": "amount",
+        }).copy()
+
+        df["stock_code"] = df["sym"].map(to_std_code)
+        df = df.dropna(subset=["stock_code", "close"])
+        df = df[df["stock_code"].isin(valid_codes_set)]
+        return df[["stock_code", "close", "vol", "amount"]]
 
     # ===== 主函数：实时价 + 多级兜底 + TTL缓存 =====
     def fetch_realtime_prices(self, *, use_cache: bool = True, force_refresh: bool = False) -> pd.DataFrame:
@@ -297,7 +338,7 @@ class StockDataReader:
                 logger.warning("Tushare rt_k 兜底失败：%s", e)
                 raise_success = False
 
-        # ==== 尝试 AkShare stock_zh_a_spot() ====
+        # ==== 尝试 3: AkShare stock_zh_a_spot() ====
         if not raise_success:
             try:
                 spot_df = ak.stock_zh_a_spot()
@@ -311,7 +352,22 @@ class StockDataReader:
                 logger.warning("AkShare stock_zh_a_spot 兜底失败：%s", e)
                 raise_success = False
 
-        # 如果三层都失败，给空表（并不写缓存）
+        # ==== 尝试 4：Xueqiu stock_zh_a_xq_list() ====
+        if not raise_success:
+            try:
+                # 可按需传参：timeout=10.0 等；默认 8s
+                xq_df = stock_zh_a_xq_list()  # 或 stock_zh_a_xq_list(timeout=10.0)
+                df = self._normalize_from_xq_list(xq_df, valid_codes_set)
+                if not df.empty:
+                    source = "xueqiu_list"
+                    raise_success = True
+                else:
+                    raise_success = False
+            except Exception as e:
+                logger.warning("Xueqiu stock_zh_a_xq_list 兜底失败：%s", e)
+                raise_success = False
+
+        # 如果都失败，给空表（并不写缓存）
         if not raise_success:
             logger.error("实时行情获取失败：已尝试 akshare -> rt_k -> realtime_quote。返回空结果。")
             return pd.DataFrame(columns=["stock_code", "close", "vol", "amount"])

@@ -6,6 +6,7 @@ from app.database import get_db
 from app.data_fetcher.trade_calender_reader import TradeCalendarReader
 import logging
 from typing import Optional, Dict, Tuple
+from app.data_fetcher.xueqiu_quote import stock_individual_spot_xq_safe
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,58 @@ class EtfDataReader:
                 }]
             )
 
+    @staticmethod
+    def _to_xq_symbol_for_etf(etf_code: str) -> str:
+        """
+        将本系统的代码（如 '510300.SH' / '159915.SZ' / '510300'）转换为雪球 symbol：
+        - '510300.SH' -> 'SH510300'
+        - '159915.SZ' -> 'SZ159915'
+        - 无后缀：'159xxx' 归 SZ，其余默认 SH
+        """
+        if "." in etf_code:
+            root, suf = etf_code.split(".", 1)
+            suf = suf.upper()
+            if suf in ("SH", "SZ"):
+                return f"{suf}{root}"
+            # 未知后缀尽量推断
+            return f"{'SZ' if root.startswith('159') else 'SH'}{root}"
+        # 无后缀
+        return f"{'SZ' if etf_code.startswith('159') else 'SH'}{etf_code}"
+    
+    @staticmethod
+    def _normalize_from_xq_spot_for_etf(df_raw: pd.DataFrame, etf_code: str) -> pd.DataFrame:
+        """
+        雪球 stock_individual_spot_xq_safe 返回两列：item / value
+        提取 '现价'、'成交量'、'成交额'，统一为 ['etf_code','close','vol','amount']
+        """
+        if df_raw is None or df_raw.empty:
+            return pd.DataFrame(columns=["etf_code", "close", "vol", "amount"])
+
+        # 建kv映射
+        if "item" not in df_raw.columns or "value" not in df_raw.columns:
+            return pd.DataFrame(columns=["etf_code", "close", "vol", "amount"])
+        kv = {str(r["item"]).strip(): r["value"] for _, r in df_raw.iterrows()}
+
+        def to_float(x):
+            try:
+                return float(x)
+            except Exception:
+                return None
+
+        close = to_float(kv.get("现价"))
+        vol   = to_float(kv.get("成交量"))
+        amt   = to_float(kv.get("成交额"))
+
+        if close is None or close <= 0:
+            return pd.DataFrame(columns=["etf_code", "close", "vol", "amount"])
+
+        return pd.DataFrame([{
+            "etf_code": etf_code,
+            "close": close,
+            "vol": vol,
+            "amount": amt,
+        }]).dropna(subset=["etf_code", "close"])
+
     # ---------- 实时行情（主源dc + fallback sina + TTL缓存） ----------
     def fetch_realtime_prices(
         self,
@@ -128,24 +181,17 @@ class EtfDataReader:
         except Exception as e:
             logger.warning(f"ETF实时行情(dc)失败 {etf_code}: {e}")
 
-        # ===== 尝试 2：tushare sina 源 fallback =====
+        # ===== 尝试 2：Xueqiu stock_individual_spot_xq_safe 兜底 =====
         if not got:
             try:
-                df = ts.realtime_quote(ts_code=etf_code, src='sina')
-                if isinstance(df, pd.DataFrame) and not df.empty:
-                    row = df.iloc[0]
-                    df_out = pd.DataFrame([{
-                        "etf_code": row.get("TS_CODE", etf_code),
-                        "date": row.get("DATE"),
-                        "close": float(row.get("PRICE", 0.0)),        # 已是元
-                        "vol": float(row.get("VOLUME", 0.0)),         # 已是股/份
-                        "amount": float(row.get("AMOUNT", 0.0))
-                    }]).dropna(subset=["etf_code", "close"])
-                    if not df_out.empty:
-                        got = True
-                        source = "sina"
+                xq_symbol = self._to_xq_symbol_for_etf(etf_code)
+                df_xq = stock_individual_spot_xq_safe(xq_symbol)  # 可加 timeout=10.0
+                df_out = self._normalize_from_xq_spot_for_etf(df_xq, etf_code)
+                if df_out is not None and not df_out.empty:
+                    got = True
+                    source = "xueqiu_individual_spot"
             except Exception as e:
-                logger.warning(f"ETF实时行情(sina)兜底失败 {etf_code}: {e}")
+                logger.warning("ETF雪球 individual_spot 兜底失败(%s)：%s", etf_code, e)
 
         if not got:
             logger.error("ETF实时行情获取失败（dc + sina 均无数据）：%s", etf_code)
