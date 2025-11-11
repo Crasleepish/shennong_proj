@@ -98,7 +98,7 @@ class CalendarFetcher:
          获取下一交易日。
          如果当前日期不是交易日，则返回下一最近的交易日。
         """
-        all_dates = self.get_trade_date(start=current_date, format=format, limit=1, ascending=True)
+        all_dates = self.get_trade_date(start=current_date, format=format, limit=2, ascending=True)
         formated_current_date = datetime.strptime(current_date, '%Y%m%d').strftime(format)
         if formated_current_date not in all_dates: # 当前日期不在交易日列表中
             if len(all_dates) == 0: # 没有交易日
