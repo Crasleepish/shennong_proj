@@ -22,7 +22,7 @@ class XqToken(Base):
 class XueqiuTokenManager:
     """服务器用：纯 headless 自动获取 xq_a_token，带数据库缓存（TTL=23h）。"""
     TOKEN_KEY = "xq_a_token"
-    TTL = dt.timedelta(hours=23)
+    TTL = dt.timedelta(hours=167)
     START_URL = "https://xueqiu.com/S/SH000001"
 
     UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

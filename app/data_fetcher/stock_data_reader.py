@@ -13,6 +13,7 @@ from sqlalchemy import select, desc, literal_column
 from sqlalchemy.dialects.postgresql import dialect
 from typing import Optional, List
 from app.data_fetcher.xueqiu_quote import stock_zh_a_xq_list
+from app.dao.stock_info_dao import AdjFactorDao
 
 logger = logging.getLogger(__name__)
 logging.basicConfig()
@@ -74,17 +75,20 @@ class StockDataReader:
         return trade_dates[-1 + offset]
 
     def _get_adj_factors(self, trade_date: pd.Timestamp) -> pd.DataFrame:
+        adj_factor_dao = AdjFactorDao()
         trade_date_str = trade_date.strftime("%Y%m%d")
-        return self._ts_pro.adj_factor(trade_date=trade_date_str)
+        return adj_factor_dao.get_adj_factor_dataframe(stock_code=None, start_date=trade_date_str, end_date=trade_date_str)
 
     # ---------- 最新收盘价（不缓存） ----------
-    def fetch_latest_close_prices(self, exchange_filter=None, list_status_filter=None, latest_trade_date=None) -> pd.DataFrame:
+    def fetch_latest_close_prices(self, exchange_filter=None, list_status_filter=None, latest_trade_date=None, adjust_trade_date=None) -> pd.DataFrame:
         """
         从本地DB读取【最近一个≤latest_trade_date的收盘价】并做前复权到 T 日。
         注意：本函数不做缓存（每次都查库），以保证口径一致且便于调试。
         """
         if latest_trade_date is None:
             latest_trade_date = self._get_current_trade_date()
+        if adjust_trade_date is None:
+            adjust_trade_date = latest_trade_date
         with get_db() as db:
             shu = aliased(StockHistUnadj)
             si = aliased(StockInfo)
@@ -144,8 +148,13 @@ class StockDataReader:
             return df
 
         # 前复权到 T 日
-        adj_factor_T_df = self._get_adj_factors(latest_trade_date)
-        adj_T_map = dict(zip(adj_factor_T_df.ts_code, adj_factor_T_df.adj_factor))
+        adj_factor_T_df = self._get_adj_factors(adjust_trade_date)
+        adj_T_map = dict(zip(adj_factor_T_df.stock_code, adj_factor_T_df.adj_factor))
+        if adj_factor_T_df.empty:
+            # 若缺少最新交易日的复权因子，则使用各个股票所查到的有收盘价的那一日对应的复权因子，即不需再复权
+            logger.warning("未能获取最新交易日的复权因子，将使用各个股票所查到的收盘价，不再复权。如果某支股票最近几天刚好有分红，可能会低估收益率。")
+            adj_T_map = dict(zip(df.stock_code, df.adj_factor_d))
+
 
         missing_codes = []
 
@@ -166,12 +175,12 @@ class StockDataReader:
             .rename(columns={"adj_close": "close"}) \
             .dropna(subset=["stock_code", "close"])
 
-    def fetch_latest_close_prices_from_cache(self, exchange_filter=None, list_status_filter=None, latest_trade_date=None) -> pd.DataFrame:
+    def fetch_latest_close_prices_from_cache(self, exchange_filter=None, list_status_filter=None, latest_trade_date=None, adjust_trade_date=None) -> pd.DataFrame:
         """
         兼容旧接口：现在不再缓存，直接调用 fetch_latest_close_prices。
         """
         logger.debug("fetch_latest_close_prices_from_cache 已废弃缓存逻辑，直接走实时查询。")
-        return self.fetch_latest_close_prices(exchange_filter, list_status_filter, latest_trade_date)
+        return self.fetch_latest_close_prices(exchange_filter, list_status_filter, latest_trade_date, adjust_trade_date)
 
     # ---------- 实时行情价（带TTL缓存） ----------
     # ===== 统一规范化：不同来源 -> 标准列 =====
@@ -312,17 +321,8 @@ class StockDataReader:
                     code_map[short] = c
 
         # ==== 尝试 1：AkShare ====
-        try:
-            ak_df = ak.stock_zh_a_spot_em()
-            df = self._normalize_from_ak(ak_df, valid_codes_set, code_map)
-            if not df.empty:
-                source = "akshare"
-                raise_success = True
-            else:
-                raise_success = False
-        except Exception as e:
-            logger.warning("AkShare 实时行情失败：%s", e)
-            raise_success = False
+        # 因反爬收紧，不再使用ak.stock_zh_a_spot()
+        raise_success = False
 
         # ==== 尝试 2：Tushare Pro rt_k（全市场） ====
         if not raise_success:

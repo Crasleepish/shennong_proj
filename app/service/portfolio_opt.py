@@ -239,8 +239,9 @@ def compute_portfolio_returns(market_data):
     # 获取昨日收盘价（缓存数据）
     today = datetime.now().date()
     latest_trade_date = TradeCalendarReader.get_trade_dates(end=today.strftime("%Y-%m-%d"))[-2]  #T-1日期
+    adjust_trade_date = TradeCalendarReader.get_trade_dates(end=today.strftime("%Y-%m-%d"))[-1]  #T日
     stock_reader = StockDataReader()
-    price_df_yesterday = stock_reader.fetch_latest_close_prices_from_cache(latest_trade_date=latest_trade_date)
+    price_df_yesterday = stock_reader.fetch_latest_close_prices_from_cache(latest_trade_date=latest_trade_date, adjust_trade_date=adjust_trade_date)
     price_map_yesterday = price_df_yesterday.set_index("stock_code")["close"].to_dict()
 
     # 实时数据中不包含停牌退市数据，根据历史数据补充

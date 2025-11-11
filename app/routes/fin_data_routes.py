@@ -726,12 +726,16 @@ def update_all_fin_data():
             return jsonify({"status": "error", "message": "mode 必须提供 (realtime/history) "}), 400
         
         trade_dates = calender_fetcher.get_trade_date(start, end, format="%Y%m%d")
+        next_trade_date = calender_fetcher.get_next_trade_date(trade_dates[-1], format="%Y%m%d")
         
         stock_info_synchronizer.sync()
 
         for trade_date in trade_dates:
             stock_hist_synchronizer.sync_by_trade_date(trade_date)
             adj_factor_synchronizer.sync_by_trade_date(trade_date)
+
+        # 尝试向后多同步一天复权因子，便于估计盘中实时收益率
+        adj_factor_synchronizer.sync_by_trade_date(next_trade_date)
 
         suspend_data_synchronizer.sync_by_date(start_date=start, end_date=end)
         index_hist_synchronizer.sync_by_trade_date(start, end, ["000985.CSI", "000300.SH", "000001.SH", "399006.SZ", "000699.SH", "000905.SH", "000852.SH", "932000.CSI", "000922.CSI"])

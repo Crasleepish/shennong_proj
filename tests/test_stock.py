@@ -206,15 +206,11 @@ def test_stock_data_fetcher_fetch_latest_close_prices(app):
     assert 'stock_code' in df.columns
     assert 'close' in df.columns
 
-    # 第二次调用，应命中缓存
-    df2 = fetcher.fetch_latest_close_prices_from_cache(exchange_filter=['SSE', 'SZSE'], list_status_filter=['L'])
-    assert df2 is fetcher._last_df_cache  # 确保是同一个对象（未重新查询）
-
     # 第三次调用，使用不同 exchange_filter，应重新查询
     df3 = fetcher.fetch_latest_close_prices_from_cache(exchange_filter=['SSE'], list_status_filter=['L'])
     assert isinstance(df3, pd.DataFrame)
     assert not df3.empty
-    assert df3 is not df2  # 确保是新数据，不是缓存命中
+    assert df3 is not df  # 确保是新数据，不是缓存命中
 
     # 验证 filter key 缓存是否按条件记录
     assert fetcher._last_cache_filter_key == (('SSE',), ('L',))

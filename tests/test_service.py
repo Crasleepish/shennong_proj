@@ -29,7 +29,7 @@ def app():
     yield app
 
 def test_optimize_portfolio_realtime(app):
-    optimize_portfolio_realtime()
+    optimize_portfolio_realtime(1)
 
 def test_additional_factor_df(app):
     today = datetime.datetime.strftime(TradeCalendarReader.get_trade_dates(end=datetime.datetime.strftime(datetime.datetime.today(), "%Y%m%d"))[-1], "%Y-%m-%d")
