@@ -37,6 +37,7 @@ def init_db():
     from app.models import calendar_model
     from app.models import macro_models
     from app.models import service_models
+    from app.models import gold_models
     Base.metadata.create_all(bind=engine)
 
 @contextmanager
@@ -55,3 +56,10 @@ def get_db():
         raise e
     finally:
         db.close()  # Always close the session
+
+def get_session():
+    """
+    Get a database session.
+    This function returns a database session that can be used to interact with the database.
+    """
+    return SessionLocal()

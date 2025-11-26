@@ -77,7 +77,6 @@ nest-asyncio==1.6.0
 notebook==5.7.8
 numba==0.56.4
 numpy==1.23.5
-nvidia-nccl-cu12==2.26.5
 openpyxl==3.1.5
 optuna==4.3.0
 osqp==1.0.4

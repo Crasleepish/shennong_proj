@@ -299,7 +299,7 @@ def get_predict_series():
             "hml_tri": "HML",
             "qmj_tri": "QMJ",
             "10Ybond_tri": "BOND10Y",
-            "gold_tri": "GOLD",
+            # "gold_tri": "GOLD",
         }
 
         out = {}

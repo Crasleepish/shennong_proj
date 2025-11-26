@@ -2,6 +2,7 @@ from typing import List
 import numpy as np
 import os
 import pandas as pd
+from app.ai.gold_view_llm import GoldViewLLM
 from app.data_fetcher.trade_calender_reader import TradeCalendarReader
 from datetime import datetime
 from app.models.service_models import PortfolioWeights
@@ -120,6 +121,18 @@ def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str, po
     else:
         mu_post_full = mu_prior_full
         Sigma_full = Sigma_full
+
+    # === 使用大语言模型分析黄金期货结构，得到期望收益率，覆盖mu_post_full中的黄金收益率
+    try:
+        gold_idx = fund_codes.index("Au99.99.SGE")
+        gv = GoldViewLLM()
+        res = gv.generate_view(pd.to_datetime(trade_date).date())
+        if res.expected_return is not None:
+            mu_post_full[gold_idx] = res.expected_return
+    except Exception as e:
+        logger.error(e)
+        # 大模型无法回溯历史数据进行分析，直接用0.0
+        mu_post_full[gold_idx] = 0.0
 
     # === α 调整（一次性水平项，不进入协方差）,这里的α指的是因子归因分析后剩下的常数项 ===
     fund_const = load_fund_const(factor_codes, trade_date)
@@ -494,6 +507,18 @@ def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict
     else:
         mu_post_full = mu_prior_full
         Sigma_full = Sigma_full
+
+    # === 使用大语言模型分析黄金期货结构，得到期望收益率，覆盖mu_post_full中的黄金收益率
+    try:
+        gold_idx = fund_codes.index("Au99.99.SGE")
+        gv = GoldViewLLM()
+        res = gv.generate_view(pd.to_datetime(trade_date).date())
+        if res.expected_return:
+            mu_post_full[gold_idx] = res.expected_return
+    except Exception as e:
+        logger.error(e)
+        # 大模型无法回溯历史数据进行分析，如果出错（主要是回测时）直接用0.0
+        mu_post_full[gold_idx] = 0.0
 
     # === α 调整（一次性水平项，不进入协方差）,这里的α指的是因子归因分析后剩下的常数项 ===
     fund_const = load_fund_const(factor_codes, trade_date)

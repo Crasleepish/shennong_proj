@@ -16,6 +16,7 @@ from app.data_fetcher import MacroDataFetcher
 from app.data_fetcher import CalendarFetcher
 from app.data_fetcher import CSIIndexDataFetcher, GoldDataFetcher
 from app.data_fetcher import EtfDataFetcher
+from app.data_fetcher import GoldDerivativesFetcher
 import pandas as pd
 
 
@@ -759,6 +760,11 @@ def update_all_fin_data():
                                  end_date=end_date_fmt,
                                  mode=mode)
         
+        # 抓取黄金衍生品数据
+        gold_derivatives_fetcher = GoldDerivativesFetcher()
+        gold_derivatives_fetcher.ensure_cftc_reports(as_of_date=pd.to_datetime(end, format="%Y%m%d").date())
+        gold_derivatives_fetcher.update_barchart_future_curve()
+        
         return jsonify({"message": "success"})
     except Exception as e:
         logger.exception(str(e))
@@ -837,5 +843,23 @@ def update_dynamic_beta():
             "message": f"Kalman β 更新完成"
             })
     except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    
+
+@fin_data_bp.route("/gold_deravitives/sync_by_date")
+def sync_gold_deravitives_by_date():
+    """
+    同步黄金衍生品数据至数据库
+    """
+    try:
+        data = request.get_json()
+        end = data.get("end_date")
+        # 抓取黄金衍生品数据
+        gold_derivatives_fetcher = GoldDerivativesFetcher()
+        gold_derivatives_fetcher.ensure_cftc_reports(as_of_date=pd.to_datetime(end, format="%Y%m%d").date())
+        gold_derivatives_fetcher.update_barchart_future_curve()
+        return jsonify({"status": "success"}), 200
+    except Exception as e:
+        logger.exception("Error executing etf hist sync task.")
         return jsonify({"status": "error", "message": str(e)}), 500
     

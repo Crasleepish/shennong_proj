@@ -35,7 +35,7 @@ factor_data_reader = FactorDataReader()
 csi_index_data_fetcher = CSIIndexDataFetcher()
 sell_fee_rate = 0.0005
 slippage_rate = 0.0
-portfolio_id = 2
+portfolio_id = 1
 
 # 资产配置
 asset_info = get_portfolio_assets(portfolio_id)
@@ -416,4 +416,5 @@ def run_backtest_using_db_weights(
 
 
 if __name__ == '__main__':
-    run_backtest_using_db_weights(portfolio_id=2, start='2022-09-02', end='2025-09-25')
+    # run_backtest_using_db_weights(portfolio_id=2, start='2025-09-02', end='2025-09-25')
+    run_backtest(start="2025-11-21", end="2025-11-22", window=20)

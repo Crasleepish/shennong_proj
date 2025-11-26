@@ -17,6 +17,9 @@ from app.ml.preprocess import select_features_vif
 
 class DatasetBuilder:
     def __init__(self, additional_factor_df: pd.DataFrame = None, additional_map: dict[str, pd.DataFrame] = None):
+        self.window = 750           # 大约 3 年交易日，可按需调成 500~750
+        self.q_low = 0.25
+        self.q_high = 0.75
         self.factor_data_reader = FactorDataReader(additional_factor_df)
         self.csi_index_data_fetcher = CSIIndexDataFetcher(additional_map)
         self.gold_data_fetcher = GoldDataFetcher(additional_map)
@@ -118,52 +121,94 @@ class DatasetBuilder:
             ]
 
     @staticmethod
-    def label_three_class(series: pd.Series, lower: float, upper: float) -> pd.Series:
-        return series.apply(lambda x: 2 if x > upper else (0 if x < lower else 1))
+    def label_three_class(
+        series: pd.Series,
+        lower: float | pd.Series,
+        upper: float | pd.Series
+    ) -> pd.Series:
+        """
+        三分类打标：
+        - 0：低区间（< lower）
+        - 1：中区间（between lower & upper）
+        - 2：高区间（> upper）
+
+        lower/upper 可以是标量，也可以是按时间滚动的 Series。
+        """
+        # 标量阈值：保持原有行为
+        if not isinstance(lower, pd.Series) and not isinstance(upper, pd.Series):
+            return series.apply(
+                lambda x: 2 if x > upper else (0 if x < lower else 1)
+            )
+
+        # 滚动阈值：按 index 对齐
+        df_thr = pd.concat(
+            [series.rename("ret"),
+             lower.rename("lower"),
+             upper.rename("upper")],
+            axis=1
+        ).dropna(subset=["ret", "lower", "upper"])
+
+        if df_thr.empty:
+            # 没有有效点，直接返回全 NaN
+            return pd.Series(index=series.index, dtype="float64")
+
+        labels = pd.Series(1, index=df_thr.index, dtype="int64")
+        labels[df_thr["ret"] < df_thr["lower"]] = 0
+        labels[df_thr["ret"] > df_thr["upper"]] = 2
+
+        # 重新对齐到原始 index，缺的用 NaN
+        out = pd.Series(index=series.index, dtype="float64")
+        out.loc[labels.index] = labels
+        return out
     
     @staticmethod
     def safe_mean(series: pd.Series) -> float:
         q01, q99 = series.quantile(0.01), series.quantile(0.99)
         return series[(series >= q01) & (series <= q99)].mean()
 
-    def compute_label_to_ret(self, future_ret: pd.Series, alpha: float) -> Tuple[float, float, float]:
+    def compute_label_to_ret(
+        self,
+        future_ret: pd.Series,
+        labels: pd.Series
+    ) -> Tuple[float, float, float]:
         """
-        基于整体收益率服从正态分布的假设，计算三分类标签对应的理论期望值（label_to_ret）。
+        基于真实样本分布，计算三分类标签对应的经验期望值（label_to_ret），
+        不再依赖“整体收益服从正态分布”的假设。
 
         参数：
-        - future_ret: pd.Series，未来收益率序列
-        - alpha: float，用于分界（μ ± alpha × σ）
+        - future_ret: 未来 20 日收益序列（与标签在时间上对齐）
+        - labels: 0 / 1 / 2 三分类标签（可能有 NaN）
 
         返回：
-        - ret0: 标签0（下跌）对应的期望收益
-        - ret1: 标签1（中性）对应的期望收益
-        - ret2: 标签2（上涨）对应的期望收益
+        - ret0: 标签 0 对应的期望收益（下跌）
+        - ret1: 标签 1 对应的期望收益（中性）
+        - ret2: 标签 2 对应的期望收益（上涨）
         """
-        mu = future_ret.mean()
-        sigma = future_ret.std()
-        if sigma == 0 or not pd.notna(sigma):
-            return mu, mu, mu  # 防止除零或NaN传播
+        df = pd.concat(
+            [future_ret.rename("ret"), labels.rename("label")],
+            axis=1
+        ).dropna(subset=["ret", "label"])
 
-        # 下跌区间：E[X | X < μ - ασ]
-        z0 = -alpha
-        phi0 = norm.pdf(z0)
-        Phi0 = norm.cdf(z0)
-        E0 = mu + sigma * (-phi0 / Phi0)
+        if df.empty:
+            mu = float(future_ret.mean())
+            return mu, mu, mu
 
-        # 中性区间：E[X | μ - ασ ≤ X ≤ μ + ασ]
-        z1, z2 = -alpha, alpha
-        phi1, phi2 = norm.pdf(z1), norm.pdf(z2)
-        Phi1, Phi2 = norm.cdf(z1), norm.cdf(z2)
-        middle_weight = Phi2 - Phi1
-        E1 = mu + sigma * (phi1 - phi2) / middle_weight
+        # 全体的一个“基准均值”，用于兜底
+        mu_all = self.safe_mean(df["ret"])
 
-        # 上涨区间：E[X | X > μ + ασ]
-        z3 = alpha
-        phi3 = norm.pdf(z3)
-        Phi3 = norm.cdf(z3)
-        E2 = mu + sigma * (phi3 / (1 - Phi3))
+        def _label_mean(lbl: int) -> float:
+            sub = df.loc[df["label"] == lbl, "ret"]
+            if sub.empty:
+                return mu_all
+            m = self.safe_mean(sub)
+            return mu_all if pd.isna(m) else m
 
-        return E0, E1, E2
+        ret0 = _label_mean(0)
+        ret1 = _label_mean(1)
+        ret2 = _label_mean(2)
+
+        return ret0, ret1, ret2
+
 
     def _build_dataset(self, data_df, factor_plan: dict, target_series: pd.Series, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
         assembler = FeatureAssembler(macro_feature_plan=self.macro_plan, data_feature_plan=factor_plan)
@@ -195,78 +240,227 @@ class DatasetBuilder:
         
         return df_X, df_Y
 
-    def build_mkt_tri_class(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, tuple[float,float,float]]:
+    def build_mkt_tri_class(
+        self,
+        start: str = None,
+        end: str = None,
+        vif: bool = True,
+        inference: bool = False
+    ) -> tuple[pd.DataFrame, pd.DataFrame, tuple[float, float, float]]:
+        """
+        构建 MKT 三分类数据集：
+        - 目标：未来 20 日 MKT_NAV 的收益率三分类（低/中/高）
+        - 打标方式：基于滚动窗口的分位数阈值（非高斯假设）
+
+        返回：
+        - X: 特征 DataFrame
+        - Y: 标签 DataFrame（只有一列 'target'）
+        - label_to_ret: (ret0, ret1, ret2) 三个标签对应的经验期望收益
+        """
         df = self.factor_data_reader.read_factor_nav(start, end)
-        ma10 = df['MKT_NAV'].rolling(10).mean()
+        ma10 = df["MKT_NAV"].rolling(window=10, min_periods=10).mean()
         future_ret = ma10.shift(-20) / ma10 - 1
-        future_ret = future_ret.dropna()
-        lower = future_ret.mean() - 0.67 * future_ret.std()
-        upper = future_ret.mean() + 0.67 * future_ret.std()
-        target = self.label_three_class(future_ret, lower=lower, upper=upper)
-        label_to_ret = self.compute_label_to_ret(future_ret, alpha=0.67)
-        X, Y = self._build_dataset(df, self.mkt_plan, target, start, end, vif, inference)
+        future_ret = future_ret.dropna().sort_index()
+
+        rolling_low = future_ret.rolling(
+            window=self.window,
+            min_periods=250      # 至少一年数据才开始打标
+        ).quantile(self.q_low)
+
+        rolling_high = future_ret.rolling(
+            window=self.window,
+            min_periods=250
+        ).quantile(self.q_high)
+
+        # 为了避免「用当前点的未来收益参与自己阈值的估计」，整体向后平移一天
+        rolling_low = rolling_low.shift(1)
+        rolling_high = rolling_high.shift(1)
+
+        target = self.label_three_class(
+            series=future_ret,
+            lower=rolling_low,
+            upper=rolling_high
+        )
+
+        # 有一部分最前面的样本会因为窗口不够而变成 NaN，后面 _build_dataset 会自动对齐/丢掉
+        # 这里先算 label_to_ret，用的是“已经打好标签的样本”
+        label_to_ret = self.compute_label_to_ret(future_ret, target)
+
+        X, Y = self._build_dataset(
+            df,
+            factor_plan=self.mkt_plan,
+            target_series=target,
+            start=start,
+            end=end,
+            vif=vif,
+            inference=inference
+        )
+
         return X, Y, label_to_ret
 
     def build_smb_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, tuple[float,float,float]]:
         df = self.factor_data_reader.read_factor_nav(start, end)
-        ma10 = df['SMB_NAV'].rolling(10).mean()
+        ma10 = df['SMB_NAV'].rolling(window=10, min_periods=10).mean()
         future_ret = ma10.shift(-20) / ma10 - 1
-        future_ret = future_ret.dropna()
-        lower = future_ret.mean() - 0.67 * future_ret.std()
-        upper = future_ret.mean() + 0.67 * future_ret.std()
-        target = self.label_three_class(future_ret, lower=lower, upper=upper)
-        label_to_ret = self.compute_label_to_ret(future_ret, alpha=0.67)
-        X, Y = self._build_dataset(df, self.smb_plan, target, start, end, vif, inference)
+        future_ret = future_ret.dropna().sort_index()
+        rolling_low = future_ret.rolling(
+            window=self.window,
+            min_periods=250      # 至少一年数据才开始打标
+        ).quantile(self.q_low)
+        rolling_high = future_ret.rolling(
+            window=self.window,
+            min_periods=250
+        ).quantile(self.q_high)
+        rolling_low = rolling_low.shift(1)
+        rolling_high = rolling_high.shift(1)
+        target = self.label_three_class(
+            series=future_ret,
+            lower=rolling_low,
+            upper=rolling_high
+        )
+        label_to_ret = self.compute_label_to_ret(future_ret, target)
+        X, Y = self._build_dataset(
+            df,
+            factor_plan=self.smb_plan,
+            target_series=target,
+            start=start,
+            end=end,
+            vif=vif,
+            inference=inference
+        )
+        
         return X, Y, label_to_ret
 
     def build_hml_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, tuple[float,float,float]]:
         df = self.factor_data_reader.read_factor_nav(start, end)
         ma10 = df['HML_NAV'].rolling(10).mean()
         future_ret = ma10.shift(-20) / ma10 - 1
-        future_ret = future_ret.dropna()
-        lower = future_ret.mean() - 0.67 * future_ret.std()
-        upper = future_ret.mean() + 0.67 * future_ret.std()
-        target = self.label_three_class(future_ret, lower=lower, upper=upper)
-        label_to_ret = self.compute_label_to_ret(future_ret, alpha=0.67)
-        X, Y = self._build_dataset(df, self.hml_plan, target, start, end, vif, inference)
+        future_ret = future_ret.dropna().sort_index()
+        rolling_low = future_ret.rolling(
+            window=self.window,
+            min_periods=250      # 至少一年数据才开始打标
+        ).quantile(self.q_low)
+        rolling_high = future_ret.rolling(
+            window=self.window,
+            min_periods=250
+        ).quantile(self.q_high)
+        rolling_low = rolling_low.shift(1)
+        rolling_high = rolling_high.shift(1)
+        target = self.label_three_class(
+            series=future_ret,
+            lower=rolling_low,
+            upper=rolling_high
+        )
+        label_to_ret = self.compute_label_to_ret(future_ret, target)
+        X, Y = self._build_dataset(
+            df,
+            factor_plan=self.hml_plan,
+            target_series=target,
+            start=start,
+            end=end,
+            vif=vif,
+            inference=inference
+        )
         return X, Y, label_to_ret
 
     def build_qmj_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, tuple[float,float,float]]:
         df = self.factor_data_reader.read_factor_nav(start, end)
         ma10 = df['QMJ_NAV'].rolling(10).mean()
         future_ret = ma10.shift(-20) / ma10 - 1
-        future_ret = future_ret.dropna()
-        lower = future_ret.mean() - 0.67 * future_ret.std()
-        upper = future_ret.mean() + 0.67 * future_ret.std()
-        target = self.label_three_class(future_ret, lower=lower, upper=upper)
-        label_to_ret = self.compute_label_to_ret(future_ret, alpha=0.67)
-        X, Y = self._build_dataset(df, self.qmj_plan, target, start, end, vif, inference)
+        future_ret = future_ret.dropna().sort_index()
+        rolling_low = future_ret.rolling(
+            window=self.window,
+            min_periods=250      # 至少一年数据才开始打标
+        ).quantile(self.q_low)
+        rolling_high = future_ret.rolling(
+            window=self.window,
+            min_periods=250
+        ).quantile(self.q_high)
+        rolling_low = rolling_low.shift(1)
+        rolling_high = rolling_high.shift(1)
+        target = self.label_three_class(
+            series=future_ret,
+            lower=rolling_low,
+            upper=rolling_high
+        )
+        label_to_ret = self.compute_label_to_ret(future_ret, target)
+        X, Y = self._build_dataset(
+            df,
+            factor_plan=self.qmj_plan,
+            target_series=target,
+            start=start,
+            end=end,
+            vif=vif,
+            inference=inference
+        )
         return X, Y, label_to_ret
     
     def build_10Ybond_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, tuple[float,float,float]]:
         df = self.csi_index_data_fetcher.get_data_by_code_and_date("H11004.CSI", start, end)
         df = df.set_index("date").sort_index()
-        ma10 = df['close'].rolling(10).mean()
+        ma10 = df['close'].rolling(window=10, min_periods=10).mean()
         future_ret = ma10.shift(-20) / ma10 - 1
-        future_ret = future_ret.dropna()
-        lower = future_ret.mean() - 0.67 * future_ret.std()
-        upper = future_ret.mean() + 0.67 * future_ret.std()
-        target = self.label_three_class(future_ret, lower=lower, upper=upper)
-        label_to_ret = self.compute_label_to_ret(future_ret, alpha=0.67)
-        X, Y = self._build_dataset(df, self.bond_plan, target, start, end, vif, inference)
+        future_ret = future_ret.dropna().sort_index()
+        rolling_low = future_ret.rolling(
+            window=self.window,
+            min_periods=250      # 至少一年数据才开始打标
+        ).quantile(self.q_low)
+        rolling_high = future_ret.rolling(
+            window=self.window,
+            min_periods=250
+        ).quantile(self.q_high)
+        rolling_low = rolling_low.shift(1)
+        rolling_high = rolling_high.shift(1)
+        target = self.label_three_class(
+            series=future_ret,
+            lower=rolling_low,
+            upper=rolling_high
+        )
+        label_to_ret = self.compute_label_to_ret(future_ret, target)
+        X, Y = self._build_dataset(
+            df,
+            factor_plan=self.bond_plan,
+            target_series=target,
+            start=start,
+            end=end,
+            vif=vif,
+            inference=inference
+        )
+
         return X, Y, label_to_ret
     
     def build_gold_tri(self, start: str = None, end: str = None, vif: bool = True, inference: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, tuple[float,float,float]]:
         df = self.gold_data_fetcher.get_data_by_code_and_date("Au99.99.SGE", start, end)
         df = df.set_index("date").sort_index()
-        ma10 = df['close'].rolling(10).mean()
+        ma10 = df['close'].rolling(window=10, min_periods=10).mean()
         future_ret = ma10.shift(-20) / ma10 - 1
-        future_ret = future_ret.dropna()
-        lower = future_ret.mean() - 0.67 * future_ret.std()
-        upper = future_ret.mean() + 0.67 * future_ret.std()
-        target = self.label_three_class(future_ret, lower=lower, upper=upper)
-        label_to_ret = self.compute_label_to_ret(future_ret, alpha=0.67)
-        X, Y = self._build_dataset(df, self.gold_plan, target, start, end, vif, inference)
+        future_ret = future_ret.dropna().sort_index()
+        rolling_low = future_ret.rolling(
+            window=self.window,
+            min_periods=250      # 至少一年数据才开始打标
+        ).quantile(self.q_low)
+        rolling_high = future_ret.rolling(
+            window=self.window,
+            min_periods=250
+        ).quantile(self.q_high)
+        rolling_low = rolling_low.shift(1)
+        rolling_high = rolling_high.shift(1)
+        target = self.label_three_class(
+            series=future_ret,
+            lower=rolling_low,
+            upper=rolling_high
+        )
+        label_to_ret = self.compute_label_to_ret(future_ret, target)
+        X, Y = self._build_dataset(
+            df,
+            factor_plan=self.gold_plan,
+            target_series=target,
+            start=start,
+            end=end,
+            vif=vif,
+            inference=inference
+        )
+
         return X, Y, label_to_ret
 
     def train_test_split(self, X: pd.DataFrame, Y: pd.DataFrame, split_date: str) -> tuple:

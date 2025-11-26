@@ -8,6 +8,7 @@ from .stock_data_reader import StockDataReader
 from .index_data_reader import IndexDataReader
 from .etf_data_fetcher import EtfDataFetcher
 from .etf_data_reader import EtfDataReader
+from .gold_derivatives_fetcher import GoldDerivativesFetcher
 
 __all__ = [
     "MacroDataFetcher",
@@ -20,4 +21,5 @@ __all__ = [
     "IndexDataReader",
     "EtfDataFetcher",
     "EtfDataReader",
+    "GoldDerivativesFetcher"
 ]

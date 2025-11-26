@@ -21,7 +21,7 @@ TASK_MODEL_PATHS = {
     "hml_tri": "./models/hml_tri/model_{0}.pkl",
     "qmj_tri": "./models/qmj_tri/model_{0}.pkl",
     "10Ybond_tri": "./models/10Ybond_tri/model_{0}.pkl",
-    "gold_tri": "./models/gold_tri/model_{0}.pkl",
+    # "gold_tri": "./models/gold_tri/model_{0}.pkl",
 }
 
 def get_last_day_of_prev_month(date: date_cls) -> date_cls:

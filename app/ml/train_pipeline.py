@@ -42,67 +42,59 @@ DEFAULT_XGB_PARAMS = dict(
 TASK_HPARAMS = {
     # 四因子（示例：与默认一致或轻微调整）
     "mkt_tri": dict(
-        n_estimators=2000,
-        learning_rate=0.0045,
-        max_depth=9,
-        min_child_weight=1.0,
+        n_estimators=1000,
+        learning_rate=0.02,
+        max_depth=4,
+        min_child_weight=2.0,
         gamma=0.1,
-        reg_lambda=0.0,
-        reg_alpha=0.0,
+        reg_lambda=2.0,
+        reg_alpha=2.0,
         early_stopping_rounds=50,
     ),
     "smb_tri": dict(
-        n_estimators=2000,
-        learning_rate=0.006,
-        max_depth=3,
-        min_child_weight=1.0,
-        gamma=0.1,
-        reg_lambda=4.0,
+        n_estimators=300,
+        learning_rate=0.03,
+        max_depth=2,
+        min_child_weight=5.0,
+        subsample=0.7,
+        colsample_bytree=0.5,
+        gamma=0.5,
+        reg_lambda=5.0,
         reg_alpha=2.0,
-        early_stopping_rounds=50
+        early_stopping_rounds=50,
     ),
     "hml_tri": dict(
-        n_estimators=2400,
-        learning_rate=0.0025,
-        max_depth=3,
-        min_child_weight=0.5,
+        n_estimators=1500,
+        learning_rate=0.01,
+        max_depth=4,
+        min_child_weight=2.0,
         gamma=0.1,
-        reg_lambda=0.0,
-        reg_alpha=0.0,
-        early_stopping_rounds=50
+        reg_lambda=2.0,
+        reg_alpha=2.0,
+        early_stopping_rounds=50,
     ),
     "qmj_tri": dict(
-        n_estimators=6000,
-        learning_rate=0.002,
-        max_depth=10,
-        min_child_weight=0.5,
+        n_estimators=1500,
+        learning_rate=0.01,
+        max_depth=4,
+        min_child_weight=2.0,
         gamma=0.1,
-        reg_lambda=0.0,
-        reg_alpha=0.0,
-        early_stopping_rounds=50
+        reg_lambda=2.0,
+        reg_alpha=2.0,
+        early_stopping_rounds=50,
     ),
 
     "10Ybond_tri": dict(
-        n_estimators=2000,
-        learning_rate=0.003,
-        max_depth=11,
-        min_child_weight=0.5,
+        n_estimators=1500,
+        learning_rate=0.01,
+        max_depth=4,
+        min_child_weight=2.0,
         gamma=0.1,
-        reg_lambda=0.0,
-        reg_alpha=0.0,
-        early_stopping_rounds=50
+        reg_lambda=2.0,
+        reg_alpha=2.0,
+        early_stopping_rounds=50,
     ),
 
-    "gold_tri": dict(
-        n_estimators=2000,
-        learning_rate=0.003,
-        max_depth=12,
-        min_child_weight=0.5,
-        gamma=0.1,
-        reg_lambda=0.0,
-        reg_alpha=0.0,
-        early_stopping_rounds=50
-    ),
 }
 
 def get_params_for_task(task: str) -> dict:
@@ -111,8 +103,36 @@ def get_params_for_task(task: str) -> dict:
     return p
 
 
+def compute_recency_weight(index: pd.Index, decay_half_life: int = 750) -> np.ndarray:
+    """
+    计算时间衰减权重：
+    - index: X_train.index（DatetimeIndex 或 object，可转换为日期）
+    - decay_half_life: 半衰期（单位：天），默认750天≈3年
+      权重公式： w = 0.5^(age_days / half_life)
+
+    返回：
+        ndarray of shape (n_samples,)
+    """
+    # 转换成 datetime 对象
+    dates = pd.to_datetime(index)
+
+    # 最新日期（越接近这个日期 → 权重越大）
+    max_date = dates.max()
+
+    # 计算每个样本距离 max_date 的天数
+    age_days = (max_date - dates).days.values
+
+    # 半衰期公式（指数衰减）
+    w = 0.5 ** (age_days / decay_half_life)
+
+    # 避免极端权重（太小会数值不稳定）
+    w = np.clip(w, 1e-6, 1.0)
+
+    return w
+
+
 def train_one_task(
-    task: Literal["mkt_tri", "smb_tri", "hml_tri", "qmj_tri", "10Ybond_tri", "gold_tri"],
+    task: Literal["mkt_tri", "smb_tri", "hml_tri", "qmj_tri", "10Ybond_tri"],
     start: str,
     end: str,
     split_date: str,
@@ -125,7 +145,7 @@ def train_one_task(
         "hml_tri": builder.build_hml_tri,
         "qmj_tri": builder.build_qmj_tri,
         "10Ybond_tri": builder.build_10Ybond_tri,
-        "gold_tri": builder.build_gold_tri,
+        # "gold_tri": builder.build_gold_tri,
     }
 
     result = {}
@@ -143,11 +163,16 @@ def train_one_task(
 
     target_col = Y.columns[0]
 
+    
+
     params = get_params_for_task(task)
     model = XGBClassifier(**params)
-    sample_weight = compute_sample_weight("balanced", Y_train[target_col])
+    class_weight = compute_sample_weight("balanced", Y_train[target_col])
+    time_weight = compute_recency_weight(X_train.index, decay_half_life=750)
+    sample_weight = class_weight * time_weight
+    logger.info(f"sample_weight stats: {np.min(sample_weight)}, {np.max(sample_weight)}, {np.mean(sample_weight)}")
     model.fit(X_train, Y_train[target_col], sample_weight=sample_weight, 
-                eval_set=[(X_val, Y_val[target_col])], 
+                eval_set=[(X_train, Y_train[target_col]), (X_val, Y_val[target_col])], 
                 verbose=True)
     if need_test:
         y_pred = model.predict(X_test)
@@ -176,7 +201,7 @@ def train_one_task(
 
 def run_all_models(start, split_date: str = None, end: str = None, need_test: bool = True) -> pd.DataFrame:
     logger.info("开始训练所有模型，split_date=%s", split_date)
-    tasks = ["mkt_tri", "smb_tri", "hml_tri", "qmj_tri", "10Ybond_tri", "gold_tri"]
+    tasks = ["mkt_tri", "smb_tri", "hml_tri", "qmj_tri", "10Ybond_tri"]
     if split_date is None:
         split_date = end
     if need_test:
@@ -211,7 +236,7 @@ def rolling_train(start: str, split_dates: list[str]) -> pd.DataFrame:
 
 
 def tune_with_optuna(
-    task: Literal["mkt_tri", "smb_tri", "hml_tri", "qmj_tri", "10Ybond_tri", "gold_tri"],
+    task: Literal["mkt_tri", "smb_tri", "hml_tri", "qmj_tri", "10Ybond_tri"],
     n_trials: int = 50
 ):
     builder = DatasetBuilder()
@@ -220,7 +245,7 @@ def tune_with_optuna(
         "smb_tri": builder.build_smb_tri,
         "hml_tri": builder.build_hml_tri,
         "qmj_tri": builder.build_qmj_tri,
-        "gold_tri": builder.build_gold_tri,
+        # "gold_tri": builder.build_gold_tri,
     }
     build_fn = build_fn_map[task]
 

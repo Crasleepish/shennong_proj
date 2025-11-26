@@ -162,8 +162,8 @@ def hybrid_cov(
     lambda_: float = 0.975,
     alpha: float = 0.5,
     adaptive: bool = True,
-    lambda_min: float = 0.95,
-    lambda_max: float = 0.99,
+    lambda_min: float = 0.97,
+    lambda_max: float = 0.985,
     gamma: float = 0.025
 ) -> np.ndarray:
     """
@@ -203,7 +203,7 @@ def compute_prior_mu_sigma(
 
     ret = ret.dropna(how="any")
     mu_series = ret.mean()
-    Sigma = hybrid_cov(ret, lambda_=0.975, alpha=0.2, adaptive=True)
+    Sigma = hybrid_cov(ret, lambda_=0.98, alpha=0.5, adaptive=True)
     codes = mu_series.index.tolist()
     return mu_series.values, Sigma, codes
 
