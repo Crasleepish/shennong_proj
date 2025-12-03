@@ -264,12 +264,12 @@ class DatasetBuilder:
 
         rolling_low = future_ret.rolling(
             window=self.window,
-            min_periods=250      # 至少一年数据才开始打标
+            min_periods=750      # 至少一年数据才开始打标
         ).quantile(self.q_low)
 
         rolling_high = future_ret.rolling(
             window=self.window,
-            min_periods=250
+            min_periods=750
         ).quantile(self.q_high)
 
         # 为了避免「用当前点的未来收益参与自己阈值的估计」，整体向后平移一天

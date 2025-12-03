@@ -1,7 +1,7 @@
 # app/scripts/optimize_portfolio.py
 
 import pandas as pd
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
 from app.ml.view_builder import build_view_matrix
 from app.ml.inference import get_softprob_dict, get_label_to_ret
 import numpy as np
@@ -83,7 +83,8 @@ def ewma_cov(
     lambda_min: float = 0.95,
     lambda_max: float = 0.99,
     gamma: float = 0.025,
-    jitter: float = 1e-10
+    jitter: float = 1e-10,
+    asset_source_map: Optional[Dict[str, str]] = None
 ) -> np.ndarray:
     """
     自适应 EWMA 协方差估计（权重归一、加权均值去中心、向量化、PSD 处理）
@@ -127,9 +128,45 @@ def ewma_cov(
         return np.zeros((N, N))
 
     # 2) 自适应 λ（可用更稳健的中位数代替 mean）
+    # 组合等权收益
     if adaptive:
-        vol_short = ret.rolling(10).std().mean(axis=1).dropna()
-        vol_long  = ret.rolling(250).std().mean(axis=1).dropna()
+        # --- 2.1 构造“类别等权组合”的日收益序列 ---
+        if asset_source_map is not None:
+            cols = list(ret.columns)
+
+            # 2.1.1 按类别构造内部等权组合
+            class_series = {}
+
+            # 所有 value == "factor" 的归为一类
+            factor_cols = [c for c in cols if asset_source_map.get(c) == "factor"]
+            if factor_cols:
+                class_series["factor"] = ret[factor_cols].mean(axis=1)
+
+            # 其它每个资产单独一类
+            for c in cols:
+                if asset_source_map.get(c) != "factor":
+                    # 每个非 factor 资产作为一个独立类别
+                    class_series[c] = ret[c]
+
+            # 如果 asset_source_map 不完整，有些列没在 map 里，也会被当成“各自独立一类”
+            # （因为上面 asset_source_map.get(c) 返回 None != "factor"，仍会落入这个 for 分支）
+
+            if len(class_series) == 0:
+                # 极端情况：map 有问题或全空 → 退化成简单等权组合
+                regime_ret = ret.mean(axis=1)
+            else:
+                df_class = pd.concat(class_series.values(), axis=1)
+                df_class.columns = list(class_series.keys())
+                # 各类别等权
+                regime_ret = df_class.mean(axis=1)
+
+        else:
+            # 没提供 asset_source_map，退化为原来的“全资产等权组合”
+            regime_ret = ret.mean(axis=1)
+
+        # --- 2.2 基于 regime_ret 计算 short/long 波动并自适应 λ ---
+        vol_short = regime_ret.rolling(20).std().dropna()
+        vol_long  = regime_ret.rolling(250).std().dropna()
         common_idx = vol_short.index.intersection(vol_long.index)
         if len(common_idx) > 0:
             ratio = float((vol_short[common_idx] / vol_long[common_idx]).iloc[-1])
@@ -159,12 +196,13 @@ def ewma_cov(
 
 def hybrid_cov(
     ret: pd.DataFrame,
-    lambda_: float = 0.975,
+    lambda_: float = 0.98,
     alpha: float = 0.5,
     adaptive: bool = True,
     lambda_min: float = 0.97,
-    lambda_max: float = 0.985,
-    gamma: float = 0.025
+    lambda_max: float = 0.99,
+    gamma: float = 0.025,
+    asset_source_map: Optional[Dict[str, str]] = None
 ) -> np.ndarray:
     """
     混合型协方差估计器：EWMA + 历史等权协方差融合
@@ -173,20 +211,24 @@ def hybrid_cov(
     ret = ret.dropna(how="any")
     if alpha == 0:
         return ret.cov().values
-    Sigma_ewma = ewma_cov(ret, lambda_, adaptive, lambda_min, lambda_max, gamma)
+    Sigma_ewma = ewma_cov(ret, lambda_, adaptive, lambda_min, lambda_max, gamma, asset_source_map=asset_source_map)
     Sigma_hist = ret.cov().values  # 长期等权
     return alpha * Sigma_ewma + (1 - alpha) * Sigma_hist
 
+
 def compute_prior_mu_sigma(
     price_df: pd.DataFrame,
-    window: int = 20,
-    method: str = "log"
+    horizon_days: int = 20,
+    lookback_years: float = 8.0,
+    method: str = "linear",
+    asset_source_map: Optional[Dict[str, str]] = None
 ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
     """
     计算先验期望收益（mu_prior）和协方差矩阵（Sigma）
     参数：
         price_df: 行为日期，列为资产，值为价格
-        window: 滚动窗口，默认为20日
+        horizon_days: 收益率窗口，默认为20日
+        lookback_years: 滚动窗口的长度，默认为8年
         method: "log" 或 "linear"
     返回：
         mu_prior: ndarray (n_assets,)
@@ -195,15 +237,23 @@ def compute_prior_mu_sigma(
     """
     if method == "log":
         log_price = np.log(price_df)
-        ret = log_price.diff(window)
+        ret = log_price.diff(horizon_days)
     elif method == "linear":
-        ret = price_df.pct_change(window)
+        ret = price_df.pct_change(horizon_days, fill_method=None)
     else:
         raise ValueError("method must be 'log' or 'linear'")
+    
+    def winsorize_df(df, p=0.01):
+        lower = df.quantile(p)
+        upper = df.quantile(1-p)
+        return df.clip(lower=lower, upper=upper, axis=1)
 
-    ret = ret.dropna(how="any")
-    mu_series = ret.mean()
-    Sigma = hybrid_cov(ret, lambda_=0.98, alpha=0.5, adaptive=True)
+    lookback_days = int(lookback_years * 250)
+    ret_in_window = ret.iloc[-lookback_days:]
+    ret_in_window = ret_in_window.dropna(how="all", axis=0)
+    ret_in_window = winsorize_df(ret_in_window, p=0.01)
+    mu_series = ret_in_window.mean()
+    Sigma = hybrid_cov(ret_in_window, lambda_=0.98, alpha=0.5, adaptive=True, asset_source_map=asset_source_map)
     codes = mu_series.index.tolist()
     return mu_series.values, Sigma, codes
 

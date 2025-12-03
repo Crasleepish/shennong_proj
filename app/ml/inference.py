@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 # 模型路径模板常量
 TASK_MODEL_PATHS = {
     "mkt_tri": "./models/mkt_tri/model_{0}.pkl",
-    "smb_tri": "./models/smb_tri/model_{0}.pkl",
-    "hml_tri": "./models/hml_tri/model_{0}.pkl",
-    "qmj_tri": "./models/qmj_tri/model_{0}.pkl",
+    # "smb_tri": "./models/smb_tri/model_{0}.pkl",
+    # "hml_tri": "./models/hml_tri/model_{0}.pkl",
+    # "qmj_tri": "./models/qmj_tri/model_{0}.pkl",
     "10Ybond_tri": "./models/10Ybond_tri/model_{0}.pkl",
     # "gold_tri": "./models/gold_tri/model_{0}.pkl",
 }

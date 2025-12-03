@@ -51,6 +51,8 @@ params = asset_info["params"]
 if params is None or "post_view_tau" not in params or "alpha" not in params or "variance" not in params:
     raise Exception("Invalid params, please set post_view_tau and alpha and variance in params")
 post_view_tau = float(params["post_view_tau"])
+view_var_scale= float(params["view_var_scale"])
+prior_mix=float(params["prior_mix"])
 variance = float(params["variance"])
 alpha = float(params["alpha"])
 
@@ -104,7 +106,7 @@ def build_price_df(asset_source_map: dict, start: str, end: str) -> pd.DataFrame
     return net_value_df.ffill()
 
 
-def run_backtest(start="2022-12-22", end="2024-12-22", window=20):
+def run_backtest(start="2019-12-22", end="2024-12-22", window=20):
     out_dir = f"./fund_portfolio_bt_result/{datetime.today().strftime('%Y%m%d_%H%M%S')}"
     os.makedirs(out_dir, exist_ok=True)
     with app.app_context():
@@ -126,7 +128,8 @@ def run_backtest(start="2022-12-22", end="2024-12-22", window=20):
                     post_view_tau = post_view_tau,
                     variance = variance,
                     window=window,
-                    view_codes=view_codes
+                    view_codes=view_codes,
+                    view_var_scale= 0.7, prior_mix=0.3
                 )
 
                 w_today = portfolio_plan["weights"]
@@ -158,7 +161,7 @@ def run_backtest(start="2022-12-22", end="2024-12-22", window=20):
                 weights_dict[dt] = pd.Series(w_ewma)
                 prev_weights = w_ewma.copy()
                 
-                # store_portfolio(portfolio_id, dt, w_today, w_ewma, cov_matrix, codes)
+                store_portfolio(portfolio_id, dt, w_today, w_ewma, cov_matrix, codes)
 
             except Exception as e:
                 logger.warning(f"⚠️ {dt.strftime('%Y-%m-%d')} 调仓失败: {e}")
@@ -417,4 +420,4 @@ def run_backtest_using_db_weights(
 
 if __name__ == '__main__':
     # run_backtest_using_db_weights(portfolio_id=2, start='2025-09-02', end='2025-09-25')
-    run_backtest(start="2025-11-21", end="2025-11-22", window=20)
+    run_backtest(start="2019-10-22", end="2025-10-22", window=20)

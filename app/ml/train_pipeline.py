@@ -29,8 +29,8 @@ DEFAULT_XGB_PARAMS = dict(
     n_estimators=500,
     learning_rate=0.02,
     max_depth=5,
-    subsample=0.9,
-    colsample_bytree=0.9,
+    subsample=0.8,
+    colsample_bytree=1.0,
     reg_lambda=2.0,
     reg_alpha=2.0,
     random_state=42,
@@ -42,13 +42,13 @@ DEFAULT_XGB_PARAMS = dict(
 TASK_HPARAMS = {
     # 四因子（示例：与默认一致或轻微调整）
     "mkt_tri": dict(
-        n_estimators=1000,
-        learning_rate=0.02,
-        max_depth=4,
+        n_estimators=1500,
+        learning_rate=0.01,
+        max_depth=5,
         min_child_weight=2.0,
         gamma=0.1,
-        reg_lambda=2.0,
-        reg_alpha=2.0,
+        reg_lambda=4.0,
+        reg_alpha=4.0,
         early_stopping_rounds=50,
     ),
     "smb_tri": dict(
@@ -85,9 +85,9 @@ TASK_HPARAMS = {
     ),
 
     "10Ybond_tri": dict(
-        n_estimators=1500,
+        n_estimators=1000,
         learning_rate=0.01,
-        max_depth=4,
+        max_depth=3,
         min_child_weight=2.0,
         gamma=0.1,
         reg_lambda=2.0,
@@ -169,10 +169,10 @@ def train_one_task(
     model = XGBClassifier(**params)
     class_weight = compute_sample_weight("balanced", Y_train[target_col])
     time_weight = compute_recency_weight(X_train.index, decay_half_life=750)
-    sample_weight = class_weight * time_weight
+    sample_weight = class_weight
     logger.info(f"sample_weight stats: {np.min(sample_weight)}, {np.max(sample_weight)}, {np.mean(sample_weight)}")
     model.fit(X_train, Y_train[target_col], sample_weight=sample_weight, 
-                eval_set=[(X_train, Y_train[target_col]), (X_val, Y_val[target_col])], 
+                eval_set=[ (X_val, Y_val[target_col])], 
                 verbose=True)
     if need_test:
         y_pred = model.predict(X_test)
@@ -201,7 +201,7 @@ def train_one_task(
 
 def run_all_models(start, split_date: str = None, end: str = None, need_test: bool = True) -> pd.DataFrame:
     logger.info("开始训练所有模型，split_date=%s", split_date)
-    tasks = ["mkt_tri", "smb_tri", "hml_tri", "qmj_tri", "10Ybond_tri"]
+    tasks = ["mkt_tri", "10Ybond_tri"]
     if split_date is None:
         split_date = end
     if need_test:

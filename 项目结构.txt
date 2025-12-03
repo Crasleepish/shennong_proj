@@ -128,3 +128,71 @@ rolling_train(start="2010-01-01", split_dates=date_list)
 | 2023-01-02 | 2    | 1    | 0.05    | 0.20    | 0.75    |
 
 ---
+
+# 📌《项目结构》补丁（Patch）
+
+## **v2.0 目录结构新增与变更**
+
+---
+
+## **1. 新增/调整的模块**
+
+### ✔ gold_view_llm.py
+
+处理：
+
+* 期货结构抓取（barchart）
+* CFTC 报告解析
+* LLM 调用（主观判断）
+* 输出黄金主观观点 view（五档）
+* 输出基于 rolling 区间均值的 ER_gold
+
+### ✔ gold_data_fetcher（增补）
+
+新增：
+
+* get_future_curve()
+* get_cftc_reports()
+* 数据库缓存与刷新逻辑
+
+---
+
+## **2. dataset_builder.py 更新**
+
+新增 rolling 标签功能：
+
+* rolling 分位数打标
+* 多任务统一的 label_to_ret 计算
+* 仅 MKT/10YBond 需要 ML label
+* GOLD/SMB/HML/QMJ 用 rolling 方法
+
+---
+
+## **3. train_pipeline.py 更新**
+
+各任务分为：
+
+| 任务          | 标签方式             | 预测方式                     | 是否走 BL   |
+| ----------- | ---------------- | ------------------------ | -------- |
+| MKT         | ML label         | ML softprob → ER_ml      | 是        |
+| SMB/HML/QMJ | rolling label    | rolling 全概率 → ER_stat    | 是        |
+| 10YBond     | rolling+ML label | ER_stat + ER_ml → ER_mix | 是        |
+| GOLD        | rolling label    | rolling 区间均值 + LLM 档位    | 否（直接当 μ） |
+
+---
+
+## **4. optimize_portfolio.py（BL 逻辑）更新**
+
+* 观点矩阵构造：基于 ER_stat / ER_ml / ER_mix / ER_gold
+* GOLD 不进入 BL（跳过）
+* SMB/HML/QMJ/10YBond/MKT 使用 BL（根据任务类型）
+* Ω 使用“先验 + 放大预测方差”的混合方案
+
+---
+
+# 📌 版本总结（可作为文档明确的变更说明）
+
+本次更新的核心思想：
+
+> **统一：标签 → softprob → ER 体系；分化：统计因子、宏观因子、对冲资产的处理方式；
+> 最终通过 BL 整合长期先验与短期观点，提高收益稳定性与解释性。**

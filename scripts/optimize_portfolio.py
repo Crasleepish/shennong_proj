@@ -19,7 +19,7 @@ app = create_app()
 if __name__ == '__main__':
     with app.app_context():
         # 创建测试数据
-        portfolio_id = 2
+        portfolio_id = 1
         asset_info = get_portfolio_assets(portfolio_id)
         asset_source_map = asset_info["asset_source_map"]
         code_factors_map = asset_info["code_factors_map"]
@@ -27,11 +27,13 @@ if __name__ == '__main__':
         params = asset_info["params"]
         if params is None or "post_view_tau" not in params or "alpha" not in params or "variance" not in params:
             raise Exception("Invalid params, please set post_view_tau and alpha and variance in params")
-        post_view_tau = float(params["post_view_tau"])
+        post_view_tau = 1.0
+        view_var_scale=0.7
+        prior_mix= 0.3
         variance = float(params["variance"])
         alpha = float(params["alpha"])
-        trade_date = '2025-08-22'
+        trade_date = '2025-12-01'
         window = 20
-        portfolio_plan = optimize(asset_source_map, code_factors_map, trade_date, post_view_tau, variance, window, view_codes)
+        portfolio_plan = optimize(asset_source_map, code_factors_map, trade_date, post_view_tau, variance, window, view_codes, view_var_scale, prior_mix)
         print(portfolio_plan)
     

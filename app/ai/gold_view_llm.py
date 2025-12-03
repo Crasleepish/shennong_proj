@@ -26,6 +26,7 @@ ViewLabel = Literal[
     "neutral",
     "mild_bull",
     "strong_bull",
+    "no_view"
 ]
 
 
@@ -104,6 +105,7 @@ class GoldViewLLM:
         half_life_years: float = 2.0,
         horizon_days: int = 20,
         trim_quantile: float = 0.01,
+        lookback_years: float = 8.0,
     ) -> None:
         self.client = client or QwenClient(
             model=model_name,
@@ -115,6 +117,7 @@ class GoldViewLLM:
         )
         self.half_life_years = half_life_years
         self.horizon_days = horizon_days
+        self.lookback_years = lookback_years
         self.trim_quantile = trim_quantile
         self.gold_fetcher = GoldDataFetcher()
 
@@ -123,6 +126,7 @@ class GoldViewLLM:
     # -----------------------------
     def generate_view(
         self,
+        gold_code: str,
         as_of_date: Union[str, date, datetime],
         session: Optional[Session] = None,
     ) -> GoldViewResult:
@@ -141,7 +145,7 @@ class GoldViewLLM:
             if not curve_rows or not cftc_rows:
                 logger.warning("未找到任何匹配的黄金Derivative 数据，返回0收益")
                 return GoldViewResult(
-                    view="neutral",
+                    view="no_view",
                     reason="未找到任何匹配的黄金Derivative 数据，返回0收益",
                     expected_return=0.0,
                     mapping={},
@@ -170,7 +174,7 @@ class GoldViewLLM:
             view_label = self._normalize_view_label(parsed_llm.get("view", "neutral"))
 
             # 3) 基于历史价格构造 5 档收益率映射
-            mapping = self._compute_return_mapping(as_of)
+            mapping = self._compute_return_mapping(gold_code, as_of)
 
             # 4) 最终 expected_return = 该视角对应映射
             expected_return = mapping.get(view_label, 0.0)
@@ -554,18 +558,18 @@ class GoldViewLLM:
     # -----------------------------
     # 步骤 4：历史收益率 -> 5 档映射
     # -----------------------------
-    def _compute_return_mapping(self, as_of: date) -> Dict[ViewLabel, float]:
+    def _compute_return_mapping(self, gold_code: str, as_of: date) -> Dict[ViewLabel, float]:
         """
         基于 Au99.99.SGE 收盘价，构造 20 日未来收益率序列，
         进行时间加权 + 剪尾 + 加权分位数切 5 档，得到每档期望收益。
         只用 as_of 往前 5 年的数据。
         """
         # ==== 3) 修改：只取 as_of 往前 5 年 ====
-        start_ts = pd.to_datetime(as_of) - pd.DateOffset(years=5)
+        start_ts = pd.to_datetime(as_of) - pd.DateOffset(years=self.lookback_years)
         start_str = start_ts.date().isoformat()
 
         df = self.gold_fetcher.get_data_by_code_and_date(
-            "Au99.99.SGE",
+            gold_code,
             start=start_str,
             end=as_of.isoformat(),
         )
