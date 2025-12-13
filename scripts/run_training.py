@@ -23,7 +23,7 @@ def train_all_models_by_month():
     dates = pd.date_range(start="2011-12-01", end="2025-09-01", freq='M').to_list()
     for d in dates:
         run_all_models(start="2007-12-01", split_date=None, end=d.strftime("%Y-%m-%d"), need_test=False)
-    # run_all_models(start="2007-12-01", split_date=None, end="2020-06-30", need_test=False)
+    # run_all_models(start="2007-12-01", split_date=None, end="2020-06-18", need_test=False)
 
 
 if __name__ == '__main__':

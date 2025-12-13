@@ -190,9 +190,354 @@ rolling_train(start="2010-01-01", split_dates=date_list)
 
 ---
 
-# 📌 版本总结（可作为文档明确的变更说明）
+# 《项目结构更新（V3.0）》
 
-本次更新的核心思想：
+本次更新围绕 **组合观点构造（Views）**、**模型置信度校准（omega-scaling）**、**风格拥挤控制（Style Crowding）**、**黄金拥挤控制（Gold Crowding）** 四个核心模块进行重构，在整体架构中引入了三个新概念：
 
-> **统一：标签 → softprob → ER 体系；分化：统计因子、宏观因子、对冲资产的处理方式；
-> 最终通过 BL 整合长期先验与短期观点，提高收益稳定性与解释性。**
+1. **统一绝对收益（Absolute ER）视图体系**
+2. **因子观点置信度（View Confidence） → ω 动态缩放**
+3. **资产级风险缩放器（Risk Scalers）**
+
+以下更新主要涉及时序：
+**(数据层) → (因子 & 资产特征层) → (BL 视图构造层) → (风险缩放层) → (组合优化层)**
+
+---
+
+# 1. 目录结构更新（新增与变更）
+
+以下目录基于你当前项目布局，仅补充新增模块和重构位置。
+
+```
+app/
+│
+├── data_fetcher/
+│    ├── macro_data_reader.py
+│    ├── factor_data_reader.py
+│    ├── cftc_gold_reader.py           # [NEW] 获取黄金CFTC数据
+│    └── index_data_reader.py
+│
+├── models/
+│    ├── factor_models/
+│    │     ├── xgboost_mkt.py          # MKT ML模型（输出ER_ml与loss）
+│    │     ├── xgboost_10ybond.py      # 10Y ML模型（可选）
+│    │     └── factor_return_stat.py   # payoff + stative ER计算
+│    │
+│    └── scaler_models/
+│          ├── confidence_scaler.py    # [NEW] 根据loss生成c_t（置信度）
+│          ├── crowding_equity_scaler.py # [NEW] SMB/HML/QMJ风格拥挤缩放器
+│          └── crowding_gold_scaler.py   # [NEW] 黄金risk_scaler（基于CFTC）
+│
+├── factor_pipeline/
+│    ├── beta_estimator.py
+│    ├── kalman_filter.py
+│    └── prepare_factor_views.py       # [REWORK] 构造因子绝对ER视图与omega
+│
+├── view_pipeline/
+│    ├── build_bl_views.py             # [REWORK] BL视图构建（统一绝对ER视图）
+│    ├── assemble_view_matrix.py
+│    └── omega_scaler.py               # [NEW] 动态omega缩放
+│
+├── risk_controls/
+│    ├── style_risk_router.py          # [NEW] 将风格拥挤映射到资产级风险预算
+│    └── gold_risk_router.py           # [NEW] 将黄金risk_scaler注入资产ER
+│
+├── optimizer/
+│    ├── mean_variance_opt.py
+│    ├── cvar_opt.py
+│    └── apply_risk_scalers.py         # [REWORK] 整合所有asset-level risk scaler
+│
+└── inference/
+     ├── inference_engine.py
+     └── run_daily_rebalance.py
+```
+
+---
+
+# 2. 模块更新内容描述（按执行顺序）
+
+---
+
+# （A）数据层更新
+
+## A1. CFTC 黄金数据读取模块
+
+文件：`cftc_gold_reader.py`（新增）
+
+功能：
+
+* 读取 non-commercial net long（投机性资金）
+
+* 读取 open interest（未平仓量）
+
+* 计算黄金拥挤度指标：
+  [
+  c_t = \frac{\text{noncomm_net}}{\text{open_interest}}
+  ]
+
+* 输出 DataFrame：
+
+  ```
+  date, crowding_gold
+  ```
+
+说明：若当前只有两年数据，系统使用**行业经验分位数**（q80=0.30, q95=0.36）作为默认阈值。
+
+---
+
+# （B）因子观点构造层（Factor View Pipeline）
+
+文件：`prepare_factor_views.py`（重构）
+
+## B1. 输出内容
+
+统一输出每个因子的：
+
+```
+ER_factor[f]       # 绝对期望收益（绝对观点）
+omega_factor[f]    # 动态观点方差
+```
+
+## B2. MKT / 10YBond 观点
+
+来源：
+
+* XGBoost ML 预测（softprob → ER_ml）
+* 模型验证 loss → 信心 c_t（由 confidence_scaler.py 生成）
+* ω 根据 c_t 动态缩放：
+
+[
+\omega_f = \frac{\sigma^2_{\text{prior}, f}}{c_t}
+]
+
+## B3. SMB / HML / QMJ 观点
+
+来源：
+
+* 长期 payoff/stat 推断（不使用ML）
+* ω 固定为 prior：
+  [
+  \omega_f = \sigma^2_{\text{prior}, f}
+  ]
+
+不再对因子做拥挤风险扩散（全部下沉到资产级别）。
+
+---
+
+# （C）BL 视图层（View Pipeline）
+
+文件：`build_bl_views.py`（重构）
+
+## C1. 输入（汇总）
+
+* mu_prior, Sigma_prior
+* ER_factor[f], omega_factor[f]
+* ER_gold
+* 资产 β 矩阵（GOLD β 只有黄金ETF为1）
+
+## C2. 输出：
+
+BL 三元组：
+
+* P
+* q（绝对观点）
+* omega_diag
+
+并执行完整 BL 更新：
+
+[
+\mu_{post} = BL(\mu_{prior}, \Sigma_{prior}, P, q, \omega)
+]
+
+## C3. GOLD 的处理方式
+
+* GOLD 通过因子通道进入 BL
+* GOLD 只影响黄金 ETF，不影响其他资产
+* GOLD 的 ω 不变，由 prior 决定
+
+---
+
+# （D）风险缩放层（Risk Control Pipeline）
+
+这是 V3.0 的核心新增部分。
+
+---
+
+## D1. 因子风格拥挤（SMB/HML/QMJ）风险缩放器
+
+文件：`crowding_equity_scaler.py`（新增）
+
+逻辑：
+
+1. 使用 `FactorDataReader.read_daily_factors(start=None, end=trade_date)` 获取全历史因子日收益率，并在内部构造滚动区间收益：
+   - 对每个因子 f ∈ {SMB, HML, QMJ}，定义固定长度 L（如 L=252 交易日）：
+     
+     R_f(t; L) = ∏_{τ=t-L+1}^{t} (1 + r_f(τ)) - 1
+
+2. 在最近 `lookback_days_long = 3000` 个交易日内，对所有可用的 R_f(t; L) 计算其均值 μ_{R,f} 与标准差 σ_{R,f}，得到当前调仓日对应的 z-score：
+
+   z_f = (R_f* - μ_{R,f}) / σ_{R,f}
+
+   若有效样本数少于 `lookback_days_min = 750`，则对该因子不启用拥挤度调整（返回 s_f = 1.0，并记录 warning）。
+
+3. 使用固定阈值与缩放函数计算因子级缩放系数 s_f（写死，不调参）：
+
+   - 阈值 z0 = 2.0
+   - 最小缩放 s_min = 0.5
+
+   记 abs_z = |z_f|，则：
+
+   s_f =
+   { 1,                               abs_z ≤ z0
+     max(1 / (1 + (abs_z - z0)), s_min),  abs_z > z0 }
+
+4. 缩放结果只作用于因子观点层，对应因子的长期 payoff/stat 期望收益 ER_f^base 被收缩为：
+
+   ER_f^view = s_f · ER_f^base
+
+   资产层不直接使用 s_f，也不改变 β_i,f 或增加额外约束；因子层 ER 的收缩会通过现有的 β 映射自然传递到各资产的 μ_i 中。
+
+5. `crowding_equity_scaler.py` 对外输出形如：
+
+   {
+     "SMB": s_smb,
+     "HML": s_hml,
+     "QMJ": s_qmj
+   }
+
+   由因子视图构造模块（例如 `prepare_factor_views.py`）在构造 ER_factor_view 时应用上述缩放：
+   
+   ER_factor_view[f] = s_f * ER_factor_base[f]
+
+---
+
+## D2. 黄金拥挤度 risk_scaler
+
+文件：`crowding_gold_scaler.py`（新增）
+
+基于 CFTC：
+
+[
+c_t = \frac{\text{non-commercial net long}}{\text{open interest}}
+]
+
+固定经验分位数：
+
+* q80 = 0.30
+* q95 = 0.36
+
+风险缩放器：
+
+[
+risk_scaler_{gold} =
+\begin{cases}
+1, & c_t \le q_{80}\
+1 + \lambda \cdot \frac{c_t - q_{80}}{q_{95}-q_{80}}, & q_{80} < c_t \le q_{95}\
+1 + \lambda, & c_t > q_{95}
+\end{cases}
+]
+
+（λ=1 默认）
+
+结果在资产层仅作用于黄金 ETF 的 ER：
+
+[
+ER^{final}*{gold} = \frac{ER^{BL}*{gold}}{risk_scaler_{gold}}
+]
+
+---
+
+# （E）组合优化层（Optimizer Pipeline）
+
+文件：
+
+* `mean_variance_opt.py`
+* `cvar_opt.py`
+* `apply_risk_scalers.py`（重构）
+
+## E1. 输入
+
+* μ_post（BL 后验）
+* Σ（协方差）
+* 风格风险缩放器（style scalers）
+* GOLD 风险缩放器（gold scaler）
+
+## E2. 风险缩放注入（资产级）
+
+对每个资产 i：
+
+[
+\mu_i^{final} = \mu_i^{post} \times risk_scale_i^{style}
+]
+
+黄金额外加一项：
+
+[
+\mu_{gold}^{final} = \frac{\mu_{gold}^{post}}{risk_scaler_{gold}}
+]
+
+其余优化逻辑（权重约束 / 风险控制）不变。
+
+---
+
+# 3. 运行流程（更新版）
+
+```
+1) 数据准备
+   ├─ 获取价格、因子净值、宏观数据
+   ├─ 获取 CFTC 黄金数据
+   └─ 获取基金因子暴露（beta）
+
+2) 构建因子 ER + ω
+   ├─ MKT/10Y：ML + loss → ER + omega
+   └─ SMB/HML/QMJ：payoff/stat → ER + omega_prior
+
+3) 构建黄金 ER
+   └─ LLM → ER_gold
+
+4) Black–Litterman
+   ├─ 构造 P, q, omega
+   └─ 输出 μ_post
+
+5) 风格风险缩放（资产级）
+   ├─ style crowding scalers（按β加权）
+   └─ gold crowding scaler（只对黄金资产）
+
+6) 组合优化
+   ├─ 注入 scalers（μ_final）
+   └─ 输出 w_opt
+
+7) 保存结果 / 实盘推送
+```
+
+---
+
+# 4. 与旧版本的主要差异
+
+* ⛔ 移除 MKT 技术观点（减少共线信息）
+
+* ⛔ 不再对 SMB/HML/QMJ 做观点方差放大（统一绝对观点）
+
+* ⛔ 黄金不再作为“因子”参与其他资产的 β
+
+* ✅ 新增 “模型置信度 → ω” 动态缩放（MKT & 10YBond）
+
+* ✅ 新增 “风格拥挤 → 资产级风险缩放器”
+
+* ✅ 新增 “黄金CFTC拥挤度 → 黄金 risk_scaler”
+
+* ✅ 全部采用“绝对 ER 视图”统一进入 BL
+
+* ✅ 风险缩放全部发生在资产层，风险框架更清晰
+
+---
+
+# 5. 总结
+
+V3.0 的结构重构实现了以下目标：
+
+* **简化体系**：删掉冗余信号与过度自由度
+* **提高稳健性**：动态ω + 拥挤风险→ 减少回测过拟合
+* **提升解释性**：每个模块均有清晰经济意义
+* **提升扩展性**：未来可以自然扩展多资产、多风格、多 regime
+
+整个框架既适合严肃的学术/工业级组合管理流程，也为未来扩展 ML 模块、流量因子、跨资产相关性模型提供了可插拔结构。

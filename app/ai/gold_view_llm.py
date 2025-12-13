@@ -87,7 +87,7 @@ class GoldViewLLM:
         "{cftc_text}\n\n"
         "请你：\n"
         "1. 综合分析期货曲线形状（近月 vs 远月、升贴水结构、曲线陡峭程度）和 CFTC 持仓信号\n"
-        "   （Managed Money 是否极端多/空、最近是否有明显加仓/减仓、Swap Dealer 对冲需求等）。\n"
+        "   （Managed Money 是否极端多/空、最近是否有明显加仓/减仓、Swap Dealer 对冲需求、动能是否有衰竭迹象等）。\n"
         "2. 在 strong_bear / mild_bear / neutral / mild_bull / strong_bull 五个档位中选择一个最符合当前组合信息的档位，\n"
         "   作为未来 20 日黄金方向的主观判断。\n"
         "3. 用 JSON 格式给出你的结论和简要理由，结构必须是：\n"
@@ -102,7 +102,7 @@ class GoldViewLLM:
         self,
         model_name: str = "qwen-plus",
         client: Optional[QwenClient] = None,
-        half_life_years: float = 2.0,
+        half_life_years: float = 4.0,
         horizon_days: int = 20,
         trim_quantile: float = 0.01,
         lookback_years: float = 8.0,

@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+import logging  # NEW
 
 from app.data_fetcher.factor_data_reader import FactorDataReader
 from app.data_fetcher.csi_index_data_fetcher import CSIIndexDataFetcher
@@ -14,11 +15,17 @@ from app.ml.rolling_three_class import (
     ThreeClassStats,
     compute_three_class_stats_for_date,
 )
-from app.ml.inference import get_softprob_dict
+from app.ml.inference import get_softprob_dict, get_model_val_loss, load_val_history_for_task
 from app.ml.black_litterman_opt_util import compute_prior_mu_sigma
 
 # 注意：load_fund_betas 在 black_litterman_opt_util.py 中，你那里已经写好了
 from app.ml.black_litterman_opt_util import load_fund_betas
+from app.ai.gold_view_llm import GoldViewLLM
+from app.models.scaler_models.crowding_gold_scaler import GoldRiskScaler
+from app.models.scaler_models.crowding_equity_scaler import EquityStyleCrowdingScaler
+from app.models.regime.gold_regime_model import GoldRegimeModel
+
+logger = logging.getLogger(__name__)
 
 
 # 因子视图来源类型
@@ -45,7 +52,7 @@ ROLLING_CFG: Dict[str, RollingThreeClassConfig] = {
     "SMB": RollingThreeClassConfig(
         window_days=7 * 252,
         half_life_days=3.5 * 252,
-        prob_window_days=2 * 252,
+        prob_window_days=3 * 252,
         q_low=1.0 / 3.0,
         q_high=2.0 / 3.0,
         min_samples=700,
@@ -53,7 +60,7 @@ ROLLING_CFG: Dict[str, RollingThreeClassConfig] = {
     "HML": RollingThreeClassConfig(
         window_days=7 * 252,
         half_life_days=3.5 * 252,
-        prob_window_days=2 * 252,
+        prob_window_days=3 * 252,
         q_low=1.0 / 3.0,
         q_high=2.0 / 3.0,
         min_samples=700,
@@ -61,7 +68,7 @@ ROLLING_CFG: Dict[str, RollingThreeClassConfig] = {
     "QMJ": RollingThreeClassConfig(
         window_days=7 * 252,
         half_life_days=3.5 * 252,
-        prob_window_days=2 * 252,
+        prob_window_days=3 * 252,
         q_low=1.0 / 3.0,
         q_high=2.0 / 3.0,
         min_samples=700,
@@ -69,7 +76,15 @@ ROLLING_CFG: Dict[str, RollingThreeClassConfig] = {
     "10YBOND": RollingThreeClassConfig(
         window_days=4 * 252,
         half_life_days=2 * 252,
-        prob_window_days=int(1.5 * 252),
+        prob_window_days=2 * 252,
+        q_low=0.25,
+        q_high=0.75,
+        min_samples=500,
+    ),
+    "GOLD": RollingThreeClassConfig(
+        window_days=4 * 252,       # 约 4 年
+        half_life_days=2 * 252,    # 半衰期约 2 年
+        prob_window_days=2 * 252,  # 这里只是占位，对方差逻辑实际不使用
         q_low=0.25,
         q_high=0.75,
         min_samples=500,
@@ -92,6 +107,7 @@ class FactorViewResult:
 def _build_factor_return_and_nav(
     trade_date: str,
     ten_year_bond_index_code: str,
+    gold_index_code: str
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     构造因子日度收益矩阵 df_ret 和因子净值矩阵 df_nav。
@@ -100,11 +116,13 @@ def _build_factor_return_and_nav(
       然后 (1+ret).cumprod() 得到净值。
     - 10YBOND: 从 CSIIndexDataFetcher.get_data_by_code_and_date 获取 'close'，
       直接视为净值；日度收益为 close.pct_change()。
+    - GOLD:   从 CSIIndexDataFetcher.get_data_by_code_and_date 获取 'close'，
+      直接视为净值；日度收益为 close.pct_change()。
     """
     factor_data_reader = FactorDataReader()
     csi_index_data_fetcher = CSIIndexDataFetcher()
 
-    # 先拿到截至 trade_date 的因子日度收益
+    # 先拿到截至 trade_date 的因子日度收益（MKT/SMB/HML/QMJ）
     df_factors = factor_data_reader.read_daily_factors(
         start=None,
         end=trade_date,
@@ -125,22 +143,42 @@ def _build_factor_return_and_nav(
     # 10YBOND 日度收益
     df_bond_ret = df_bond["close"].pct_change().rename("10YBOND")
 
-    # 对齐日期
-    df_ret = pd.concat(
-        [
-            df_factors,
-            df_bond_ret,
-        ],
-        axis=1,
-    ).sort_index()
+    # GOLD 净值（使用上金所 Au99.99.SGE）
+    try:
+        df_gold = csi_index_data_fetcher.get_data_by_code_and_date(
+            code=gold_index_code,
+            end=trade_date,
+        )
+        df_gold = df_gold[["date", "close"]].dropna().set_index("date").sort_index()
+        df_gold.index = pd.to_datetime(df_gold.index)
+        df_gold_ret = df_gold["close"].pct_change().rename("GOLD")
+    except Exception as e:
+        logger.warning("获取 GOLD(Au99.99.SGE) 数据失败，将不在本次 BL 中使用 GOLD 因子: %s", e)
+        df_gold = None
+        df_gold_ret = None
 
-    # 净值矩阵
+    # 对齐日期：MKT/SMB/HML/QMJ + 10YBOND +（可选）GOLD
+    ret_parts = [df_factors, df_bond_ret]
+    if df_gold_ret is not None:
+        ret_parts.append(df_gold_ret)
+
+    df_ret = pd.concat(ret_parts, axis=1).sort_index()
+
+    # 净值矩阵：四个风格因子用 (1+r).cumprod()，利率和黄金用价格本身
     df_nav = (1.0 + df_ret[["MKT", "SMB", "HML", "QMJ"]]).cumprod()
-    df_nav["10YBOND"] = df_bond["close"]
 
-    # 再次按列顺序统一
-    df_ret = df_ret[["MKT", "SMB", "HML", "QMJ", "10YBOND"]].dropna(how="all")
-    df_nav = df_nav[["MKT", "SMB", "HML", "QMJ", "10YBOND"]].dropna(how="all")
+    # 对齐 10YBOND、GOLD 的净值到 df_nav 的索引
+    df_nav["10YBOND"] = df_bond["close"].reindex(df_nav.index)
+
+    if df_gold is not None:
+        df_nav["GOLD"] = df_gold["close"].reindex(df_nav.index)
+
+    # 再次按列顺序统一并去掉全空行
+    desired_cols = [c for c in ["MKT", "SMB", "HML", "QMJ", "10YBOND", "GOLD"] if c in df_ret.columns]
+    df_ret = df_ret[desired_cols].dropna(how="all")
+
+    desired_cols_nav = [c for c in ["MKT", "SMB", "HML", "QMJ", "10YBOND", "GOLD"] if c in df_nav.columns]
+    df_nav = df_nav[desired_cols_nav].dropna(how="all")
 
     return df_ret, df_nav
 
@@ -168,12 +206,103 @@ def _compute_factor_future_rets(
     return factor_future_ret_map
 
 
+def omega_scale_from_val_loss(
+    val_loss: float,
+    history: Sequence[float],
+    s_min: float = 0.5,
+    s_max: float = 5.0,
+    min_history: int = 12,
+    k: float = 2.4,
+) -> float:
+    """
+    根据当前 val_loss 与历史 val_loss 序列的相对位置（分位数 p）计算
+    Black–Litterman 观点方差的缩放因子 s。
+
+    设计目标：
+    - 用“相对历史表现”而不是绝对 loss 作为模型置信度度量；
+    - p <= 0.2：模型处于历史相对较好的 20% → 轻微增强观点（减小 ω，s ∈ [s_min, 1] 线性变化）；
+    - 0.2 < p < 0.8：模型表现中性 → s ≈ 1（不动）；
+    - p >= 0.8：模型处于历史较差的 20% → 指数放大 ω（s >= 1），
+      特别是 p > 0.9 时 s 很大，让 BL 结果几乎只受先验影响。
+
+    参数
+    ----
+    val_loss : float
+        当前模型在最近验证集上的 logloss。
+    history : Sequence[float]
+        历史 val_loss 序列（建议按时间顺序或乱序都可以，只要是同一任务的历史记录）。
+    s_min : float
+        缩放下限，在 p 很小时最多把 omega 缩到 s_min 倍（避免过度自信）。
+    s_max : float
+        缩放上限，在 p 很大时最多把 omega 放到 s_max 倍（避免数值爆炸）。
+    min_history : int
+        计算分位数所需的最小历史样本数，少于该值则认为历史不足，返回 s=1。
+    k : float
+        指数放大段的斜率参数。默认 k=2.4：
+        - p=0.8 → s=1
+        - p≈0.9 → s≈exp(k * ((0.9-0.8)/0.2)) ≈ exp(4 * 1/3) ≈ 3.8
+        - p更高时 s 很快接近 s_max，从而让 BL 接近先验。
+
+    返回
+    ----
+    float
+        omega 缩放因子 s，用于：
+            omega_new = s * omega_raw
+    """
+    import numpy as np
+    import math
+
+    # 1. 基本兜底：val_loss 或 history 无效时，直接不缩放
+    if val_loss is None or not np.isfinite(val_loss):
+        return 1.0
+
+    hist = np.asarray(history, dtype=float)
+    hist = hist[np.isfinite(hist)]
+
+    if hist.size < min_history:
+        # 历史样本太少，分位数不可靠 → 暂时不做缩放
+        return 1.0
+
+    # 2. 计算当前 val_loss 在历史中的经验分位数 p ∈ (0, 1)
+    # 使用右侧 searchsorted，避免大量相等值时 p 过小
+    hist_sorted = np.sort(hist)
+    rank = np.searchsorted(hist_sorted, val_loss, side="right")
+    # 简单经验分位数：rank / (N + 1)，保证在 (0, 1) 内
+    p = rank / (hist_sorted.size + 1.0)
+
+    # 3. 分段映射 p -> s
+    # 3.1 p <= 0.2：线性从 s_min -> 1
+    if p <= 0.2:
+        # p=0   -> s = s_min
+        # p=0.2 -> s = 1
+        t = (0.2 - p) / 0.2  # t ∈ [0, 1]
+        s = 1.0 - (1.0 - s_min) * t
+
+    # 3.2 0.2 < p < 0.8：不动，s ≈ 1
+    elif p < 0.8:
+        s = 1.0
+
+    # 3.3 p >= 0.8：指数放大，p>=0.9 时 s 已经比较大
+    else:
+        # 归一化到 [0,1]：p=0.8 -> g=0, p=1.0 -> g=1
+        g = (p - 0.8) / 0.2
+        g = max(0.0, min(g, 1.0))
+        try:
+            s = math.exp(k * g)
+        except OverflowError:
+            s = s_max
+
+    # 4. 裁剪到 [s_min, s_max]
+    s = max(min(s, s_max), s_min)
+    return float(s)
+
 # ---------- Rolling + ML 因子视图计算 ----------
 
 def compute_factor_views(
     trade_date: str,
     dataset_builder,
     ten_year_bond_index_code: str,
+    gold_index_code: str,
     horizon_days: int = 20,
     alpha_10ybond: float = 0.3,
 ) -> Tuple[FactorViewResult, pd.DataFrame, pd.DataFrame]:
@@ -191,6 +320,7 @@ def compute_factor_views(
     df_ret, df_nav = _build_factor_return_and_nav(
         trade_date=trade_date,
         ten_year_bond_index_code=ten_year_bond_index_code,
+        gold_index_code=gold_index_code,
     )
 
     # 2. 构造 “滚动 20 日收益” future_ret
@@ -256,7 +386,7 @@ def compute_factor_views(
         lt_bond = label_to_ret["10YBOND"]
         er_ml["10YBOND"] = float(np.dot(sp_bond, lt_bond))
 
-    # 5. 根据 FACTOR_SOURCE 选择最终 ER / softprob
+    # 5. 根据 FACTOR_SOURCE 选择最终 ER / softprob（MKT/SMB/HML/QMJ/10YBOND）
     er_final: Dict[str, float] = {}
     softprob_final: Dict[str, np.ndarray] = {}
 
@@ -299,6 +429,28 @@ def compute_factor_views(
             # "none" 或其它，当前不处理
             continue
 
+    # 6. GOLD：使用 LLM 观点，不走 FACTOR_SOURCE
+    if "GOLD" in df_nav.columns:
+        try:
+            gv = GoldViewLLM()
+            res = gv.generate_view(gold_index_code, as_of.date())
+        except Exception as e:
+            logger.warning("调用 GoldViewLLM 失败，将 GOLD 视图设为 None: %s", e)
+            res = None
+
+        er_gold: float | None = None
+        if res is not None:
+            er_candidate = getattr(res, "expected_return", None)
+            view_flag = getattr(res, "view", None)
+            if er_candidate is not None and view_flag != "no_view":
+                er_gold = float(er_candidate)
+
+        if er_gold is not None:
+            er_final["GOLD"] = er_gold
+        else:
+            # 显式标记 GOLD 有 key 但无观点，便于后续 BL 中按 None 退化为先验
+            er_final["GOLD"] = None  # type: ignore
+
     fv = FactorViewResult(
         stats=stats,
         er_final=er_final,
@@ -322,16 +474,27 @@ def _factor_bl_posterior(
     variance_raw: np.ndarray,
     view_var_scale: float,
     prior_mix: float,
+    horizon_days: int,
+    omega_view_scale: Optional[Dict[str, float]] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    在因子空间做一次 Black–Litterman，使用我们之前约定的 Omega 结构：
+    基于因子层先验 (mu_prior, Sigma_prior) 和视图 (er_view, variance_raw)
+    计算 Black–Litterman 的因子后验 (mu_post, Sigma_post)。
 
-        Omega_ii = view_var_scale * variance_raw_i
-                   + prior_mix * sigma_prior_diag_i
-
-    其中：
-    - variance_raw_i：该因子视图自身的不确定性（基于 rolling 长窗口估计）
-    - sigma_prior_diag_i：因子先验协方差矩阵 Sigma_prior 的对角元素
+    设计要点：
+    - 视图使用绝对期望收益（abs ER），即 er_view[f] 表示因子 f 在 horizon_days 内的期望收益。
+    - GOLD 特殊处理：
+        * 若 er_view["GOLD"] 不为 None，则将 GOLD 的先验改为固定 3%/年（折算为 horizon_days）
+          并以此先验参与 BL；
+        * 若 er_view["GOLD"] 为 None，则不改 mu_prior 对应维度，等价于该因子“仅使用统计先验”。
+    - Omega 的构造为逐因子 loop：
+        omega_i = view_part_i + prior_part_i
+        其中：
+            view_part_i  = view_var_scale * variance_raw[i]
+            prior_part_i = prior_mix * sigma_prior_diag[i]
+        若提供 omega_view_scale 且包含该因子：
+            view_part_i *= omega_view_scale[f]
+        即：模型置信度缩放只作用于“视图部分”，不影响先验方差部分。
     """
     n = len(factor_list)
     mu_prior = mu_prior.reshape(-1, 1)  # 列向量
@@ -347,19 +510,52 @@ def _factor_bl_posterior(
     P = np.eye(n, dtype=float)
     q = np.zeros((n, 1), dtype=float)
 
+    # GOLD 的长期先验：3%/年 → horizon_days 日收益
+    annual_prior_gold = 0.03
+    h_days = float(horizon_days)
+    prior_gold_h = annual_prior_gold * (h_days / 252.0)
+
     for i, f in enumerate(factor_list):
-        # 若该因子在 er_view 中没有单独观点，则退化为“观点 = 先验均值”
-        q[i, 0] = er_view.get(f, float(mu_prior[i, 0]))
+        view_val = er_view.get(f, None)
 
-    # 2. Omega：结合 variance_raw 和先验对角
+        if f == "GOLD":
+            if view_val is None:
+                # 无 LLM 观点：直接使用 compute_prior_mu_sigma 得到的先验均值
+                q[i, 0] = float(mu_prior[i, 0])
+            else:
+                # 有 LLM 观点：把 GOLD 的先验强制重置为固定 3%/年对应的 horizon_days 收益
+                mu_prior[i, 0] = prior_gold_h
+                q[i, 0] = float(view_val)
+        else:
+            # 其它因子：保持原逻辑，无观点时退化为先验
+            if view_val is None:
+                q[i, 0] = float(mu_prior[i, 0])
+            else:
+                q[i, 0] = float(view_val)
+
+    # 2. Omega：逐因子构造 view_part + prior_part，并支持按因子缩放视图部分
     sigma_prior_diag = np.diag(Sigma_prior).astype(float)
+    variance_raw = np.asarray(variance_raw, dtype=float)
 
-    omega_diag = (
-        view_var_scale * variance_raw.astype(float)
-        + prior_mix * sigma_prior_diag
-    )
-    # 数值安全处理：防止出现非正
-    omega_diag = np.maximum(omega_diag, 1e-10)
+    if omega_view_scale is None:
+        omega_view_scale = {}
+
+    omega_diag = np.zeros(n, dtype=float)
+
+    for i, f in enumerate(factor_list):
+        # 视图部分：rolling 方差 * 系数
+        view_part = view_var_scale * variance_raw[i]
+
+        # 模型置信度缩放（仅作用于视图部分）
+        s = float(omega_view_scale.get(f, 1.0))
+        view_part *= s
+
+        # 先验部分：先验方差 * 混合系数（不受模型置信度影响）
+        prior_part = prior_mix * sigma_prior_diag[i]
+
+        omega_i = view_part + prior_part
+        omega_diag[i] = max(float(omega_i), 1e-10)  # 数值安全
+
     Omega = np.diag(omega_diag)
     Omega_inv = np.diag(1.0 / omega_diag)
 
@@ -473,6 +669,7 @@ def compute_factor_bl_posterior(
     trade_date: str,
     dataset_builder,
     ten_year_bond_index_code: str,
+    gold_index_code: str,
     horizon_days: int = 20,
     lookback_years: float = 8.0,
     tau: float = 1.0,
@@ -483,28 +680,36 @@ def compute_factor_bl_posterior(
     """
     综合因子 Rolling+ML 视图 + 因子先验，在因子空间做 BL。
 
-    参数新增：
+    参数：
+    - trade_date: 调仓日（字符串）
+    - dataset_builder: DatasetBuilder 实例
+    - ten_year_bond_index_code: 10 年期国债指数代码
+    - horizon_days: 视图 horizon（天数），如 20 日
+    - lookback_years: 先验窗口长度（年）
+    - tau: BL 中的 tau
+    - alpha_10ybond: 10YBOND 中 ML 观点的权重
     - view_var_scale: 放大“视图自身不确定性 variance_raw”的系数
-    - prior_mix:      混入先验对角方差的权重系数
+    - prior_mix: 将先验方差混入 Omega 的比例
 
     返回：
     - mu_factor_post: (n_factors,)
     - Sigma_factor_post: (n_factors, n_factors)
-    - factor_list: ['MKT','SMB','HML','QMJ','10YBOND']（视数据而定）
+    - factor_list: ['MKT','SMB','HML','QMJ','10YBOND', 'GOLD']（视数据而定）
     - factor_views: FactorViewResult（便于 debug）
     """
     trade_date_str = pd.Timestamp(trade_date).strftime("%Y-%m-%d")
 
-    # 1. Rolling + ML 视图
+    # 1. Rolling + ML 视图（因子层 ER / softprob）
     factor_views, df_ret, df_nav = compute_factor_views(
         trade_date=trade_date_str,
         dataset_builder=dataset_builder,
         ten_year_bond_index_code=ten_year_bond_index_code,
+        gold_index_code=gold_index_code,
         horizon_days=horizon_days,
         alpha_10ybond=alpha_10ybond,
     )
 
-    # 2. 因子先验（8 年）
+    # 2. 因子先验（8 年等），这里的 mu_prior 是“统计先验”
     mu_prior, Sigma_prior, factor_list = compute_prior_mu_sigma(
         price_df=df_nav,
         horizon_days=horizon_days,
@@ -512,8 +717,8 @@ def compute_factor_bl_posterior(
         method="linear",
     )
 
-    # 3. 视图 ER（只对有 prior 的因子做 BL）
-    er_view = {
+    # 3. 视图 ER（只对有 prior 的因子做 BL），使用“绝对期望收益 abs ER”
+    er_view: Dict[str, float] = {
         f: factor_views.er_final[f]
         for f in factor_list
         if f in factor_views.er_final
@@ -528,7 +733,41 @@ def compute_factor_bl_posterior(
         horizon_days=horizon_days,
     )
 
-    # 5. 因子 BL 后验（新的 Omega 逻辑）
+    # 5. 视图模型置信度缩放（MKT / 10YBOND） → omega_view_scale
+    omega_view_scale: Dict[str, float] = {}
+    try:
+        # get_model_val_loss 返回 {task_name: val_loss}
+        val_loss_dict = get_model_val_loss(trade_date_str)
+
+        # 因子名 → 训练任务名 的映射
+        factor_task_map = {
+            "MKT": "mkt_tri",
+            "10YBOND": "10Ybond_tri",
+        }
+
+        for f, task in factor_task_map.items():
+            if f not in factor_list:
+                continue
+
+            val_loss = None
+            if isinstance(val_loss_dict, dict):
+                # 优先按 task 名取，如果你实际实现是按因子名存的，也可以自行调整这里的 key
+                val_loss = val_loss_dict.get(task) or val_loss_dict.get(f)
+
+            if val_loss is None:
+                continue
+
+            val_hist = load_val_history_for_task(task)
+            if val_hist is None or len(val_hist) == 0:
+                continue
+
+            s = omega_scale_from_val_loss(val_loss=float(val_loss), history=val_hist)
+            omega_view_scale[f] = float(s)
+    except Exception as e:
+        logger.warning("计算 omega_view_scale 失败，将不对视图方差做模型置信度缩放: %s", e)
+        omega_view_scale = {}
+
+    # 6. 因子 BL 后验（使用新的 Omega 逻辑 + omega_view_scale）
     mu_factor_post, Sigma_factor_post = _factor_bl_posterior(
         mu_prior=mu_prior,
         Sigma_prior=Sigma_prior,
@@ -538,7 +777,73 @@ def compute_factor_bl_posterior(
         variance_raw=variance_raw,
         view_var_scale=view_var_scale,
         prior_mix=prior_mix,
+        horizon_days=horizon_days,
+        omega_view_scale=omega_view_scale,
     )
+
+    # 7. GOLD Regime 权重：保留 3%/年结构性收益，只对“周期溢价”部分加权
+    if "GOLD" in factor_list:
+        try:
+            as_of_date = pd.Timestamp(trade_date_str).date()
+
+            # 使用 CSIIndexDataFetcher 作为黄金价格数据源
+            gold_price_fetcher = CSIIndexDataFetcher()
+            regime_model = GoldRegimeModel(gold_price_fetcher=gold_price_fetcher)
+
+            w_regime = float(regime_model.get_weight(as_of_date))
+        except Exception as e:
+            logger.warning(
+                "GoldRegimeModel 计算失败，将不对 GOLD 周期溢价做缩放: %s", e
+            )
+            w_regime = 1.0
+
+        # 数值兜底
+        if not np.isfinite(w_regime) or w_regime < 0.0:
+            w_regime = 1.0
+
+        idx_gold = factor_list.index("GOLD")
+
+        # 固定 GOLD 长期结构性先验：3%/年 → horizon_days 日收益
+        annual_struct_gold = 0.03
+        prior_struct_h = annual_struct_gold * (float(horizon_days) / 252.0)
+
+        # 当前 BL 得到的 GOLD 后验视图（包含结构 + 周期）
+        mu_g = float(mu_factor_post[idx_gold])
+
+        # 将 BL 后验拆成：结构性 + 周期性偏移
+        mu_cycle = mu_g - prior_struct_h
+
+        # 只让周期性那一部分乘以 w_regime，结构性 3%/年保持不动
+        mu_factor_post[idx_gold] = prior_struct_h + w_regime * mu_cycle
+
+        logger.info(
+            "GOLD regime adjust: as_of=%s, w_regime=%.4f, mu_before=%.6f, "
+            "mu_struct=%.6f, mu_after=%.6f",
+            as_of_date,
+            w_regime,
+            mu_g,
+            prior_struct_h,
+            mu_factor_post[idx_gold],
+        )
+
+    # 8. 因子风格拥挤（SMB/HML/QMJ）risk_scaler：在后验 μ_f 上做缩放
+    try:
+        style_scalers: Dict[str, float] = {}
+        scaler_eq = EquityStyleCrowdingScaler()
+        as_of_date = pd.Timestamp(trade_date_str).date()
+        style_scalers = scaler_eq.compute_for_date(as_of_date)  # 预期返回 {'SMB': s_smb, 'HML': s_hml, 'QMJ': s_qmj}
+    except Exception as e:
+        logger.warning("EquityStyleCrowdingScaler 计算失败，将不对 SMB/HML/QMJ 做缩放: %s", e)
+        style_scalers = {}
+
+    for f in ("SMB", "HML", "QMJ"):
+        if f not in factor_list:
+            continue
+        s = float(style_scalers.get(f, 1.0))
+        if s == 1.0:
+            continue
+        idx = factor_list.index(f)
+        mu_factor_post[idx] *= s
 
     return mu_factor_post, Sigma_factor_post, factor_list, factor_views
 
@@ -550,6 +855,7 @@ def compute_asset_mu_from_factor_bl(
     trade_date: str,
     dataset_builder,
     ten_year_bond_index_code: str,
+    gold_index_code: str,
     horizon_days: int = 20,
     lookback_years: float = 8.0,
     tau: float = 1.0,
@@ -573,6 +879,7 @@ def compute_asset_mu_from_factor_bl(
         trade_date=trade_date_str,
         dataset_builder=dataset_builder,
         ten_year_bond_index_code=ten_year_bond_index_code,
+        gold_index_code=gold_index_code,
         horizon_days=horizon_days,
         lookback_years=lookback_years,
         tau=tau,

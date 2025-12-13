@@ -147,3 +147,159 @@ def get_label_to_ret(trade_date: str) -> Dict[str, tuple]:
         label_to_ret[factor] = bundle["label_to_ret"]
 
     return label_to_ret
+
+
+def get_model_val_loss(trade_date: str) -> Dict[str, float]:
+    """
+    根据给定 trade_date，读取“截至该日可用的最新模型”的验证损失 val_loss。
+
+    约定：
+    - 与 get_softprob_dict / get_label_to_ret 保持一致：
+      使用上一自然月的最后一天作为 model_date：
+          model_date = get_last_day_of_prev_month(trade_date)
+      模型文件路径由 TASK_MODEL_PATHS[task].format(model_date) 决定。
+    - 若模型文件不存在，则先调用 run_all_models(...) 训练，再加载。
+    - 返回一个以“因子名称”为 key 的字典，例如：
+        {
+            "MKT": 0.42,
+            "10YBOND": 0.37
+        }
+
+    注意：
+    - val_loss 在 train_pipeline.train_one_task 中已经写入模型文件：
+        bundle["val_loss"] = ...
+    - 若某个模型缺失 val_loss 或 val_loss 为 NaN，会给出 warning，并返回 NaN。
+    """
+    val_loss_dict: Dict[str, float] = {}
+
+    # 与 get_label_to_ret 相同的 model_date 逻辑
+    model_date_dt = get_last_day_of_prev_month(
+        datetime.strptime(trade_date, "%Y-%m-%d")
+    )
+    model_date = model_date_dt.strftime("%Y-%m-%d")
+
+    for task, path_template in TASK_MODEL_PATHS.items():
+        model_path = path_template.format(model_date)
+
+        if not os.path.exists(model_path):
+            logger.warning(
+                "get_model_val_loss: 模型文件不存在: %s, 先进行训练...",
+                model_path,
+            )
+            # 与 get_softprob_dict / get_label_to_ret 保持一致的训练调用方式
+            run_all_models(
+                start="2007-12-01",
+                split_date=None,
+                end=model_date,
+                need_test=False,
+            )
+
+        if not os.path.exists(model_path):
+            # 理论上 run_all_models 后应存在，这里兜底
+            logger.warning(
+                "get_model_val_loss: 训练后仍未找到模型文件: %s，"
+                "对应因子 val_loss 记为 NaN。",
+                model_path,
+            )
+            factor_name = task.split("_")[0].upper()
+            val_loss_dict[factor_name] = float("nan")
+            continue
+
+        bundle = joblib.load(model_path)
+
+        if "val_loss" not in bundle:
+            logger.warning(
+                "get_model_val_loss: 模型文件缺失 val_loss 字段: %s，"
+                "对应因子 val_loss 记为 NaN。",
+                model_path,
+            )
+            val_val = float("nan")
+        else:
+            val_val = bundle["val_loss"]
+            # 转成 float + 检查有限性
+            try:
+                val_val = float(val_val)
+            except Exception:
+                logger.warning(
+                    "get_model_val_loss: 模型文件中的 val_loss 无法转为 float: %s，"
+                    "原值=%r，记为 NaN。",
+                    model_path,
+                    val_val,
+                )
+                val_val = float("nan")
+
+            if not np.isfinite(val_val):
+                logger.warning(
+                    "get_model_val_loss: 模型文件中的 val_loss 非有限值: %s，val_loss=%r。",
+                    model_path,
+                    val_val,
+                )
+                val_val = float("nan")
+
+        factor_name = task.split("_")[0].upper()
+        val_loss_dict[factor_name] = val_val
+
+        logger.info(
+            "get_model_val_loss: trade_date=%s, model_date=%s, task=%s, factor=%s, val_loss=%.6f",
+            trade_date,
+            model_date,
+            task,
+            factor_name,
+            val_val,
+        )
+
+    return val_loss_dict
+
+
+def load_val_history_for_task(task: str) -> np.ndarray:
+    """
+    读取 ./models/{task}_val_history.csv 中历史 val_loss 列，返回一维 numpy 数组。
+
+    用途：
+    - 为 omega_scale_from_val_loss 提供历史表现分布，用于计算当前 val_loss 的分位数 p。
+
+    约定：
+    - 文件路径：./models/{task}_val_history.csv
+      例如：task = "mkt_tri" -> ./models/mkt_tri_val_history.csv
+    - CSV 至少包含一列：year_month, val_loss
+    - 若文件不存在、列缺失或全是 NaN，则返回空数组，并打印 warning。
+    """
+    history_path = f"./models/{task}_val_history.csv"
+
+    if not os.path.exists(history_path):
+        logger.warning(
+            "load_val_history_for_task: 历史文件不存在: %s，返回空数组。",
+            history_path,
+        )
+        return np.array([], dtype=float)
+
+    try:
+        df = pd.read_csv(history_path)
+    except Exception as e:
+        logger.warning(
+            "load_val_history_for_task: 读取历史文件失败: %s，错误: %s。返回空数组。",
+            history_path,
+            repr(e),
+        )
+        return np.array([], dtype=float)
+
+    if "val_loss" not in df.columns:
+        logger.warning(
+            "load_val_history_for_task: 文件 %s 中缺少 'val_loss' 列，返回空数组。",
+            history_path,
+        )
+        return np.array([], dtype=float)
+
+    vals = df["val_loss"].to_numpy(dtype=float)
+    # 只保留有限值
+    mask = np.isfinite(vals)
+    vals = vals[mask]
+
+    if vals.size == 0:
+        logger.warning(
+            "load_val_history_for_task: 文件 %s 中 'val_loss' 列全为 NaN/无效，返回空数组。",
+            history_path,
+        )
+        return np.array([], dtype=float)
+
+    return vals
