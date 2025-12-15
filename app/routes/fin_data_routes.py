@@ -18,7 +18,6 @@ from app.data_fetcher import CSIIndexDataFetcher, GoldDataFetcher
 from app.data_fetcher import EtfDataFetcher
 from app.data_fetcher import GoldDerivativesFetcher
 import pandas as pd
-from app.data_fetcher.us_index_fetcher import USIndexFetcher
 
 
 logger = logging.getLogger(__name__)

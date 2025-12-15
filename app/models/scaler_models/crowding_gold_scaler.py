@@ -6,8 +6,6 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.data_fetcher.cftc_gold_reader import CftcGoldReader
-
 logger = logging.getLogger(__name__)
 
 

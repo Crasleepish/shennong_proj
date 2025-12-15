@@ -97,12 +97,6 @@ def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str,
         raise ValueError("10Ybond must have at least one asset code")
     ten_year_bond_index_code = ten_year_bond_codes[0]
 
-    # 从code_factors_map找出GOLD对应的指数代码
-    gold_codes = [code for code, factors in code_factors_map.items() if "GOLD" in factors]
-    if not gold_codes:
-        raise ValueError("GOLD must have at least one asset code")
-    gold_code = gold_codes[0]
-
     # ====== 新增：因子层 BL → 资产 μ_post ======
     # ten_year_bond_index_code 这里需要你按照实际代码填，例如 "H11006.CSI" 之类
     if post_view_tau > 0:
@@ -113,7 +107,6 @@ def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str,
             trade_date=trade_date,
             dataset_builder=dataset_builder,          # 你现有用于 get_softprob_dict 的实例
             ten_year_bond_index_code=ten_year_bond_index_code,       # ★ 真实的 10Y 指数代码
-            gold_index_code=gold_code,
             horizon_days=20,
             lookback_years=8.0,
             tau=post_view_tau,
@@ -135,6 +128,24 @@ def optimize(asset_source_map: dict, code_factors_map: dict, trade_date: str,
     for code in cash_codes:
         mu_dict[code] = cash_mu_series[code]
     
+    # === 使用大语言模型分析黄金期货结构，得到期望收益率，覆盖mu_post_full中的黄金收益率
+    try:
+        # 从code_factors_map找出GOLD对应的指数代码
+        gold_codes = [code for code, factors in code_factors_map.items() if "GOLD" in factors]
+        if not gold_codes:
+            raise ValueError("GOLD must have at least one asset code")
+        gold_code = gold_codes[0]
+        gold_idx = fund_codes.index(gold_code)
+        gv = GoldViewLLM()
+        res = gv.generate_view(gold_code, pd.to_datetime(trade_date).date())
+        if res.expected_return is not None and res.view != "no_view":
+            mu_dict[gold_code] = res.expected_return
+        else:
+            logger.warning(f"大模型未返回 {gold_code} 的观点预测，使用先验收益率进行优化")
+    except Exception as e:
+        logger.error(e)
+        # 大模型无法回溯历史数据进行分析，直接用先验
+
     mu_post_full = np.array([mu_dict[code] for code in fund_codes], dtype=float)
 
     # === α 调整（一次性水平项，不进入协方差）,这里的α指的是因子归因分析后剩下的常数项 ===
@@ -406,7 +417,8 @@ def build_real_time_date(intraday_factors, est_index_values):
     return additional_factor_df, additional_map
 
 
-def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict[str, pd.DataFrame], asset_source_map: dict, code_factors_map: dict, trade_date: str, post_view_tau: float, variance: float, view_codes: List[str] = None, window: int = 20):
+def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict[str, pd.DataFrame], asset_source_map: dict, code_factors_map: dict, 
+                        trade_date: str, post_view_tau: float, variance: float, view_codes: List[str] = None, window: int = 20, view_var_scale: float = 0.7, prior_mix: float = 0.3):
     """根据预测收益执行组合优化，输出最优权重
         additional_factor_df: pd.DataFrame - 额外的因子数据
         additional_map: dict[str, pd.DataFrame] - 额外的数据字典
@@ -490,7 +502,6 @@ def optimize_allocation(additional_factor_df: pd.DataFrame, additional_map: dict
             trade_date=trade_date,
             dataset_builder=dataset_builder,          # 你现有用于 get_softprob_dict 的实例
             ten_year_bond_index_code=ten_year_bond_index_code,       # ★ 真实的 10Y 指数代码
-            gold_index_code=gold_index_code,
             horizon_days=20,
             lookback_years=8.0,
             tau=post_view_tau,

@@ -420,4 +420,4 @@ def run_backtest_using_db_weights(
 
 if __name__ == '__main__':
     # run_backtest_using_db_weights(portfolio_id=2, start='2025-09-02', end='2025-09-25')
-    run_backtest(start="2020-06-16", end="2025-10-22", window=20)
+    run_backtest(start="2019-06-16", end="2025-10-22", window=20)
