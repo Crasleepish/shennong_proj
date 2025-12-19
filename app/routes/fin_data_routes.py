@@ -765,8 +765,6 @@ def update_all_fin_data():
         gold_derivatives_fetcher.ensure_cftc_reports(as_of_date=pd.to_datetime(end, format="%Y%m%d").date())
         gold_derivatives_fetcher.update_barchart_future_curve()
 
-        USIndexFetcher.fetch_and_store_us_index_data(start, end)
-        
         return jsonify({"message": "success"})
     except Exception as e:
         logger.exception(str(e))
@@ -865,61 +863,3 @@ def sync_gold_deravitives_by_date():
         logger.exception("Error executing etf hist sync task.")
         return jsonify({"status": "error", "message": str(e)}), 500
     
-
-@fin_data_bp.route("/us_index/sync", methods=["POST"])
-def sync_us_index():
-    """
-    同步美元指数 USDOLLAR.FXCM 数据到本地 us_index 表。
-
-    必须提供 query 参数：
-    - start_date: 起始日期，格式 YYYYMMDD（直接传给 tspro.fx_daily）
-    - end_date  : 结束日期，格式 YYYYMMDD
-
-    例如：
-    GET /fin_data/us_index/sync?start_date=20190101&end_date=20190524
-    """
-    data = request.get_json()
-    start_date = data.get("start_date")
-    end_date = data.get("end_date")
-
-    if not start_date or not end_date:
-        return (
-            jsonify({
-                "status": "error",
-                "message": "start_date and end_date are required, format YYYYMMDD"
-            }),
-            400,
-        )
-
-    # 简单校验日期格式
-    for label, value in [("start_date", start_date), ("end_date", end_date)]:
-        try:
-            datetime.strptime(value, "%Y%m%d")
-        except ValueError:
-            return (
-                jsonify({
-                    "status": "error",
-                    "message": f"invalid {label}: {value}, expected YYYYMMDD",
-                }),
-                400,
-            )
-
-    try:
-        USIndexFetcher.fetch_and_store_us_index_data(start_date, end_date)
-    except Exception as e:
-        logger.exception(
-            "sync_us_index failed for %s ~ %s", start_date, end_date
-        )
-        return (
-            jsonify({
-                "status": "error",
-                "message": str(e),
-            }),
-            500,
-        )
-
-    return jsonify({
-        "status": "ok",
-        "start_date": start_date,
-        "end_date": end_date,
-    })
