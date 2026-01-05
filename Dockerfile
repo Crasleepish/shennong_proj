@@ -12,11 +12,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # ========== 2. 安装 uv ==========
-# 安装到 ~/.local/bin/uv（官方脚本默认路径）
+ENV UV_INSTALL_DIR=/usr/local/bin
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 把 uv 放进 PATH
-ENV PATH="/root/.local/bin:${PATH}"
 
 # ========== 3. 设置工作目录 ==========
 WORKDIR /app
