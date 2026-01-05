@@ -14,11 +14,12 @@ from sqlalchemy.dialects.postgresql import dialect
 from typing import Optional, List
 from app.data_fetcher.xueqiu_quote import stock_zh_a_xq_list
 from app.dao.stock_info_dao import AdjFactorDao
+from api_key import TUSHARE_API_KEY
 
 logger = logging.getLogger(__name__)
 logging.basicConfig()
 logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
-ts.set_token('2876ea85cb005fb5fa17c809a98174f2d5aae8b1f830110a5ead6211')
+ts.set_token(TUSHARE_API_KEY)
 
 # ======== 实时行情缓存：默认 5 分钟 ========
 REALTIME_CACHE_TTL_SECONDS = 300  # 5 minutes

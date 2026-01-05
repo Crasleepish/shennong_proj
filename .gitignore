@@ -11,3 +11,8 @@ ml_results
 fund_portfolio_bt_result
 log
 /shennong-opt/.env
+.venv/
+*.pyc
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
